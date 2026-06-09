@@ -1,0 +1,124 @@
+// Multi-kernel scheduling (port of tinygrad/schedule core idea): a graph that contains a
+// reduce feeding an elementwise op cannot be one kernel -- the reduce is scheduled FIRST into
+// an intermediate buffer, then the elementwise kernel consumes it. This ports that split +
+// buffer-allocation + ordering for the canonical case out[i] = x[i] - sum(x):
+//   kernel 1 (reduce): s[0] = sum(x[i])
+//   kernel 2 (map):    out[i] = x[i] - s[0]
+//   host: run k1 -> s, then k2(out, x, s). Executed + validated by the Python driver.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sub Sum }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn usub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
+fn usum(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Sum, src: take s, arg: 0)
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+// render an elementwise expr; Var->xi, Const->lit, Sum-> the precomputed intermediate `s0`
+fn render_expr(u: read UOp) -> fresh String {
+    if u.op == Var { return cat(a: read "", b: read "xi") }
+    if u.op == Sum { return cat(a: read "", b: read "s0") }      // reduce already computed -> load
+    if u.op == Const { return cat(a: read Int.to_string(value: read u.arg), b: read ".0") }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let mut opsym = " + "
+    if u.op == Mul { opsym = " * " }
+    if u.op == Sub { opsym = " - " }
+    let left = render_expr(u: read c0)
+    let right = render_expr(u: read c1)
+    return cat3(a: read "(", b: read cat3(a: read left, b: read opsym, c: read right), c: read ")")
+}
+
+// schedule a root = elementwise(..., Sum(child), ...): two kernels + host orchestration
+fn schedule_multi(root: read UOp, sum_child: read UOp, n: Int) -> fresh String {
+    let ns = String.from_int(value: n)
+    let nb = String.from_int(value: n * 4)
+    let reduce_body = render_expr(u: read sum_child)   // kernel 1 body
+    let ew_body = render_expr(u: read root)            // kernel 2 body (Sum -> s0)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    // kernel 1: reduce -> data0 (scalar s)
+    pl(lines: mut lines, t: read "export fn K1(data0: PAddr, data1: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var acc: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read "    acc[0] = 0.0;")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read ns, c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      acc[0] = acc[0] + ", b: read reduce_body, c: read ";"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "    raw.store<f32>(pa_offset(data0, 0), acc[0]);")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    // kernel 2: map out[i] = ew(x[i], s0)   (data2 = scalar s buffer)
+    pl(lines: mut lines, t: read "export fn K2(data0: PAddr, data1: PAddr, data2: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    let s0: f32 = raw.load<f32>(pa_offset(data2, 0));")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read ns, c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      raw.store<f32>(pa_offset(data0, i * 4), ", b: read ew_body, c: read ");"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    // host: allocate x, intermediate s, out; run K1 then K2 (the schedule ordering)
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  var s: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read cat3(a: read "  var o: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read nb, c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read "  K1(pa((&s[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read "  K2(pa((&o[0]) as usize), pa((&x[0]) as usize), pa((&s[0]) as usize));")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), ", b: read nb, c: read ") { return 9; }"))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    // out[i] = x[i] - sum(x)
+    let sumx = usum(a: read uvar(id: 0))
+    let root = usub(a: read uvar(id: 0), b: read sumx)
+    let sumchild = uvar(id: 0)   // the reduce's input
+    Log.write(message: read schedule_multi(root: read root, sum_child: read sumchild, n: 4))
+    return Unit
+}

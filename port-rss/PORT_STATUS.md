@@ -20,7 +20,7 @@ earlier was a mischaracterization.
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
 | `gradient.py` (CORE) | **reverse-mode autodiff over the UOp graph** (`gradient.rss`) | ✅ d(3x)/dx=3; d(x*x)/dx=x+x; d(x*x+5x)/dx has +5 |
 | `codegen/`+`renderer/` (CORE) | **lower a ported UOp graph to an MC kernel + EXECUTE** -- elementwise (`render.rss`), **reduce** (`render_reduce.rss`), **matmul** (`render_matmul.rss`); real loop render->MC->native | ✅ (x+2)*3 -> [9,12,21,-3]; sum(x+1) -> 14; 3x3 matmul matches reference |
-| `schedule/` (CORE) | **scheduler dispatch** (`schedule.rss`): pick kernel shape from the graph root (reduce-rooted -> acc kernel; else -> map kernel) and lower+run | ✅ schedules (x+2)*3 -> elementwise kernel; sum(x*2) -> reduce kernel; both execute correctly |
+| `schedule/` (CORE) | **scheduler**: single-kernel dispatch (`schedule.rss`) + **multi-kernel split** (`schedule_multi.rss`): a reduce feeding an elementwise op becomes 2 ordered kernels with an intermediate buffer | ✅ (x+2)*3->1 kernel; sum(x*2)->reduce; **x-sum(x)->K1(reduce->s)+K2(x-s0)=[-9,-8,-7,-6]** |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —

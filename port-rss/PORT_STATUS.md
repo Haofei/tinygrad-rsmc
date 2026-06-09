@@ -37,8 +37,8 @@ early single-digit-percent and is not complete.**
 - Cannot `fresh`-return a collection built by push (stdlib uses `native`); forces SoA/`take`.
 - Owning struct fields can't take a `read` param or move out of `read self` → construct with
   inline literals or `take`; blocks straightforward `scalar()`/`vec()` clones.
-- No `;`-multi-statement lines; parenthesized sub-expressions in arithmetic (`(a+7)/8`,
-  `o + (a*b)`) rejected — must split into `let`s.
+- No `;`-multi-statement lines (one statement per line).
+- ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
 - These are exactly the frictions to fix to make a real tinygrad port tractable in rss.
 

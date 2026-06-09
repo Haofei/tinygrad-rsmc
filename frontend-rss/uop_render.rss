@@ -1,0 +1,130 @@
+// tinygrad UOp linearizer -> modern-c renderer, ported to rsscript.
+//
+// Walks a real UOp arena and emits MC, mirroring renderer/cstyle.py `_render`+`base_rewrite`.
+// The arena is struct-of-arrays (parallel List<Int>) to stay inside rss v0.6's ownership
+// model (no fresh-return of built collections; no take/local needed for primitives).
+//   ops[i]  : opcode      argi[i] : int arg (buffer slot / range bound / op symbol id)
+//   s0[i],s1[i] : source node indices (-1 = none)
+// Verify output against oracle/mc_generated/{add,mul}.mc.
+
+// opcodes
+fn OP_PARAM() -> Int { return 0 }
+fn OP_RANGE() -> Int { return 1 }
+fn OP_INDEX() -> Int { return 2 }
+fn OP_LOAD()  -> Int { return 3 }
+fn OP_ALU()   -> Int { return 4 }   // argi = symbol id: 0 '+', 1 '*', 2 '-'
+fn OP_STORE() -> Int { return 5 }
+fn OP_END()   -> Int { return 6 }
+
+fn alu_sym(id: Int) -> fresh String {
+    if id == 0 { return "+" }
+    if id == 1 { return "*" }
+    return "-"
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+
+// append one node to the SoA arena
+fn emit(ops: mut List<Int>, argi: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>,
+        op: Int, arg: Int, a: Int, b: Int) -> Unit {
+    List.push(list: mut ops,  value: read op)
+    List.push(list: mut argi, value: read arg)
+    List.push(list: mut s0,   value: read a)
+    List.push(list: mut s1,   value: read b)
+    return Unit
+}
+
+fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: read List<Int>,
+          name: read String, nbuf: Int) -> fresh String {
+    let n = List.len(list: read ops)
+    let expr = List.new<String>()
+    let mut j = 0
+    while j < n {
+        List.push(list: mut expr, value: read "")
+        j = j + 1
+    }
+
+    let lines = List.new<String>()
+    let mut i = 0
+    while i < n {
+        let op = List.get(list: read ops, index: i)
+        let arg = List.get(list: read argi, index: i)
+        let a = List.get(list: read s0, index: i)
+        let b = List.get(list: read s1, index: i)
+        if op == OP_PARAM() {
+            List.set(list: mut expr, index: i, value: read cat(a: read "data", b: read String.from_int(value: arg)))
+        }
+        if op == OP_RANGE() {
+            List.set(list: mut expr, index: i, value: read "Lidx0")
+            List.push(list: mut lines, value: read "    var Lidx0: usize = 0;")
+            List.push(list: mut lines, value: read cat3(a: read "    while Lidx0 < ", b: read String.from_int(value: arg), c: read " {"))
+        }
+        if op == OP_INDEX() {
+            let buf = List.get(list: read expr, index: a)
+            let idx = List.get(list: read expr, index: b)
+            List.set(list: mut expr, index: i, value: read cat3(a: read cat3(a: read "pa_offset(", b: read buf, c: read ", ("), b: read idx, c: read ") * 4)"))
+        }
+        if op == OP_LOAD() {
+            let addr = List.get(list: read expr, index: a)
+            let nm = cat(a: read "v", b: read String.from_int(value: i))
+            List.set(list: mut expr, index: i, value: read nm)
+            List.push(list: mut lines, value: read cat3(a: read cat3(a: read "      let ", b: read nm, c: read ": f32 = raw.load<f32>("), b: read addr, c: read ");"))
+        }
+        if op == OP_ALU() {
+            let ea = List.get(list: read expr, index: a)
+            let eb = List.get(list: read expr, index: b)
+            List.set(list: mut expr, index: i, value: read cat3(a: read cat3(a: read "(", b: read ea, c: read alu_sym(id: arg)), b: read eb, c: read ")"))
+        }
+        if op == OP_STORE() {
+            let addr = List.get(list: read expr, index: a)
+            let val = List.get(list: read expr, index: b)
+            List.push(list: mut lines, value: read cat3(a: read cat3(a: read "      raw.store<f32>(", b: read addr, c: read ", "), b: read val, c: read ");"))
+        }
+        if op == OP_END() {
+            List.push(list: mut lines, value: read "      Lidx0 = Lidx0 + 1;")
+            List.push(list: mut lines, value: read "    }")
+        }
+        i = i + 1
+    }
+
+    // parameter list: data0..data(nbuf-1) as PAddr
+    let params = List.new<String>()
+    let mut p = 0
+    while p < nbuf {
+        List.push(list: mut params, value: read cat3(a: read "data", b: read String.from_int(value: p), c: read ": PAddr"))
+        p = p + 1
+    }
+    let body = String.join(parts: read lines, separator: read "\n")
+    return cat3(
+        a: read cat3(a: read "import \"std/addr.mc\";\n\nexport fn ", b: read name,
+                     c: read cat3(a: read "(", b: read String.join(parts: read params, separator: read ", "), c: read ") -> void {\n  unsafe {\n")),
+        b: read body,
+        c: read "\n  }\n}")
+}
+
+// linearized graph for: data0[i] = data1[i] <op> data2[i]
+fn render_binary(name: read String, n: Int, opsym: Int) -> fresh String {
+    let mut ops = List.new<Int>()
+    let mut argi = List.new<Int>()
+    let mut s0 = List.new<Int>()
+    let mut s1 = List.new<Int>()
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(), arg: 0, a: -1, b: -1) // 0 out
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(), arg: 1, a: -1, b: -1) // 1
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(), arg: 2, a: -1, b: -1) // 2
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_RANGE(), arg: n, a: -1, b: -1) // 3
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 1, b: 3)   // 4
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_LOAD(),  arg: 0, a: 4, b: -1)  // 5
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 2, b: 3)   // 6
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_LOAD(),  arg: 0, a: 6, b: -1)  // 7
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_ALU(),   arg: opsym, a: 5, b: 7) // 8
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 0, b: 3)   // 9
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(), arg: 0, a: 9, b: 8)   // 10
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),   arg: 0, a: 3, b: -1)  // 11
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3)
+}
+
+fn main() -> Unit {
+    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0))
+    return Unit
+}

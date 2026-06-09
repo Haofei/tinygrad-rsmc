@@ -162,6 +162,37 @@ MC language gaps the port surfaced (candidate MC hardening features):
   subtraction by a positive literal works. Renderer rewrites `ADD(x, neg_const)` ->
   `(x - |c|)`. General `NEG`/negative-literal support is the obvious MC follow-up.
 
+## Honest port progress ledger
+
+This is a partial port in active progress. Rough state of the tinygrad pipeline:
+
+| Stage (tinygrad) | Status in this port |
+|---|---|
+| kernel source rendering (`renderer/cstyle.py`) | ✅ Python `MCRenderer` (oracle); ✅ **rss arena walker** (`uop_render.rss`) for elementwise add/mul, verified e2e |
+| compile + run (backend) | ✅ modern-c, hosted profile, numerically verified |
+| UOp data model + arena | ✅ minimal (SoA: ops/argi/s0/s1) in rss |
+| more ops (reduce, select, casts, broadcast, matmul) in the rss renderer | ⏳ only +/* so far |
+| graph BUILDER (produce arenas from ops, not hand-listed) | ❌ not started |
+| `PatternMatcher`/rewrite engine | ❌ not started |
+| scheduler (Tensor graph -> kernels) | ❌ not started |
+| `Tensor` API + movement/shapetracker | ❌ not started |
+| autograd (`function.py`/`gradient.py`) | ❌ not started |
+| end goal: train an MLP through rss->mc | ❌ not reached |
+
+Honest estimate: low-single-digit % of a complete tinygrad port. The backend half and the
+render stage are real and verified; the large frontend (graph/rewrite/schedule/Tensor/grad)
+is essentially unported. Completion bar being driven toward: a small net trained end-to-end
+through rss-frontend + mc-backend.
+
+### rss ownership/syntax findings (drive rss hardening; learned the hard way)
+- **Cannot `fresh`-return a collection built incrementally** (push-then-return) — stdlib does
+  it via `native`. Workaround here: struct-of-arrays of `List<Int>` built in-place, passed by
+  `read`. This is the single biggest ergonomics blocker for porting graph code.
+- `take` requires `features: local` + a `local`-bound value; inline non-Copy struct fields
+  need `take` (the `make_pair` pattern).
+- struct fields are newline-separated (no commas); no `;`-separated multi-statement lines.
+- string literals' "freshness" is only a warning; functions returning them still run.
+
 ### rss frontend finding (affects Phase 2 design)
 - rss v0.6 can `match` sum-payload variants but **cannot construct** them (RS0206). `UOp.arg`
   is heterogeneous; the port must encode it without constructing payload variants (e.g.

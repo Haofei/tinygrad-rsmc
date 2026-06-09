@@ -122,4 +122,10 @@ if __name__ == "__main__":
   xin = [-1.0, 2.0, -3.0, 4.0]
   ok &= check_program("tensor-autograd (n-dim, backward kernels)", rss_render("tensor_autograd.rss"),
                       [xin], [2 * v if v > 0 else 0.0 for v in xin])
+  # ShapeTracker: movement ops as stride views (transpose==same offset, broadcast==stride0)
+  st_out = rss_render("shapetracker.rss")
+  st_ok = ("offset[1,2] = 5" in st_out and "transposed offset[2,1] = 5" in st_out
+           and "broadcast offset[2,1] = 1" in st_out)
+  print(f"{'PASS' if st_ok else 'FAIL'} shapetracker (zero-copy movement views): {st_out.split(chr(10))}")
+  ok &= st_ok
   sys.exit(0 if ok else 1)

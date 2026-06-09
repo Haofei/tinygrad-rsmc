@@ -10,7 +10,7 @@
 
 features: local
 
-sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sub }
 
 struct UOp derives(Clone, Eq, Hash) {
     op: Ops
@@ -32,6 +32,12 @@ fn umul(a: read UOp, b: read UOp) -> fresh UOp {
     List.push(list: mut s, value: read b)
     return UOp(op: Mul, src: take s, arg: 0)
 }
+fn usub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
 fn is_const(u: read UOp) -> Bool { return u.op == Const }
 
 fn clone_uop(u: read UOp) -> fresh UOp {
@@ -40,6 +46,7 @@ fn clone_uop(u: read UOp) -> fresh UOp {
     let c0 = List.get(list: read u.src, index: 0)
     let c1 = List.get(list: read u.src, index: 1)
     if u.op == Add { return uadd(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1)) }
+    if u.op == Sub { return usub(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1)) }
     return umul(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1))
 }
 
@@ -72,6 +79,15 @@ fn simplify(u: read UOp) -> fresh UOp {
         }
         return uadd(a: read a, b: read b)
     }
+    if u.op == Sub {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg - b.arg) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return simplify(u: read c0) }
+        }
+        return usub(a: read a, b: read b)
+    }
     return uadd(a: read a, b: read b)
 }
 
@@ -89,6 +105,12 @@ fn grad_wrt(node: read UOp, g: read UOp, target: Int) -> fresh UOp {
         let ga = grad_wrt(node: read c0, g: read g, target: target)
         let gb = grad_wrt(node: read c1, g: read g, target: target)
         return uadd(a: read ga, b: read gb)
+    }
+    if node.op == Sub {
+        // d(a-b): da - db
+        let sa = grad_wrt(node: read c0, g: read g, target: target)
+        let sb = grad_wrt(node: read c1, g: read g, target: target)
+        return usub(a: read sa, b: read sb)
     }
     // d(a*b): a gets g*b, b gets g*a
     let gb_adj = umul(a: read g, b: read c1)
@@ -136,5 +158,10 @@ fn main() -> Unit {
     describe(label: read "d(x*x+5*x)/dx root = ", u: read g3)   // Add
     let r3 = List.get(list: read g3.src, index: 1)
     describe(label: read "  right (the +5) = ", u: read r3)      // Const(5)
+
+    // d(x - 3*x)/dx = 1 - 3 = -2
+    let f4 = usub(a: read uvar(id: 7), b: read umul(a: read uconst(v: 3), b: read uvar(id: 7)))
+    let g4 = simplify(u: read grad_wrt(node: read f4, g: read one, target: 7))
+    describe(label: read "d(x-3x)/dx = ", u: read g4)            // Const(-2)
     return Unit
 }

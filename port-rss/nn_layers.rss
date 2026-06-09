@@ -1,0 +1,223 @@
+// Numeric port of tinygrad nn layers + optimizers, operating directly on dense
+// List<Float> vectors (the pure-numeric path: avoids the lazy-graph/codegen).
+//
+// Covers, faithful to /home/zoe/tinygrad/tinygrad/nn/__init__.py and nn/optim.py:
+//   - Linear(in,out) forward  y = W.x + b   (W row-major out*in, x:in, b:out -> y:out)
+//       tinygrad: Linear.__call__ -> x.linear(weight.T, bias) == x @ weight.T + bias
+//   - relu(x) = max(0, x)
+//   - layernorm(v): (v - mean) / sqrt(var + eps), biased var (divide by N)  [LayerNorm]
+//   - SGD step:  p' = p - lr*g                                              [SGD/LARS, plain]
+//   - Adam step (t=1): m,v moments + bias correction                        [Adam/LAMB]
+//
+// NOTE on rss gaps used (see BRIEFING.md):
+//   - No Int->Float and no sqrt/exp intrinsics. Counts (e.g. N for the mean) are kept as
+//     Float accumulators incremented by 1.0. sqrt is a Newton iteration (fsqrt below).
+//   - Functions that build lists use an out-param (out: mut List<Float>), per the
+//     fresh-return restriction.
+
+// ---------- Float helpers ----------
+
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+// Newton sqrt: y_{k+1} = 0.5*(y + a/y), seed 1.0, 20 iters. sqrt(0) handled as 0.
+fn fsqrt(a: Float) -> Float {
+    if a <= 0.0 { return 0.0 }
+    let mut y = 1.0
+    let mut k = 0
+    while k < 20 {
+        y = 0.5 * (y + a / y)
+        k = k + 1
+    }
+    return y
+}
+
+fn relu1(x: Float) -> Float {
+    if x > 0.0 { return x }
+    return 0.0
+}
+
+fn relu(v: read List<Float>, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read relu1(x: fget(l: read v, i: i)))
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- Linear: y = W.x + b ----------
+// W is row-major, out rows of length nin. x has nin. b has nout. y has nout.
+fn linear(w: read List<Float>, x: read List<Float>, b: read List<Float>,
+          nin: Int, nout: Int, out: mut List<Float>) -> Unit {
+    let mut o = 0
+    while o < nout {
+        let mut acc = fget(l: read b, i: o)
+        let mut i = 0
+        while i < nin {
+            acc = acc + fget(l: read w, i: o * nin + i) * fget(l: read x, i: i)
+            i = i + 1
+        }
+        List.push(list: mut out, value: read acc)
+        o = o + 1
+    }
+    return Unit
+}
+
+// ---------- layernorm over a vector (biased variance) ----------
+fn layernorm(v: read List<Float>, eps: Float, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read v)
+    let mut nf = 0.0
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        sum = sum + fget(l: read v, i: i)
+        nf = nf + 1.0
+        i = i + 1
+    }
+    let mean = sum / nf
+    let mut vs = 0.0
+    let mut j = 0
+    while j < n {
+        let d = fget(l: read v, i: j) - mean
+        vs = vs + d * d
+        j = j + 1
+    }
+    let var = vs / nf
+    let denom = fsqrt(a: var + eps)
+    let mut k = 0
+    while k < n {
+        let nv = (fget(l: read v, i: k) - mean) / denom
+        List.push(list: mut out, value: read nv)
+        k = k + 1
+    }
+    return Unit
+}
+
+// ---------- SGD step: p' = p - lr*g ----------
+fn sgd_step(p: read List<Float>, g: read List<Float>, lr: Float, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read p)
+    let mut i = 0
+    while i < n {
+        let nv = fget(l: read p, i: i) - lr * fget(l: read g, i: i)
+        List.push(list: mut out, value: read nv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- Adam step (single step, moments seeded at 0, t=1) ----------
+// m = b1*0 + (1-b1)*g ; v = b2*0 + (1-b2)*g*g
+// b1_t = b1, b2_t = b2  (after one *= )
+// m_hat = m/(1-b1_t) ; v_hat = v/(1-b2_t)
+// up = m_hat/(sqrt(v_hat)+eps) ; p' = p - lr*up
+fn adam_step(p: read List<Float>, g: read List<Float>, lr: Float, b1: Float, b2: Float,
+             eps: Float, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read p)
+    let mut i = 0
+    while i < n {
+        let gi = fget(l: read g, i: i)
+        let m = (1.0 - b1) * gi
+        let v = (1.0 - b2) * (gi * gi)
+        let mhat = m / (1.0 - b1)
+        let vhat = v / (1.0 - b2)
+        let up = mhat / (fsqrt(a: vhat) + eps)
+        let nv = fget(l: read p, i: i) - lr * up
+        List.push(list: mut out, value: read nv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- printing ----------
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    // ---- fsqrt sanity (expect 2.0, 1.4142135..., 0.0) ----
+    Log.write(message: read String.concat(left: read "fsqrt(4)   = ", right: read String.from_float(value: fsqrt(a: 4.0))))
+    Log.write(message: read String.concat(left: read "fsqrt(2)   = ", right: read String.from_float(value: fsqrt(a: 2.0))))
+    Log.write(message: read String.concat(left: read "fsqrt(0)   = ", right: read String.from_float(value: fsqrt(a: 0.0))))
+
+    // ---- Linear: in=3, out=2 ----
+    // W = [[1,2,3],[4,5,6]] (row-major), x=[1,0.5,-2], b=[0.5,-1]
+    // hand: row0 = 1*1+2*0.5+3*(-2)+0.5 = 1+1-6+0.5 = -3.5
+    //       row1 = 4*1+5*0.5+6*(-2)-1  = 4+2.5-12-1 = -6.5
+    // tinygrad nn.Linear(same W,b): [-3.5, -6.5]
+    let w = List.new<Float>()
+    pushf(l: mut w, v: 1.0)
+    pushf(l: mut w, v: 2.0)
+    pushf(l: mut w, v: 3.0)
+    pushf(l: mut w, v: 4.0)
+    pushf(l: mut w, v: 5.0)
+    pushf(l: mut w, v: 6.0)
+    let xin = List.new<Float>()
+    pushf(l: mut xin, v: 1.0)
+    pushf(l: mut xin, v: 0.5)
+    pushf(l: mut xin, v: -2.0)
+    let bias = List.new<Float>()
+    pushf(l: mut bias, v: 0.5)
+    pushf(l: mut bias, v: -1.0)
+    let y = List.new<Float>()
+    linear(w: read w, x: read xin, b: read bias, nin: 3, nout: 2, out: mut y)
+    show_vec(label: read "Linear y = ", v: read y)             // expect [-3.5, -6.5]
+
+    // ---- relu ----
+    let rin = List.new<Float>()
+    pushf(l: mut rin, v: -2.0)
+    pushf(l: mut rin, v: -0.5)
+    pushf(l: mut rin, v: 0.0)
+    pushf(l: mut rin, v: 1.5)
+    pushf(l: mut rin, v: 3.0)
+    let rout = List.new<Float>()
+    relu(v: read rin, out: mut rout)
+    show_vec(label: read "relu     = ", v: read rout)          // expect [0,0,0,1.5,3]
+
+    // ---- layernorm over [1,2,3,4], eps=1e-5 ----
+    // tinygrad nn.LayerNorm(4): [-1.3416355, -0.4472118, 0.4472118, 1.3416355]
+    let lin_v = List.new<Float>()
+    pushf(l: mut lin_v, v: 1.0)
+    pushf(l: mut lin_v, v: 2.0)
+    pushf(l: mut lin_v, v: 3.0)
+    pushf(l: mut lin_v, v: 4.0)
+    let lout = List.new<Float>()
+    layernorm(v: read lin_v, eps: 0.00001, out: mut lout)
+    show_vec(label: read "layernorm= ", v: read lout)         // expect ~[-1.3416, -0.4472, 0.4472, 1.3416]
+
+    // ---- SGD step: p=[1,2,3], g=[0.1,0.2,0.3], lr=0.1 ----
+    // expect [0.99, 1.98, 2.97]
+    let p = List.new<Float>()
+    pushf(l: mut p, v: 1.0)
+    pushf(l: mut p, v: 2.0)
+    pushf(l: mut p, v: 3.0)
+    let g = List.new<Float>()
+    pushf(l: mut g, v: 0.1)
+    pushf(l: mut g, v: 0.2)
+    pushf(l: mut g, v: 0.3)
+    let sp = List.new<Float>()
+    sgd_step(p: read p, g: read g, lr: 0.1, out: mut sp)
+    show_vec(label: read "SGD step = ", v: read sp)           // expect [0.99, 1.98, 2.97]
+
+    // ---- Adam step t=1: same p,g; lr=0.1, b1=0.9, b2=0.999, eps=1e-8 ----
+    // tinygrad nn.optim.Adam: [0.9000007, 1.9000007, 2.9000006]
+    let ap = List.new<Float>()
+    adam_step(p: read p, g: read g, lr: 0.1, b1: 0.9, b2: 0.999, eps: 0.00000001, out: mut ap)
+    show_vec(label: read "Adam step= ", v: read ap)          // expect ~[0.9, 1.9, 2.9]
+    return Unit
+}

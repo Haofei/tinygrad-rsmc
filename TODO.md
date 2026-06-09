@@ -59,8 +59,8 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `schedule/multi.py` (175), `allreduce.py` (62) — multi-GPU, out of scope.
 
 ## nn/, ~900 in-scope
-- 🟡 `nn/optim.py` (179) → `train.rss` — SGD step (loss→grad→update) to convergence. **Remaining:** SGD momentum/weight-decay, Adam/AdamW/LARS as classes.
-- ⬜ `nn/__init__.py` (419) — Linear, Conv2d, BatchNorm, LayerNorm, Embedding, etc. layers.
+- 🟡 `nn/optim.py` (179) → `train.rss`,`nn_layers.rss` — SGD step (to convergence) + **SGD/Adam update steps validated vs tinygrad** (`nn_layers.rss`). **Remaining:** momentum/weight-decay, AdamW/LARS as stateful classes.
+- 🟡 `nn/__init__.py` (419) → `nn_layers.rss` — **Linear forward, relu, layernorm validated vs tinygrad** (numeric, fsqrt via Newton). **Remaining:** Conv2d, BatchNorm, Embedding as classes.
 - ⬜ `nn/state.py` (294) — get_state_dict/load_state_dict/safetensors (host serialization).
 - ⛔ `nn/onnx.py` (1314) — ONNX import; out of scope.
 

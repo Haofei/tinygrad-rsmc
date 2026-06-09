@@ -1,0 +1,236 @@
+// Port of tinygrad's *symbolic* transcendental op decompositions
+// (tinygrad/uop/decompositions.py + the ALU op set in tinygrad/uop/ops.py).
+//
+// tinygrad lowers high-level transcendental ops down to a small base set
+// (EXP2 / LOG2 / SIN / SQRT / RECIPROCAL). The toplevel symbolic rules are:
+//   EXP(x)   -> EXP2(x * log2(e))            ; log2(e)  = 1.4426950408889634
+//   LOG(x)   -> LOG2(x) * ln2                ; ln2      = 0.6931471805599453
+//   POW(a,b) -> EXP2(LOG2(a) * b)            ; from xpow(): exp2(log2(base)*exp)
+//   TAN(x)   -> SIN(x) / SIN(x + pi/2)       ; tan = sin/cos, cos(x)=sin(x+pi/2)
+// (POW matches xpow's core in decompositions.py:
+//    ret = (base<0).where(-base, base).log2().mul(exponent).exp2()
+//  i.e. the structural skeleton is exp2(log2(base) * exponent).)
+//
+// We port these as UOp-graph rewrites (like rewrite.rss), NOT numerically:
+// decompose(u) builds and returns a rewritten UOp graph, and we validate the
+// STRUCTURE of that graph (op names of the root and its key children).
+//
+// rss has no Int->Float conversion, so float constants (1.4426..., 0.6931...,
+// pi/2) are represented as FConst leaf nodes carrying a String name field that
+// holds the exact decimal literal. RECIPROCAL models division: a / b is
+// MUL(a, RECIPROCAL(b)) -- faithful to tinygrad, where FDIV/division is built
+// from reciprocal in the base set.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) {
+    Var
+    FConst
+    Exp
+    Log
+    Pow
+    Tan
+    Exp2
+    Log2
+    Sin
+    Sqrt
+    Reciprocal
+    Add
+    Mul
+}
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    name: String
+    src: List<UOp>
+    arg: Int
+}
+
+// ---- leaf / unary / binary constructors (one per op; no generic op param) ----
+
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, name: "", src: List.new<UOp>(), arg: id) }
+
+fn ufconst(label: read String) -> fresh UOp {
+    local n = String.concat(left: read label, right: read "")
+    return UOp(op: FConst, name: take n, src: List.new<UOp>(), arg: 0)
+}
+
+fn uexp(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Exp, name: "", src: take s, arg: 0)
+}
+fn ulog(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Log, name: "", src: take s, arg: 0)
+}
+fn utan(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Tan, name: "", src: take s, arg: 0)
+}
+fn uexp2(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Exp2, name: "", src: take s, arg: 0)
+}
+fn ulog2(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Log2, name: "", src: take s, arg: 0)
+}
+fn usin(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Sin, name: "", src: take s, arg: 0)
+}
+fn ureciprocal(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Reciprocal, name: "", src: take s, arg: 0)
+}
+
+fn upow(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Pow, name: "", src: take s, arg: 0)
+}
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, name: "", src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, name: "", src: take s, arg: 0)
+}
+
+// a / b  ==  a * reciprocal(b)   (faithful to the base set)
+fn udiv(a: read UOp, b: read UOp) -> fresh UOp { return umul(a: read a, b: read ureciprocal(a: read b)) }
+
+// ---- decomposition rules ----
+// EXP(x) -> EXP2(x * 1.4426950408889634)
+fn decompose_exp(u: read UOp) -> fresh UOp {
+    let x = List.get(list: read u.src, index: 0)
+    let k = ufconst(label: read "1.4426950408889634")
+    return uexp2(a: read umul(a: read x, b: read k))
+}
+
+// LOG(x) -> LOG2(x) * 0.6931471805599453
+fn decompose_log(u: read UOp) -> fresh UOp {
+    let x = List.get(list: read u.src, index: 0)
+    let k = ufconst(label: read "0.6931471805599453")
+    return umul(a: read ulog2(a: read x), b: read k)
+}
+
+// POW(a,b) -> EXP2(LOG2(a) * b)
+fn decompose_pow(u: read UOp) -> fresh UOp {
+    let a = List.get(list: read u.src, index: 0)
+    let b = List.get(list: read u.src, index: 1)
+    return uexp2(a: read umul(a: read ulog2(a: read a), b: read b))
+}
+
+// TAN(x) -> SIN(x) / SIN(x + pi/2)   (cos(x) = sin(x + pi/2))
+fn decompose_tan(u: read UOp) -> fresh UOp {
+    let x = List.get(list: read u.src, index: 0)
+    let halfpi = ufconst(label: read "1.5707963267948966")
+    let num = usin(a: read x)
+    let den = usin(a: read uadd(a: read x, b: read halfpi))
+    return udiv(a: read num, b: read den)
+}
+
+// dispatch
+fn decompose(u: read UOp) -> fresh UOp {
+    if u.op == Exp { return decompose_exp(u: read u) }
+    if u.op == Log { return decompose_log(u: read u) }
+    if u.op == Pow { return decompose_pow(u: read u) }
+    if u.op == Tan { return decompose_tan(u: read u) }
+    return uvar(id: u.arg)
+}
+
+// ---- pretty printing / validation helpers ----
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Var { return "Var" }
+    if u.op == FConst { return "FConst" }
+    if u.op == Exp { return "Exp" }
+    if u.op == Log { return "Log" }
+    if u.op == Pow { return "Pow" }
+    if u.op == Tan { return "Tan" }
+    if u.op == Exp2 { return "Exp2" }
+    if u.op == Log2 { return "Log2" }
+    if u.op == Sin { return "Sin" }
+    if u.op == Sqrt { return "Sqrt" }
+    if u.op == Reciprocal { return "Reciprocal" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+
+fn child(u: read UOp, i: Int) -> fresh UOp { return List.get(list: read u.src, index: i) }
+
+fn label_of(u: read UOp) -> fresh String {
+    if u.op == FConst { return String.concat(left: read "FConst \"", right: read String.concat(left: read u.name, right: read "\"")) }
+    if u.op == Var { return String.concat(left: read "Var(", right: read String.concat(left: read Int.to_string(value: read u.arg), right: read ")")) }
+    return op_name(u: read u)
+}
+
+fn say(label: read String, u: read UOp) -> Unit {
+    let s = String.concat(left: read label, right: read label_of(u: read u))
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "=== tinygrad symbolic transcendental decompositions ===")
+
+    // EXP(x) -> EXP2(x * 1.4426950408889634)
+    let ex = decompose(u: read uexp(a: read uvar(id: 0)))
+    say(label: read "decompose(EXP(x)) root        = ", u: read ex)              // Exp2
+    let ex_c = child(u: read ex, i: 0)
+    say(label: read "  child[0]                     = ", u: read ex_c)            // Mul
+    say(label: read "    mul.lhs                     = ", u: read child(u: read ex_c, i: 0))  // Var(0)
+    say(label: read "    mul.rhs                     = ", u: read child(u: read ex_c, i: 1))  // FConst "1.4426950408889634"
+
+    Log.write(message: read "")
+
+    // LOG(x) -> LOG2(x) * 0.6931471805599453
+    let lg = decompose(u: read ulog(a: read uvar(id: 0)))
+    say(label: read "decompose(LOG(x)) root        = ", u: read lg)              // Mul
+    say(label: read "  mul.lhs                      = ", u: read child(u: read lg, i: 0))     // Log2
+    say(label: read "    log2.child                  = ", u: read child(u: read child(u: read lg, i: 0), i: 0)) // Var(0)
+    say(label: read "  mul.rhs                      = ", u: read child(u: read lg, i: 1))     // FConst "0.6931471805599453"
+
+    Log.write(message: read "")
+
+    // POW(a,b) -> EXP2(LOG2(a) * b)
+    let pw = decompose(u: read upow(a: read uvar(id: 1), b: read uvar(id: 2)))
+    say(label: read "decompose(POW(a,b)) root      = ", u: read pw)              // Exp2
+    let pw_c = child(u: read pw, i: 0)
+    say(label: read "  child[0]                     = ", u: read pw_c)           // Mul
+    say(label: read "    mul.lhs                     = ", u: read child(u: read pw_c, i: 0))  // Log2
+    say(label: read "      log2.child                = ", u: read child(u: read child(u: read pw_c, i: 0), i: 0)) // Var(1)
+    say(label: read "    mul.rhs                     = ", u: read child(u: read pw_c, i: 1))  // Var(2)
+
+    Log.write(message: read "")
+
+    // TAN(x) -> SIN(x) / SIN(x + pi/2)   ==  Mul(Sin(x), Reciprocal(Sin(Add(x, pi/2))))
+    let tn = decompose(u: read utan(a: read uvar(id: 0)))
+    say(label: read "decompose(TAN(x)) root        = ", u: read tn)              // Mul
+    say(label: read "  mul.lhs (numerator)          = ", u: read child(u: read tn, i: 0))     // Sin
+    say(label: read "    sin.child                   = ", u: read child(u: read child(u: read tn, i: 0), i: 0)) // Var(0)
+    let tn_r = child(u: read tn, i: 1)
+    say(label: read "  mul.rhs (1/denominator)      = ", u: read tn_r)           // Reciprocal
+    let tn_den = child(u: read tn_r, i: 0)
+    say(label: read "    recip.child                 = ", u: read tn_den)        // Sin
+    let tn_add = child(u: read tn_den, i: 0)
+    say(label: read "      sin.child                 = ", u: read tn_add)        // Add
+    say(label: read "        add.lhs                 = ", u: read child(u: read tn_add, i: 0)) // Var(0)
+    say(label: read "        add.rhs                 = ", u: read child(u: read tn_add, i: 1)) // FConst "1.5707963267948966"
+
+    return Unit
+}

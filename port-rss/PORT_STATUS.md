@@ -16,7 +16,7 @@ earlier was a mischaracterization.
 |---|---|---|
 | `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
-| `uop/ops.py` (CORE) | `UOp` node + interning (`uop.rss`); **PatternMatcher** bottom-up symbolic rewrite (`rewrite.rss`) | ✅ interning->2 unique; (2+3)*4->20, x*1->x, x+0->x, x*0->0, (x*1)+(2+3)->Add(x,5) |
+| `uop/ops.py` (CORE) | `UOp`+interning (`uop.rss`); **PatternMatcher** symbolic rewrite (`rewrite.rss`); **generic UPat DSL** -- recursive pattern + wildcard + capture (`upat.rss`) | ✅ rewrite cases; UPat MUL(any,CONST 1) matches x*1 (captures Var), rejects x*2 |
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
 | `gradient.py` (CORE) | **reverse-mode autodiff over the UOp graph** -- add/mul/sub (`gradient.rss`), **relu** (`gradient_relu.rss`); **DAG-shared accumulation** over an arena (`autodiff_dag.rss`) | ✅ symbolic d(...) cases; **DAG: d(x*x)=6@x=3, d((x+x)*x)=8@x=2** (shared node accumulates) |
 | `codegen/`+`renderer/` (CORE) | **lower a ported UOp graph to an MC kernel + EXECUTE** -- elementwise (`render.rss`), **reduce** (`render_reduce.rss`), **matmul** (`render_matmul.rss`), **relu** (`render_relu.rss`, via select_f32); real loop render->MC->native | ✅ (x+2)*3 -> [9,12,21,-3]; sum(x+1) -> 14; 3x3 matmul matches reference |
@@ -46,6 +46,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
+- rss codegen bug (related, NOT yet fixed): `let mut s = <read-param>` then reassign emits ill-typed Rust (unmappable E0308 via vec!/macros) -- binding a mut local to a read-param borrow then assigning an owned value; should clone the read-param at the binding. Worked around by avoiding the pattern.
 - ~~rss codegen bug: read-PARAM pushed into an owned collection emits `&&T` (E0308)~~ -- **FIXED** (rsscript: lower_call_arg read-param no longer double-borrowed, mirrors the mut-param case). uadd/umul-style recursive-IR helpers now work; regression fixture added; cargo test green.
 - `derives(Clone)` is accepted but there is no callable `.clone()`/`Clone.clone(..)` in source -> cannot copy a managed value; blocks `scalar()`/`vec()` clones (worked around via reconstruction-by-name). Candidate rss feature (larger than a bug fix).
 - rss `/` truncates toward zero; Python `//` floors -> ceildiv/round_up need an explicit floordiv (handled in helpers.rss).

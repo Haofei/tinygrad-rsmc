@@ -1,0 +1,110 @@
+// Port of the PatternMatcher's generic UPat DSL (tinygrad uop/ops.py UPat): a UPat is a
+// recursive pattern that matches a UOp structurally, with wildcards (PAny) and captures, so
+// rewrite rules are data, not hardcoded if-chains. match_pat(pat,u,binds) returns whether the
+// UOp matches and fills `binds` with captured subgraphs (the rule's rewrite then uses them).
+//
+// Demo rule: MUL(<any:capture>, CONST 1) -> the captured operand. Matches x*1 (binds[0]=x),
+// does NOT match x*2. This is the generic-matching mechanism behind the symbolic rules.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+sum PKind derives(Clone, Eq) { PAny PConst POp }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+struct UPat derives(Clone) {
+    kind: PKind
+    op: Ops          // for POp
+    cval: Int        // for PConst
+    capture: Bool
+    children: List<UPat>
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+
+fn p_any_cap() -> fresh UPat { return UPat(kind: PAny, op: Const, cval: 0, capture: true, children: List.new<UPat>()) }
+fn p_const(v: Int) -> fresh UPat { return UPat(kind: PConst, op: Const, cval: v, capture: false, children: List.new<UPat>()) }
+fn p_mul2(a: read UPat, b: read UPat) -> fresh UPat {
+    local s = List.new<UPat>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UPat(kind: POp, op: Mul, cval: 0, capture: false, children: take s)
+}
+
+// structural match: returns true and pushes captured UOps into binds
+fn match_pat(pat: read UPat, u: read UOp, binds: mut List<UOp>) -> Bool {
+    if pat.kind == PAny {
+        if pat.capture { List.push(list: mut binds, value: read u) }
+        return true
+    }
+    if pat.kind == PConst {
+        if u.op == Const {
+            if u.arg == pat.cval {
+                if pat.capture { List.push(list: mut binds, value: read u) }
+                return true
+            }
+        }
+        return false
+    }
+    // POp: op + arity + all children must match
+    if u.op == pat.op {
+        let nc = List.len(list: read pat.children)
+        if List.len(list: read u.src) == nc {
+            let mut i = 0
+            let mut ok = true
+            while i < nc {
+                let cp = List.get(list: read pat.children, index: i)
+                let cu = List.get(list: read u.src, index: i)
+                let m = match_pat(pat: read cp, u: read cu, binds: mut binds)
+                if m == false { ok = false }
+                i = i + 1
+            }
+            if ok {
+                if pat.capture { List.push(list: mut binds, value: read u) }
+                return true
+            }
+            return false
+        }
+    }
+    return false
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+
+fn main() -> Unit {
+    // rule pattern: MUL(<any:capture>, CONST 1)
+    let pat = p_mul2(a: read p_any_cap(), b: read p_const(v: 1))
+
+    // x * 1  -> matches, captures x
+    let e1 = umul(a: read uvar(id: 7), b: read uconst(v: 1))
+    let binds1 = List.new<UOp>()
+    let m1 = match_pat(pat: read pat, u: read e1, binds: mut binds1)
+    if m1 { Log.write(message: read "MUL(any,CONST 1) matches x*1: yes") } else { Log.write(message: read "MUL(any,CONST 1) matches x*1: no") }
+    if m1 {
+        let cap = List.get(list: read binds1, index: 0)
+        Log.write(message: read String.concat(left: read "  captured operand op = ", right: read op_name(u: read cap)))  // Var
+    }
+
+    // x * 2  -> does NOT match (CONST 1 required)
+    let e2 = umul(a: read uvar(id: 7), b: read uconst(v: 2))
+    let binds2 = List.new<UOp>()
+    let m2 = match_pat(pat: read pat, u: read e2, binds: mut binds2)
+    if m2 { Log.write(message: read "MUL(any,CONST 1) matches x*2: yes") } else { Log.write(message: read "MUL(any,CONST 1) matches x*2: no") }
+    return Unit
+}

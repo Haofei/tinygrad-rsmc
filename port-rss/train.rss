@@ -1,0 +1,146 @@
+// Capstone: a real SGD training loop driven by the ported reverse-mode autodiff.
+// Linear regression w*x ~= y over an arena DAG: each step builds loss = sum_i (w*x_i - y_i)^2,
+// runs forward + reverse-mode backward (the ported autodiff) to get dL/dw, and updates
+// w -= lr*dL/dw. Demonstrates the port doing real ML: loss -> ~0 and w -> the true slope (2).
+// vjp rules: ADD g->both; SUB g->a, -g->b; MUL g*val(other) to each (DAG accumulation).
+
+fn OP_INPUT() -> Int { return 0 }
+fn OP_CONST() -> Int { return 1 }
+fn OP_ADD()   -> Int { return 2 }
+fn OP_SUB()   -> Int { return 3 }
+fn OP_MUL()   -> Int { return 4 }
+
+fn emit(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, val: mut List<Float>,
+        o: Int, x: Int, y: Int, v: Float) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    List.push(list: mut val, value: read v)
+    return idx
+}
+
+// one training step: build the loss graph for current w, return [loss, dL/dw] in `out`
+fn step(w: Float, xs: read List<Float>, ys: read List<Float>, out: mut List<Float>) -> Unit {
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let val = List.new<Float>()
+    let wnode = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_INPUT(), x: -1, y: -1, v: w)
+    let n = List.len(list: read xs)
+    let mut i = 0
+    let mut acc = -1
+    while i < n {
+        let xi = List.get(list: read xs, index: i)
+        let yi = List.get(list: read ys, index: i)
+        let cx = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_CONST(), x: -1, y: -1, v: xi)
+        let wx = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_MUL(), x: wnode, y: cx, v: 0.0)
+        let cy = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_CONST(), x: -1, y: -1, v: yi)
+        let diff = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_SUB(), x: wx, y: cy, v: 0.0)
+        let sq = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_MUL(), x: diff, y: diff, v: 0.0)
+        if acc < 0 { acc = sq } else { acc = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_ADD(), x: acc, y: sq, v: 0.0) }
+        i = i + 1
+    }
+    let m = List.len(list: read op)
+    // forward
+    let fval = List.new<Float>()
+    let mut k = 0
+    while k < m {
+        let o = List.get(list: read op, index: k)
+        if o == OP_INPUT() { List.push(list: mut fval, value: read List.get(list: read val, index: k)) }
+        if o == OP_CONST() { List.push(list: mut fval, value: read List.get(list: read val, index: k)) }
+        if o == OP_ADD() {
+            let va = List.get(list: read fval, index: List.get(list: read a, index: k))
+            let vb = List.get(list: read fval, index: List.get(list: read b, index: k))
+            let r = va + vb
+            List.push(list: mut fval, value: read r)
+        }
+        if o == OP_SUB() {
+            let va = List.get(list: read fval, index: List.get(list: read a, index: k))
+            let vb = List.get(list: read fval, index: List.get(list: read b, index: k))
+            let r = va - vb
+            List.push(list: mut fval, value: read r)
+        }
+        if o == OP_MUL() {
+            let va = List.get(list: read fval, index: List.get(list: read a, index: k))
+            let vb = List.get(list: read fval, index: List.get(list: read b, index: k))
+            let r = va * vb
+            List.push(list: mut fval, value: read r)
+        }
+        k = k + 1
+    }
+    // backward
+    let grad = List.new<Float>()
+    let mut j = 0
+    while j < m {
+        List.push(list: mut grad, value: read 0.0)
+        j = j + 1
+    }
+    List.set(list: mut grad, index: acc, value: read 1.0)
+    let mut r = m - 1
+    while r >= 0 {
+        let o = List.get(list: read op, index: r)
+        let gi = List.get(list: read grad, index: r)
+        if o == OP_ADD() {
+            let ia = List.get(list: read a, index: r)
+            let ib = List.get(list: read b, index: r)
+            let na = List.get(list: read grad, index: ia) + gi
+            List.set(list: mut grad, index: ia, value: read na)
+            let nb = List.get(list: read grad, index: ib) + gi
+            List.set(list: mut grad, index: ib, value: read nb)
+        }
+        if o == OP_SUB() {
+            let ia = List.get(list: read a, index: r)
+            let ib = List.get(list: read b, index: r)
+            let na = List.get(list: read grad, index: ia) + gi
+            List.set(list: mut grad, index: ia, value: read na)
+            let nb = List.get(list: read grad, index: ib) - gi
+            List.set(list: mut grad, index: ib, value: read nb)
+        }
+        if o == OP_MUL() {
+            let ia = List.get(list: read a, index: r)
+            let ib = List.get(list: read b, index: r)
+            let fa = List.get(list: read fval, index: ia)
+            let fb = List.get(list: read fval, index: ib)
+            let na = List.get(list: read grad, index: ia) + (gi * fb)
+            List.set(list: mut grad, index: ia, value: read na)
+            let nb = List.get(list: read grad, index: ib) + (gi * fa)
+            List.set(list: mut grad, index: ib, value: read nb)
+        }
+        r = r - 1
+    }
+    let loss = List.get(list: read fval, index: acc)
+    let gradw = List.get(list: read grad, index: wnode)
+    List.push(list: mut out, value: read loss)
+    List.push(list: mut out, value: read gradw)
+    return Unit
+}
+
+fn main() -> Unit {
+    // data: y = 2x  -> expect w -> 2.0, loss -> ~0
+    let xs = List.new<Float>()
+    List.push(list: mut xs, value: read 1.0)
+    List.push(list: mut xs, value: read 2.0)
+    List.push(list: mut xs, value: read 3.0)
+    let ys = List.new<Float>()
+    List.push(list: mut ys, value: read 2.0)
+    List.push(list: mut ys, value: read 4.0)
+    List.push(list: mut ys, value: read 6.0)
+
+    let mut w = 0.0
+    let lr = 0.02
+    let mut it = 0
+    while it < 50 {
+        let res = List.new<Float>()
+        step(w: w, xs: read xs, ys: read ys, out: mut res)
+        let loss = List.get(list: read res, index: 0)
+        let gradw = List.get(list: read res, index: 1)
+        w = w - (lr * gradw)
+        if it == 0 { Log.write(message: read String.concat(left: read "iter 0   loss=", right: read String.from_float(value: loss))) }
+        if it == 10 { Log.write(message: read String.concat(left: read "iter 10  loss=", right: read String.from_float(value: loss))) }
+        if it == 49 { Log.write(message: read String.concat(left: read "iter 49  loss=", right: read String.from_float(value: loss))) }
+        it = it + 1
+    }
+    Log.write(message: read String.concat(left: read "final w = ", right: read String.from_float(value: w)))
+    return Unit
+}

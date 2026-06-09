@@ -1,0 +1,104 @@
+// Faithful port of tinygrad/dtype.py (scalar DType + the `dtypes` namespace + predicates).
+// Translates tinygrad's ACTUAL definitions -- the same priorities, bitsizes, C names, and
+// fmt chars from dtype.py lines 176-223 -- into rsscript, not a re-imagining.
+//
+// DType derives(Eq, Hash) so it can be interned/compared exactly like tinygrad's
+// metaclass-cached, eq=False dataclass (uses the rss Hashable feature). PtrDType/ImageDType
+// and vec()/scalar() (which need self-referential/owning clones) are the next slice; this
+// is the scalar core: construction, itemsize, and the is_* predicates.
+
+struct DType derives(Clone, Eq, Hash) {
+    priority: Int
+    bitsize: Int
+    name: String
+    fmt: Option<String>
+    count: Int
+}
+
+// itemsize = (bitsize + 7) // 8   (dtype.py:65)
+fn DType.itemsize(self: read DType) -> Int {
+    let t = self.bitsize + 7
+    return t / 8
+}
+
+// ---- the dtypes namespace (dtype.py:176-197), exact values ----
+fn d_void()    -> fresh DType { return DType(priority: -1, bitsize: 0,   name: "void",           fmt: None,      count: 1) }
+fn d_weakint() -> fresh DType { return DType(priority: 0,  bitsize: 800, name: "weakint",        fmt: None,      count: 1) }
+fn d_bool()    -> fresh DType { return DType(priority: 0,  bitsize: 1,   name: "bool",           fmt: Some("?"), count: 1) }
+fn d_int8()    -> fresh DType { return DType(priority: 1,  bitsize: 8,   name: "signed char",    fmt: Some("b"), count: 1) }
+fn d_uint8()   -> fresh DType { return DType(priority: 2,  bitsize: 8,   name: "unsigned char",  fmt: Some("B"), count: 1) }
+fn d_int16()   -> fresh DType { return DType(priority: 3,  bitsize: 16,  name: "short",          fmt: Some("h"), count: 1) }
+fn d_uint16()  -> fresh DType { return DType(priority: 4,  bitsize: 16,  name: "unsigned short", fmt: Some("H"), count: 1) }
+fn d_int32()   -> fresh DType { return DType(priority: 5,  bitsize: 32,  name: "int",            fmt: Some("i"), count: 1) }
+fn d_uint32()  -> fresh DType { return DType(priority: 6,  bitsize: 32,  name: "unsigned int",   fmt: Some("I"), count: 1) }
+fn d_int64()   -> fresh DType { return DType(priority: 7,  bitsize: 64,  name: "long",           fmt: Some("q"), count: 1) }
+fn d_uint64()  -> fresh DType { return DType(priority: 8,  bitsize: 64,  name: "unsigned long",  fmt: Some("Q"), count: 1) }
+fn d_float16() -> fresh DType { return DType(priority: 11, bitsize: 16,  name: "half",           fmt: Some("e"), count: 1) }
+fn d_bfloat16()-> fresh DType { return DType(priority: 12, bitsize: 16,  name: "__bf16",         fmt: None,      count: 1) }
+fn d_float32() -> fresh DType { return DType(priority: 13, bitsize: 32,  name: "float",          fmt: Some("f"), count: 1) }
+fn d_float64() -> fresh DType { return DType(priority: 14, bitsize: 64,  name: "double",         fmt: Some("d"), count: 1) }
+
+// ---- predicates (dtype.py:150-160). count==1 here, so scalar(x) == x; check by C name. ----
+fn dtypes_is_float(x: read DType) -> Bool {
+    if x.name == "half" { return true }
+    if x.name == "__bf16" { return true }
+    if x.name == "float" { return true }
+    if x.name == "double" { return true }
+    if x.name == "float8_e4m3" { return true }
+    if x.name == "float8_e5m2" { return true }
+    if x.name == "float8_e4m3fnuz" { return true }
+    if x.name == "float8_e5m2fnuz" { return true }
+    return false
+}
+fn dtypes_is_unsigned(x: read DType) -> Bool {
+    if x.name == "unsigned char" { return true }
+    if x.name == "unsigned short" { return true }
+    if x.name == "unsigned int" { return true }
+    if x.name == "unsigned long" { return true }
+    return false
+}
+fn dtypes_is_int(x: read DType) -> Bool {
+    if dtypes_is_unsigned(x: read x) { return true }
+    if x.name == "signed char" { return true }
+    if x.name == "short" { return true }
+    if x.name == "int" { return true }
+    if x.name == "long" { return true }
+    if x.name == "weakint" { return true }
+    return false
+}
+fn dtypes_is_bool(x: read DType) -> Bool {
+    return x.name == "bool"
+}
+
+fn yn(b: Bool) -> fresh String {
+    let r = String.concat(left: read "", right: read "")
+    if b {
+        return String.concat(left: read r, right: read "yes")
+    }
+    return String.concat(left: read r, right: read "no")
+}
+fn report(label: read String, v: Int) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read Int.to_string(value: read v)))
+    return Unit
+}
+fn show(label: read String, b: Bool) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read yn(b: b)))
+    return Unit
+}
+
+fn main() -> Unit {
+    let f32 = d_float32()
+    let i32 = d_int32()
+    let u8 = d_uint8()
+    let bl = d_bool()
+    report(label: read "float32.priority = ", v: f32.priority)                   // 13
+    report(label: read "float32.itemsize = ", v: DType.itemsize(self: read f32)) // 4
+    report(label: read "int32.itemsize = ",   v: DType.itemsize(self: read i32)) // 4
+    report(label: read "bool.itemsize = ",    v: DType.itemsize(self: read bl))  // 1
+    show(label: read "is_float(float32) = ",  b: dtypes_is_float(x: read f32))    // yes
+    show(label: read "is_float(int32) = ",    b: dtypes_is_float(x: read i32))    // no
+    show(label: read "is_int(int32) = ",      b: dtypes_is_int(x: read i32))      // yes
+    show(label: read "is_unsigned(uint8) = ", b: dtypes_is_unsigned(x: read u8))  // yes
+    show(label: read "is_bool(bool) = ",      b: dtypes_is_bool(x: read bl))      // yes
+    return Unit
+}

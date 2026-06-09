@@ -1,0 +1,95 @@
+// Port of the device.py/runtime CORE: a Device selected by name dispatches execution of a
+// UOp program to a backend. Here we implement a working CPU-interpreter runtime backend (a
+// tree-walking evaluator over the UOp graph) -- mirroring tinygrad's Device[name] dispatch +
+// a runtime that actually computes (the "CLANG/CPU" path conceptually; the mc backend is the
+// compiled path used elsewhere). Buffers are host Float arrays (Allocator copyin/copyout).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+struct UOp derives(Clone) {
+    op: Ops
+    src: List<UOp>
+    cval: Float
+}
+
+fn uconst(v: Float) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), cval: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), cval: 0.0) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, cval: 0.0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, cval: 0.0)
+}
+
+// the CPU-interpreter runtime: evaluate a UOp expression for a single input value x
+fn eval_uop(u: read UOp, x: Float) -> Float {
+    if u.op == Const { return u.cval }
+    if u.op == Var { return x }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return eval_uop(u: read c0, x: x) + eval_uop(u: read c1, x: x) }
+    return eval_uop(u: read c0, x: x) * eval_uop(u: read c1, x: x)
+}
+
+// runtime backend: map the program over an input buffer into an output buffer
+fn interp_exec(expr: read UOp, inbuf: read List<Float>, outbuf: mut List<Float>) -> Unit {
+    let n = List.len(list: read inbuf)
+    let mut i = 0
+    while i < n {
+        let x = List.get(list: read inbuf, index: i)
+        let y = eval_uop(u: read expr, x: x)
+        List.push(list: mut outbuf, value: read y)
+        i = i + 1
+    }
+    return Unit
+}
+
+// Device dispatch: pick the backend by name (device.py: Device[name])
+fn device_run(name: read String, expr: read UOp, inbuf: read List<Float>, outbuf: mut List<Float>) -> Bool {
+    if name == "interp" {
+        interp_exec(expr: read expr, inbuf: read inbuf, outbuf: mut outbuf)
+        return true
+    }
+    Log.write(message: read String.concat(left: read "device unsupported: ", right: read name))
+    return false
+}
+
+fn dump(label: read String, buf: read List<Float>) -> Unit {
+    let n = List.len(list: read buf)
+    let mut s = String.concat(left: read label, right: read "")
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: List.get(list: read buf, index: i)))
+        s = String.concat(left: read s, right: read " ")
+        i = i + 1
+    }
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    // program: (x + 2) * 3
+    let expr = umul(a: read uadd(a: read uvar(id: 0), b: read uconst(v: 2.0)), b: read uconst(v: 3.0))
+    let inbuf = List.new<Float>()
+    List.push(list: mut inbuf, value: read 1.0)
+    List.push(list: mut inbuf, value: read 2.0)
+    List.push(list: mut inbuf, value: read 3.0)
+
+    // dispatch to the "interp" device
+    let outbuf = List.new<Float>()
+    let ok = device_run(name: read "interp", expr: read expr, inbuf: read inbuf, outbuf: mut outbuf)
+    if ok { dump(label: read "Device[interp] (x+2)*3 = ", buf: read outbuf) }   // 9 12 15
+
+    // dispatch to an unsupported device -> handled gracefully
+    let outbuf2 = List.new<Float>()
+    let ok2 = device_run(name: read "cuda", expr: read expr, inbuf: read inbuf, outbuf: mut outbuf2)
+    if ok2 == false { Log.write(message: read "  (cuda backend not registered -- as expected)") }
+    return Unit
+}

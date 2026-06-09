@@ -1,0 +1,128 @@
+// Port of tensor.py movement + reduce ops on the lazy UOp graph: each Tensor carries its
+// shape and a UOp graph node; movement ops (reshape/permute/expand) and reduce (sum over an
+// axis) build the corresponding UOp and propagate the shape -- exactly tinygrad's lazy,
+// shape-tracked graph building (the stride math itself is in shapetracker.rss).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Buffer Add Mul Reshape Permute Expand Reduce }
+
+struct Tensor derives(Clone) {
+    op: Ops
+    shape: List<Int>
+    arg: Int
+}
+
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn copy_ints(src: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read src)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read iget(l: read src, i: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn t_full(shape: read List<Int>) -> fresh Tensor {
+    local sh = List.new<Int>()
+    copy_ints(src: read shape, out: mut sh)
+    return Tensor(op: Buffer, shape: take sh, arg: 0)
+}
+
+// elementwise add: same shape (assumes broadcast already applied)
+fn t_add(a: read Tensor, b: read Tensor) -> fresh Tensor {
+    local sh = List.new<Int>()
+    copy_ints(src: read a.shape, out: mut sh)
+    return Tensor(op: Add, shape: take sh, arg: 0)
+}
+
+// reshape: new shape (element count must match; not checked here)
+fn t_reshape(t: read Tensor, new_shape: read List<Int>) -> fresh Tensor {
+    local sh = List.new<Int>()
+    copy_ints(src: read new_shape, out: mut sh)
+    return Tensor(op: Reshape, shape: take sh, arg: 0)
+}
+
+// permute: reorder shape by perm
+fn t_permute(t: read Tensor, perm: read List<Int>) -> fresh Tensor {
+    local sh = List.new<Int>()
+    let n = List.len(list: read perm)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut sh, value: read iget(l: read t.shape, i: iget(l: read perm, i: i)))
+        i = i + 1
+    }
+    return Tensor(op: Permute, shape: take sh, arg: 0)
+}
+
+// expand: new shape (broadcast size-1 dims)
+fn t_expand(t: read Tensor, new_shape: read List<Int>) -> fresh Tensor {
+    local sh = List.new<Int>()
+    copy_ints(src: read new_shape, out: mut sh)
+    return Tensor(op: Expand, shape: take sh, arg: 0)
+}
+
+// sum over an axis: drop that axis from the shape (keepdim=False)
+fn t_sum(t: read Tensor, axis: Int) -> fresh Tensor {
+    local sh = List.new<Int>()
+    let n = List.len(list: read t.shape)
+    let mut i = 0
+    while i < n {
+        if i != axis { List.push(list: mut sh, value: read iget(l: read t.shape, i: i)) }
+        i = i + 1
+    }
+    return Tensor(op: Reduce, shape: take sh, arg: axis)
+}
+
+fn op_name(t: read Tensor) -> fresh String {
+    if t.op == Buffer { return "Buffer" }
+    if t.op == Add { return "Add" }
+    if t.op == Mul { return "Mul" }
+    if t.op == Reshape { return "Reshape" }
+    if t.op == Permute { return "Permute" }
+    if t.op == Expand { return "Expand" }
+    return "Reduce"
+}
+fn show_shape(label: read String, t: read Tensor) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(t: read t))
+    s = String.concat(left: read s, right: read " shape=[")
+    let n = List.len(list: read t.shape)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read t.shape, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn mk2(a: Int, b: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push(list: mut l, value: read a)
+    List.push(list: mut l, value: read b)
+    return l
+}
+
+fn main() -> Unit {
+    // x: (2,3)
+    let x = t_full(shape: read mk2(a: 2, b: 3))
+    show_shape(label: read "x = ", t: read x)                                  // Buffer [2,3]
+    // permute (1,0) -> (3,2)
+    let xp = t_permute(t: read x, perm: read mk2(a: 1, b: 0))
+    show_shape(label: read "x.permute(1,0) = ", t: read xp)                    // Permute [3,2]
+    // reshape (2,3)->(6,1)
+    let xr = t_reshape(t: read x, new_shape: read mk2(a: 6, b: 1))
+    show_shape(label: read "x.reshape(6,1) = ", t: read xr)                    // Reshape [6,1]
+    // sum axis 0 of (2,3) -> (3,)  [single-dim shape]
+    let xs = t_sum(t: read x, axis: 0)
+    show_shape(label: read "x.sum(axis=0) = ", t: read xs)                     // Reduce [3]
+    // (2,3) + (2,3) -> (2,3)
+    let xa = t_add(a: read x, b: read x)
+    show_shape(label: read "x + x = ", t: read xa)                            // Add [2,3]
+    // chain: x.permute(1,0).sum(axis=1) -> (3,2) reduce axis1 -> (3,)
+    let chain = t_sum(t: read xp, axis: 1)
+    show_shape(label: read "x.permute(1,0).sum(1) = ", t: read chain)          // Reduce [3]
+    return Unit
+}

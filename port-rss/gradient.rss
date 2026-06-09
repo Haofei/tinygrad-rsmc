@@ -1,0 +1,140 @@
+// Port of the CORE of tinygrad/gradient.py: reverse-mode autodiff over the UOp graph.
+// tinygrad computes gradients by propagating an adjoint backwards through the UOp graph with
+// per-op vjp rules. This ports that as `grad_wrt(node, g, var)` -> the gradient UOp of `var`
+// in this subtree given output adjoint `g`, with rules: d(a+b)=g->both; d(a*b)=g*b to a,
+// g*a to b; leaves: Var matches -> g, else 0. The gradient is itself a UOp graph, then run
+// through the ported PatternMatcher (simplify). Builds grad nodes from `read` UOps (enabled
+// by the rss read-param codegen fix). Tree case (no shared subexprs); arg/dtype simplified.
+//
+// `clone_uop` deep-copies a UOp (works around `derives(Clone)` not being callable in source).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+
+fn clone_uop(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return uadd(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1)) }
+    return umul(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1))
+}
+
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let a = simplify(u: read c0)
+    let b = simplify(u: read c1)
+    if u.op == Mul {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }
+            if a.arg == 1 { return simplify(u: read c1) }
+            if a.arg == 0 { return uconst(v: 0) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 1 { return simplify(u: read c0) }
+            if b.arg == 0 { return uconst(v: 0) }
+        }
+        return umul(a: read a, b: read b)
+    }
+    if u.op == Add {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg + b.arg) }
+            if a.arg == 0 { return simplify(u: read c1) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return simplify(u: read c0) }
+        }
+        return uadd(a: read a, b: read b)
+    }
+    return uadd(a: read a, b: read b)
+}
+
+// reverse-mode vjp: gradient of `target` in subtree `node`, given output adjoint `g`
+fn grad_wrt(node: read UOp, g: read UOp, target: Int) -> fresh UOp {
+    if node.op == Const { return uconst(v: 0) }
+    if node.op == Var {
+        if node.arg == target { return clone_uop(u: read g) }
+        return uconst(v: 0)
+    }
+    let c0 = List.get(list: read node.src, index: 0)
+    let c1 = List.get(list: read node.src, index: 1)
+    if node.op == Add {
+        // d(a+b): adjoint g flows to both
+        let ga = grad_wrt(node: read c0, g: read g, target: target)
+        let gb = grad_wrt(node: read c1, g: read g, target: target)
+        return uadd(a: read ga, b: read gb)
+    }
+    // d(a*b): a gets g*b, b gets g*a
+    let gb_adj = umul(a: read g, b: read c1)
+    let ga = grad_wrt(node: read c0, g: read gb_adj, target: target)
+    let ga_adj = umul(a: read g, b: read c0)
+    let gb = grad_wrt(node: read c1, g: read ga_adj, target: target)
+    return uadd(a: read ga, b: read gb)
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    let one = uconst(v: 1)
+
+    // d(3*x)/dx = 3   (x = Var 7)
+    let f1 = umul(a: read uconst(v: 3), b: read uvar(id: 7))
+    let g1 = simplify(u: read grad_wrt(node: read f1, g: read one, target: 7))
+    describe(label: read "d(3*x)/dx = ", u: read g1)   // Const(3)
+
+    // d(x*x)/dx = x + x   (= 2x; no x+x->2x rule, so stays Add(Var,Var))
+    let f2 = umul(a: read uvar(id: 7), b: read uvar(id: 7))
+    let g2 = simplify(u: read grad_wrt(node: read f2, g: read one, target: 7))
+    describe(label: read "d(x*x)/dx root = ", u: read g2)   // Add
+    let l = List.get(list: read g2.src, index: 0)
+    let r = List.get(list: read g2.src, index: 1)
+    describe(label: read "  left  = ", u: read l)   // Var(7)
+    describe(label: read "  right = ", u: read r)   // Var(7)
+
+    // d(x*x + 5*x)/dx = (x+x) + 5
+    let f3 = uadd(a: read umul(a: read uvar(id: 7), b: read uvar(id: 7)), b: read umul(a: read uconst(v: 5), b: read uvar(id: 7)))
+    let g3 = simplify(u: read grad_wrt(node: read f3, g: read one, target: 7))
+    describe(label: read "d(x*x+5*x)/dx root = ", u: read g3)   // Add
+    let r3 = List.get(list: read g3.src, index: 1)
+    describe(label: read "  right (the +5) = ", u: read r3)      // Const(5)
+    return Unit
+}

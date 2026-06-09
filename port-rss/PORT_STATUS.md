@@ -17,7 +17,8 @@ earlier was a mischaracterization.
 | `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
 | `uop/ops.py` (CORE) | `UOp` node + interning (`uop.rss`); **PatternMatcher** bottom-up symbolic rewrite (`rewrite.rss`) | ✅ interning->2 unique; (2+3)*4->20, x*1->x, x+0->x, x*0->0, (x*1)+(2+3)->Add(x,5) |
-| `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`): t_const/t_var/t_add/t_mul build UOp nodes; integrates with simplify | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
+| `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
+| `gradient.py` (CORE) | **reverse-mode autodiff over the UOp graph** (`gradient.rss`): per-op vjp (add->both; mul->g*b,g*a), gradient is a UOp graph then simplified | ✅ d(3x)/dx=Const(3); d(x*x)/dx=x+x; d(x*x+5x)/dx has +Const(5) |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —

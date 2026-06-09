@@ -13,6 +13,7 @@ fn AG_MUL()   -> Int { return 2 }
 fn AG_SUB()   -> Int { return 3 }
 fn AG_RELU()  -> Int { return 4 }   // unary; uses a[i]
 fn AG_CONST() -> Int { return 5 }   // leaf; name[i] = MC float literal
+fn AG_TANH()  -> Int { return 6 }   // unary; y=tanh(a), dy/da = 1 - y*y
 
 fn cat(a: read String, b: read String) -> fresh String {
     return String.concat(left: read a, right: read b)
@@ -67,6 +68,10 @@ fn fwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: r
         pl(lines: mut lines, t: read cat3(a: read "  var ", b: read ni, c: read ": f32 = 0.0;"))
         pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  if ", b: read src, c: read " > 0.0 { "), b: read ni, c: read cat3(a: read " = ", b: read src, c: read "; }")))
     }
+    if o == AG_TANH() {
+        let src = nname(i: List.get(list: read a, index: i))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = tanh_f32("), b: read src, c: read ");"))
+    }
     return Unit
 }
 
@@ -100,6 +105,13 @@ fn bwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: r
         let ga = gname(i: ia)
         let src = nname(i: ia)
         pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  if ", b: read src, c: read " > 0.0 { "), b: read ga, c: read cat3(a: read " = ", b: read ga, c: read cat3(a: read " + ", b: read gi, c: read "; }"))))
+    }
+    if o == AG_TANH() {
+        let ia = List.get(list: read a, index: i)
+        let ga = gname(i: ia)
+        let y = nname(i: i)
+        // ga += gi * (1 - y*y)
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + (", b: read gi, c: read cat3(a: read " * (1.0 - (", b: read y, c: read cat3(a: read " * ", b: read y, c: read ")));")))))
     }
     return Unit
 }
@@ -155,7 +167,52 @@ fn emit_autograd() -> fresh String {
     return String.join(parts: read lines, separator: read "\n")
 }
 
+fn emit_tanh() -> fresh String {
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let nm = List.new<String>()
+    // L = tanh(a)   (param a = 0.5) -> dL/da = 1 - tanh(a)^2
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_PARAM(), x: -1, y: -1, name: read "wa") // 0
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_TANH(),  x: 0,  y: -1, name: read "")   // 1 = loss
+    let n = List.len(list: read op)
+    let loss = n - 1
+
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "import \"std/mathf.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read "  let wa: f32 = 0.5;")
+    let mut i = 0
+    while i < n {
+        fwd_line(lines: mut lines, op: read op, a: read a, b: read b, nm: read nm, i: i)
+        i = i + 1
+    }
+    let mut k = 0
+    while k < n {
+        pl(lines: mut lines, t: read cat3(a: read "  var ", b: read gname(i: k), c: read ": f32 = 0.0;"))
+        k = k + 1
+    }
+    pl(lines: mut lines, t: read cat3(a: read "  ", b: read gname(i: loss), c: read " = 1.0;"))
+    let mut r = loss
+    while r >= 0 {
+        bwd_line(lines: mut lines, op: read op, a: read a, b: read b, i: r)
+        r = r - 1
+    }
+    pl(lines: mut lines, t: read "  var out: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read cat3(a: read "  out[0] = ", b: read gname(i: 0), c: read ";"))
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&out[0]) as usize), 4) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
 fn main() -> Unit {
     Log.write(message: read emit_autograd())
+    Log.write(message: read "//---TANH---")
+    Log.write(message: read emit_tanh())
     return Unit
 }

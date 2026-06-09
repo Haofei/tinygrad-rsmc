@@ -1,0 +1,113 @@
+// Port of the PatternMatcher CORE of tinygrad/uop/ops.py: bottom-up graph rewriting over the
+// real recursive UOp. tinygrad's PatternMatcher applies UPat rules to a UOp graph to a
+// fixpoint; this ports that as a recursive `simplify(u)` that rewrites children first, then
+// applies the symbolic rules (const-fold ADD/MUL; x*1->x, 1*x->x, x*0->0, x+0->x, 0+x->x).
+// Builds rewritten nodes from `read` UOp children via uadd/umul -- enabled by the rss
+// read-param->owned-collection codegen fix. Validates the simplified graph's shape.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    dtype: String
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, dtype: "float", src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, dtype: "float", src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, dtype: "float", src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, dtype: "float", src: take s, arg: 0)
+}
+
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+
+// bottom-up rewrite to a (local) fixpoint, faithful to PatternMatcher's symbolic rules
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    // binary node: simplify children first
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let a = simplify(u: read c0)
+    let b = simplify(u: read c1)
+    if u.op == Mul {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }   // const fold
+            if a.arg == 1 { return simplify(u: read c1) }                // 1*x -> x
+            if a.arg == 0 { return uconst(v: 0) }                        // 0*x -> 0
+        }
+        if is_const(u: read b) {
+            if b.arg == 1 { return simplify(u: read c0) }                // x*1 -> x
+            if b.arg == 0 { return uconst(v: 0) }                        // x*0 -> 0
+        }
+        return umul(a: read a, b: read b)
+    }
+    if u.op == Add {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg + b.arg) }   // const fold
+            if a.arg == 0 { return simplify(u: read c1) }                // 0+x -> x
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return simplify(u: read c0) }                // x+0 -> x
+        }
+        return uadd(a: read a, b: read b)
+    }
+    return uadd(a: read a, b: read b)
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    // (2 + 3) * 4  -> Const(20)
+    let e1 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    describe(label: read "simplify((2+3)*4) = ", u: read simplify(u: read e1))
+
+    // x * 1  -> x  (Var 7)
+    let e2 = umul(a: read uvar(id: 7), b: read uconst(v: 1))
+    describe(label: read "simplify(x*1) = ", u: read simplify(u: read e2))
+
+    // x + 0  -> x  (Var 7)
+    let e3 = uadd(a: read uvar(id: 7), b: read uconst(v: 0))
+    describe(label: read "simplify(x+0) = ", u: read simplify(u: read e3))
+
+    // x * 0  -> Const(0)
+    let e4 = umul(a: read uvar(id: 7), b: read uconst(v: 0))
+    describe(label: read "simplify(x*0) = ", u: read simplify(u: read e4))
+
+    // (x*1) + (2+3) -> Add(x, 5):  the *1 folds away, (2+3) folds to 5
+    let lhs = umul(a: read uvar(id: 7), b: read uconst(v: 1))
+    let rhs = uadd(a: read uconst(v: 2), b: read uconst(v: 3))
+    let e5 = uadd(a: read lhs, b: read rhs)
+    let r5 = simplify(u: read e5)
+    describe(label: read "simplify((x*1)+(2+3)) root = ", u: read r5)        // Add
+    let r5l = List.get(list: read r5.src, index: 0)
+    let r5r = List.get(list: read r5.src, index: 1)
+    describe(label: read "  left  = ", u: read r5l)   // Var(7)
+    describe(label: read "  right = ", u: read r5r)   // Const(5)
+    return Unit
+}

@@ -16,7 +16,7 @@ earlier was a mischaracterization.
 |---|---|---|
 | `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
-| `uop/ops.py` (CORE) | `UOp` recursive managed node + **structural identity / interning** (UOpMetaClass.ucache) via derived Eq+Hash + Set; ergonomic `uadd`/`umul` builders | ✅ `uop.rss`: e1==e2 for identical graphs; interning e1,e2,e3 -> 2 unique nodes |
+| `uop/ops.py` (CORE) | `UOp` recursive node + structural identity/interning (`uop.rss`); **PatternMatcher** bottom-up rewrite (`rewrite.rss`): const-fold + x*1/1*x/x*0/0*x/x+0/0+x symbolic rules over the real UOp | ✅ both validated (interning -> 2 unique; (2+3)*4->20, x*1->x, x+0->x, x*0->0, (x*1)+(2+3)->Add(x,5)) |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —

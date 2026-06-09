@@ -23,9 +23,8 @@ def rss_render(rss_file):
     print(f"rss run {rss_file} failed:\n", p.stderr.decode()); sys.exit(1)
   return p.stdout.decode().strip() + "\n"
 
-def check(label, rss_file, a, b, expected):
-  mc_kernel = rss_render(rss_file)
-  hsrc = harness(mc_kernel, "E_8", n_in=2, n_out=8, ksize=8)
+def compile_run(mc_kernel, inputs, n_in):
+  hsrc = harness(mc_kernel, "E_8", n_in=n_in, n_out=8, ksize=8)
   with tempfile.TemporaryDirectory() as w:
     open(os.path.join(w, "k.mc"), "w").write(hsrc)
     open(os.path.join(w, "main.c"), "w").write(MAIN_C)
@@ -38,9 +37,12 @@ def check(label, rss_file, a, b, expected):
                          "-lm", "-o", os.path.join(w, "k")], capture_output=True)
     if cc.returncode != 0:
       print("clang failed:\n", cc.stderr.decode()); sys.exit(1)
-    stdin = b"".join(struct.pack("<f", v) for v in a + b)
+    stdin = b"".join(struct.pack("<f", v) for arr in inputs for v in arr)
     p = subprocess.run([os.path.join(w, "k")], input=stdin, capture_output=True)
-    got = [struct.unpack("<f", p.stdout[i:i+4])[0] for i in range(0, len(p.stdout), 4)]
+    return [struct.unpack("<f", p.stdout[i:i+4])[0] for i in range(0, len(p.stdout), 4)]
+
+def check(label, mc_kernel, inputs, n_in, expected):
+  got = compile_run(mc_kernel, inputs, n_in)
   ok = got == expected
   print(f"{'PASS' if ok else 'FAIL'} {label}: got {got}, want {expected}")
   return ok
@@ -48,8 +50,14 @@ def check(label, rss_file, a, b, expected):
 if __name__ == "__main__":
   a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
   b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+  c = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0]
   ok = True
-  # render_kernel.rss = parameterized template; uop_render.rss = real arena walker
-  ok &= check("template/add", "render_kernel.rss", a, b, [x + y for x, y in zip(a, b)])
-  ok &= check("arena/add",    "uop_render.rss",    a, b, [x + y for x, y in zip(a, b)])
+  # parameterized template path
+  ok &= check("template/add", rss_render("render_kernel.rss"), [a, b], 2, [x + y for x, y in zip(a, b)])
+  # real arena-walker path: several ops from one rss program, split on the marker
+  kernels = rss_render("uop_render.rss").split("//---KERNEL---")
+  k_add, k_mul, k_relu = [k.strip() + "\n" for k in kernels]
+  ok &= check("arena/add",  k_add,  [a, b], 2, [x + y for x, y in zip(a, b)])
+  ok &= check("arena/mul",  k_mul,  [a, b], 2, [x * y for x, y in zip(a, b)])
+  ok &= check("arena/relu", k_relu, [c],    1, [max(0.0, x) for x in c])
   sys.exit(0 if ok else 1)

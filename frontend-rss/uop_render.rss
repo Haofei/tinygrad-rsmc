@@ -15,6 +15,7 @@ fn OP_LOAD()  -> Int { return 3 }
 fn OP_ALU()   -> Int { return 4 }   // argi = symbol id: 0 '+', 1 '*', 2 '-'
 fn OP_STORE() -> Int { return 5 }
 fn OP_END()   -> Int { return 6 }
+fn OP_RELU()  -> Int { return 7 }   // unary: max(0, x) via select_f32 helper
 
 fn alu_sym(id: Int) -> fresh String {
     if id == 0 { return "+" }
@@ -76,6 +77,14 @@ fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: rea
             let eb = List.get(list: read expr, index: b)
             List.set(list: mut expr, index: i, value: read cat3(a: read cat3(a: read "(", b: read ea, c: read alu_sym(id: arg)), b: read eb, c: read ")"))
         }
+        if op == OP_RELU() {
+            let ea = List.get(list: read expr, index: a)
+            let nm = cat(a: read "v", b: read String.from_int(value: i))
+            List.set(list: mut expr, index: i, value: read nm)
+            // let vN: f32 = select_f32((0.0<ea), ea, 0.0);
+            let rhs = cat3(a: read cat3(a: read "select_f32((0.0<", b: read ea, c: read "), "), b: read ea, c: read ", 0.0)")
+            List.push(list: mut lines, value: read cat3(a: read cat3(a: read "      let ", b: read nm, c: read ": f32 = "), b: read rhs, c: read ";"))
+        }
         if op == OP_STORE() {
             let addr = List.get(list: read expr, index: a)
             let val = List.get(list: read expr, index: b)
@@ -95,12 +104,44 @@ fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: rea
         List.push(list: mut params, value: read cat3(a: read "data", b: read String.from_int(value: p), c: read ": PAddr"))
         p = p + 1
     }
+    // prelude: emit the select_f32 helper if any RELU/select is present (MC if is a stmt)
+    let mut need_select = false
+    let mut k = 0
+    while k < n {
+        if List.get(list: read ops, index: k) == OP_RELU() {
+            need_select = true
+        }
+        k = k + 1
+    }
+    let mut prelude = "import \"std/addr.mc\";\n\n"
+    if need_select {
+        prelude = cat(a: read prelude, b: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {\n  if c { return a; } else { return b; }\n}\n\n")
+    }
+
     let body = String.join(parts: read lines, separator: read "\n")
     return cat3(
-        a: read cat3(a: read "import \"std/addr.mc\";\n\nexport fn ", b: read name,
-                     c: read cat3(a: read "(", b: read String.join(parts: read params, separator: read ", "), c: read ") -> void {\n  unsafe {\n")),
+        a: read cat3(a: read prelude, b: read "export fn ",
+                     c: read cat3(a: read name, b: read "(", c: read cat3(a: read String.join(parts: read params, separator: read ", "), b: read ") -> void {\n  unsafe {\n", c: read ""))),
         b: read body,
         c: read "\n  }\n}")
+}
+
+// linearized graph for: data0[i] = relu(data1[i])
+fn render_relu(name: read String, n: Int) -> fresh String {
+    let mut ops = List.new<Int>()
+    let mut argi = List.new<Int>()
+    let mut s0 = List.new<Int>()
+    let mut s1 = List.new<Int>()
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(), arg: 0, a: -1, b: -1) // 0 out
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(), arg: 1, a: -1, b: -1) // 1 in
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_RANGE(), arg: n, a: -1, b: -1) // 2
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 1, b: 2)   // 3
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_LOAD(),  arg: 0, a: 3, b: -1)  // 4
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_RELU(),  arg: 0, a: 4, b: -1)  // 5
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 0, b: 2)   // 6
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(), arg: 0, a: 6, b: 5)   // 7
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),   arg: 0, a: 2, b: -1)  // 8
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2)
 }
 
 // linearized graph for: data0[i] = data1[i] <op> data2[i]
@@ -125,6 +166,11 @@ fn render_binary(name: read String, n: Int, opsym: Int) -> fresh String {
 }
 
 fn main() -> Unit {
+    // emit several kernels separated by a marker the driver splits on
     Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0))
+    Log.write(message: read "//---KERNEL---")
+    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 1))
+    Log.write(message: read "//---KERNEL---")
+    Log.write(message: read render_relu(name: read "E_8", n: 8))
     return Unit
 }

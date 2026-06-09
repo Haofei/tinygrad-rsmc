@@ -118,4 +118,8 @@ if __name__ == "__main__":
   ok &= pm_ok
   # Tensor API: model defined with ergonomic ops (t_param/t_mul/t_add/t_sub), engine-trained
   ok &= check_program("tensor API (linreg via Tensor ops)", rss_render("tensor.rss"), [], [2.0, 1.0])
+  # TENSOR-LEVEL (n-dim) autograd: per-op vjp emits backward KERNELS over buffers
+  xin = [-1.0, 2.0, -3.0, 4.0]
+  ok &= check_program("tensor-autograd (n-dim, backward kernels)", rss_render("tensor_autograd.rss"),
+                      [xin], [2 * v if v > 0 else 0.0 for v in xin])
   sys.exit(0 if ok else 1)

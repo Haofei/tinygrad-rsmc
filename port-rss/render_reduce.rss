@@ -1,0 +1,105 @@
+// Extends the ported codegen (render.rss) to REDUCE kernels: a Sum UOp over an elementwise
+// subexpression lowers to an MC accumulator loop (acc += expr(x[i])), matching tinygrad's
+// reduce lowering (acc reg + range). Closes the real loop for reductions:
+// Tensor/UOp -> render -> MC -> native. Demo: sum(x + 1) over [1,2,3,4] -> 14.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sum }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn usum(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Sum, src: take s, arg: 0)
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+
+fn render_expr(u: read UOp) -> fresh String {
+    if u.op == Var { return cat(a: read "", b: read "xi") }
+    if u.op == Const { return cat(a: read Int.to_string(value: read u.arg), b: read ".0") }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let mut opsym = " + "
+    if u.op == Mul { opsym = " * " }
+    let left = render_expr(u: read c0)
+    let right = render_expr(u: read c1)
+    return cat3(a: read "(", b: read cat3(a: read left, b: read opsym, c: read right), c: read ")")
+}
+
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+// emit a reduce kernel: out[0] = sum_i expr(x[i])  (root must be Sum)
+fn emit_reduce(u: read UOp, n: Int) -> fresh String {
+    let child = List.get(list: read u.src, index: 0)
+    let body = render_expr(u: read child)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn R(data0: PAddr, data1: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var acc: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read "    acc[0] = 0.0;")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read String.from_int(value: n), c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      acc[0] = acc[0] + ", b: read body, c: read ";"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "    raw.store<f32>(pa_offset(data0, 0), acc[0]);")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  var o: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read "  R(pa((&o[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), 4) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    // sum(x + 1)
+    let expr = usum(a: read uadd(a: read uvar(id: 0), b: read uconst(v: 1)))
+    Log.write(message: read emit_reduce(u: read expr, n: 4))
+    return Unit
+}

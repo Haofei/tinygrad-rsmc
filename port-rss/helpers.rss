@@ -1,0 +1,160 @@
+// Faithful port of pure utilities from tinygrad/helpers.py.
+// rss `/` truncates toward zero (Python `//` floors), so ceildiv/round_up go through an
+// explicit floor-division to match tinygrad exactly. List-returning helpers (dedup, argsort)
+// use an `out: mut` parameter -- the rss idiom, since managed code cannot `fresh`-return a
+// collection it built (that's by design; stdlib does it via native). Behavior is identical.
+
+// prod(x) = reduce(*, 1)   (helpers.py:13)
+fn prod(l: read List<Int>) -> Int {
+    let mut p = 1
+    let mut i = 0
+    let n = List.len(list: read l)
+    while i < n {
+        let v = List.get(list: read l, index: i)
+        p = p * v
+        i = i + 1
+    }
+    return p
+}
+
+// floor division (Python //), built from rss truncating `/` and `%`
+fn floordiv(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a % b
+    if r == 0 { return q }
+    let na = a < 0
+    let nb = b < 0
+    if na == nb { return q }
+    return q - 1
+}
+
+// ceildiv(num, amt) = -(num // -amt)   (helpers.py:61-64, integer branch)
+fn ceildiv(num: Int, amt: Int) -> Int {
+    let f = floordiv(a: num, b: 0 - amt)
+    return 0 - f
+}
+
+// round_up(num, amt) = (num+amt-1)//amt * amt   (helpers.py:65)
+fn round_up(num: Int, amt: Int) -> Int {
+    let t = (num + amt) - 1
+    let q = floordiv(a: t, b: amt)
+    return q * amt
+}
+
+// all_same(items): all equal items[0]; true for empty   (helpers.py:31)
+fn all_same(l: read List<Int>) -> Bool {
+    let n = List.len(list: read l)
+    if n == 0 { return true }
+    let first = List.get(list: read l, index: 0)
+    let mut i = 1
+    while i < n {
+        let v = List.get(list: read l, index: i)
+        if v != first { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn int_contains(l: read List<Int>, v: Int) -> Bool {
+    let mut i = 0
+    let n = List.len(list: read l)
+    while i < n {
+        let e = List.get(list: read l, index: i)
+        if e == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// dedup(x): retains first-seen order   (helpers.py:23)
+fn dedup(l: read List<Int>, out: mut List<Int>) -> Unit {
+    let mut i = 0
+    let n = List.len(list: read l)
+    while i < n {
+        let v = List.get(list: read l, index: i)
+        if int_contains(l: read out, v: v) == false {
+            List.push(list: mut out, value: read v)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// argsort(x): indices that sort x ascending   (helpers.py:30)
+fn argsort(l: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read l)
+    let mut k = 0
+    while k < n {
+        List.push(list: mut out, value: read k)
+        k = k + 1
+    }
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            let ia = List.get(list: read out, index: a)
+            let ib = List.get(list: read out, index: b)
+            let va = List.get(list: read l, index: ia)
+            let vb = List.get(list: read l, index: ib)
+            if vb < va {
+                List.set(list: mut out, index: a, value: read ib)
+                List.set(list: mut out, index: b, value: read ia)
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return Unit
+}
+
+fn push3(l: mut List<Int>, a: Int, b: Int, c: Int) -> Unit {
+    List.push(list: mut l, value: read a)
+    List.push(list: mut l, value: read b)
+    List.push(list: mut l, value: read c)
+    return Unit
+}
+fn show_list(label: read String, l: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let mut i = 0
+    let n = List.len(list: read l)
+    while i < n {
+        let v = List.get(list: read l, index: i)
+        s = String.concat(left: read s, right: read Int.to_string(value: read v))
+        s = String.concat(left: read s, right: read " ")
+        i = i + 1
+    }
+    Log.write(message: read String.concat(left: read s, right: read "]"))
+    return Unit
+}
+fn report(label: read String, v: Int) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read Int.to_string(value: read v)))
+    return Unit
+}
+
+fn main() -> Unit {
+    let xs = List.new<Int>()
+    push3(l: mut xs, a: 2, b: 3, c: 4)
+    report(label: read "prod[2,3,4] = ", v: prod(l: read xs))          // 24
+    report(label: read "ceildiv(7,3) = ", v: ceildiv(num: 7, amt: 3))  // 3
+    report(label: read "ceildiv(9,3) = ", v: ceildiv(num: 9, amt: 3))  // 3
+    report(label: read "ceildiv(-7,3) = ", v: ceildiv(num: 0 - 7, amt: 3)) // -2
+    report(label: read "round_up(7,4) = ", v: round_up(num: 7, amt: 4))    // 8
+    report(label: read "round_up(8,4) = ", v: round_up(num: 8, amt: 4))    // 8
+
+    let d = List.new<Int>()
+    List.push(list: mut d, value: read 1)
+    List.push(list: mut d, value: read 2)
+    List.push(list: mut d, value: read 2)
+    List.push(list: mut d, value: read 3)
+    List.push(list: mut d, value: read 1)
+    let dout = List.new<Int>()
+    dedup(l: read d, out: mut dout)
+    show_list(label: read "dedup[1,2,2,3,1] = ", l: read dout)        // [1 2 3 ]
+
+    let s = List.new<Int>()
+    push3(l: mut s, a: 3, b: 1, c: 2)
+    let sout = List.new<Int>()
+    argsort(l: read s, out: mut sout)
+    show_list(label: read "argsort[3,1,2] = ", l: read sout)          // [1 2 0 ]
+    return Unit
+}

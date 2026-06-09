@@ -14,7 +14,8 @@ earlier was a mischaracterization.
 
 | tinygrad file | scope | status |
 |---|---|---|
-| `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (lines 176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
+| `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
+| `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —
@@ -40,6 +41,8 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
+- `derives(Clone)` is accepted but there is no callable `.clone()`/`Clone.clone(..)` in source -> cannot copy a managed value; blocks `scalar()`/`vec()` clones (worked around via reconstruction-by-name). Candidate rss feature (larger than a bug fix).
+- rss `/` truncates toward zero; Python `//` floors -> ceildiv/round_up need an explicit floordiv (handled in helpers.rss).
 - These are exactly the frictions to fix to make a real tinygrad port tractable in rss.
 
 ## rss/mc bugs found and FIXED during the port

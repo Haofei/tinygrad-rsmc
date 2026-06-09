@@ -46,7 +46,11 @@ class MCRenderer(ClangRenderer):
   # single-threaded for Phase 1 (no SPECIAL/workitems) -> simplest sequential kernels.
   has_threads = False
   string_rewrite = mc_rewrite
-  type_map = {dtypes.float: "f32", dtypes.float64: "f64", dtypes.int: "i32", dtypes.uint32: "u32",
+  # NOTE: dtypes.int -> "usize" (not i32): in Phase-1 f32 kernels, ints only appear as loop
+  # indices / index arithmetic, and MC forbids implicit int<->usize conversion, so unifying
+  # all index math to usize keeps `data[alu]` well-typed. Revisit when porting integer
+  # *data* dtypes (then index-vs-data int needs distinguishing). See finding #1.
+  type_map = {dtypes.float: "f32", dtypes.float64: "f64", dtypes.int: "usize", dtypes.uint32: "u32",
               dtypes.bool: "bool", dtypes.uint64: "usize", dtypes.int64: "i64"}
   infinity = "INF"   # TODO: from mc mathf surface
   nan = "NAN"        # TODO: from mc mathf surface

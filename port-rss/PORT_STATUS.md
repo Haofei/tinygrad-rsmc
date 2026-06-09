@@ -46,7 +46,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
-- rss codegen bug (related, NOT yet fixed): `let mut s = <read-param>` then reassign emits ill-typed Rust (unmappable E0308 via vec!/macros) -- binding a mut local to a read-param borrow then assigning an owned value; should clone the read-param at the binding. Worked around by avoiding the pattern.
+- rss codegen bug (NOT fixed): `let mut s = <read-param>` then reassign emits ill-typed Rust (unmappable E0308). Root cause confirmed (mut local bound to a read-param `&T`, then assigned an owned `T`). A naive fix (clone the read-param at the binding when mutable) was tried but **broke 21 checker_lowering snapshot tests** (too broad -- it changes valid no-reassign lowerings), so it was reverted. Needs a precise fix gated on actual later owned-reassignment. Worked around in the port by avoiding the pattern.
 - ~~rss codegen bug: read-PARAM pushed into an owned collection emits `&&T` (E0308)~~ -- **FIXED** (rsscript: lower_call_arg read-param no longer double-borrowed, mirrors the mut-param case). uadd/umul-style recursive-IR helpers now work; regression fixture added; cargo test green.
 - `derives(Clone)` is accepted but there is no callable `.clone()`/`Clone.clone(..)` in source -> cannot copy a managed value; blocks `scalar()`/`vec()` clones (worked around via reconstruction-by-name). Candidate rss feature (larger than a bug fix).
 - rss `/` truncates toward zero; Python `//` floors -> ceildiv/round_up need an explicit floordiv (handled in helpers.rss).

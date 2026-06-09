@@ -1,0 +1,161 @@
+// Port of tinygrad's View / ShapeTracker core (shape + strides as the representation of
+// movement ops). strides_for_shape = row-major contiguous strides, then canonicalize (a size-1
+// dim gets stride 0). Movement ops are pure stride manipulations: permute reorders shape+
+// strides; expand sets size-1 dims to stride 0; expr_idx maps a multi-index to a flat offset.
+// This is what lets reshape/permute/expand/etc. be zero-copy views in tinygrad.
+
+features: local
+
+struct View derives(Clone) {
+    shape: List<Int>
+    strides: List<Int>
+    offset: Int
+}
+
+// typed element accessor: List.get on a struct-field List<Int> loses element-type inference
+// in == / arithmetic contexts (returns T), so route those through a typed helper.
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+
+// row-major strides with canonicalization: stride[i] = prod(shape[i+1:]); size-1 dim -> 0
+fn strides_for_shape(shape: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        // prod of dims after i
+        let mut acc = 1
+        let mut j = i + 1
+        while j < n {
+            acc = acc * List.get(list: read shape, index: j)
+            j = j + 1
+        }
+        if List.get(list: read shape, index: i) == 1 { acc = 0 }   // canonicalize
+        List.push(list: mut out, value: read acc)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn copy_ints(src: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read src)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read List.get(list: read src, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+// contiguous View for a shape
+fn v_create(shape: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    copy_ints(src: read shape, out: mut sh)
+    local st = List.new<Int>()
+    strides_for_shape(shape: read shape, out: mut st)
+    return View(shape: take sh, strides: take st, offset: 0)
+}
+
+// permute: reorder shape and strides by perm
+fn v_permute(v: read View, perm: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    local st = List.new<Int>()
+    let n = List.len(list: read perm)
+    let mut i = 0
+    while i < n {
+        let p = List.get(list: read perm, index: i)
+        List.push(list: mut sh, value: read List.get(list: read v.shape, index: p))
+        List.push(list: mut st, value: read List.get(list: read v.strides, index: p))
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset)
+}
+
+// expand to new_shape: a dim that was size 1 gets stride 0 (broadcast); others unchanged
+fn v_expand(v: read View, new_shape: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    copy_ints(src: read new_shape, out: mut sh)
+    local st = List.new<Int>()
+    let n = List.len(list: read v.shape)
+    let mut i = 0
+    while i < n {
+        let mut s = List.get(list: read v.strides, index: i)
+        if iget(l: read v.shape, i: i) == 1 { s = 0 }
+        List.push(list: mut st, value: read s)
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset)
+}
+
+// flat offset for a multi-index: sum(idx[i]*strides[i]) + offset
+fn v_expr(v: read View, idx: read List<Int>) -> Int {
+    let mut acc = v.offset
+    let n = List.len(list: read idx)
+    let mut i = 0
+    while i < n {
+        acc = acc + (iget(l: read idx, i: i) * iget(l: read v.strides, i: i))
+        i = i + 1
+    }
+    return acc
+}
+
+// contiguous iff strides equal the canonical strides for the shape
+fn v_contiguous(v: read View) -> Bool {
+    local canon = List.new<Int>()
+    strides_for_shape(shape: read v.shape, out: mut canon)
+    let n = List.len(list: read canon)
+    let mut i = 0
+    while i < n {
+        if iget(l: read v.strides, i: i) != iget(l: read canon, i: i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn dump_ints(label: read String, l: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read l)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read List.get(list: read l, index: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn mk(a: Int, b: Int, c: Int, n: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push(list: mut l, value: read a)
+    if n >= 2 { List.push(list: mut l, value: read b) }
+    if n >= 3 { List.push(list: mut l, value: read c) }
+    return l
+}
+
+fn main() -> Unit {
+    // contiguous (2,3) -> strides [3,1]
+    let v1 = v_create(shape: read mk(a: 2, b: 3, c: 0, n: 2))
+    dump_ints(label: read "create(2,3).strides = ", l: read v1.strides)            // [3, 1]
+
+    // contiguous (4,3,2) -> strides [6,2,1]
+    let v2 = v_create(shape: read mk(a: 4, b: 3, c: 2, n: 3))
+    dump_ints(label: read "create(4,3,2).strides = ", l: read v2.strides)          // [6, 2, 1]
+
+    // permute (4,3,2) by (2,0,1) -> shape [2,4,3], strides [1,6,2]
+    let v3 = v_permute(v: read v2, perm: read mk(a: 2, b: 0, c: 1, n: 3))
+    dump_ints(label: read "permute(2,0,1).shape = ",   l: read v3.shape)           // [2, 4, 3]
+    dump_ints(label: read "permute(2,0,1).strides = ", l: read v3.strides)         // [1, 6, 2]
+
+    // expand (1,3) -> (4,3): strides [0,1]
+    let v4 = v_create(shape: read mk(a: 1, b: 3, c: 0, n: 2))
+    let v5 = v_expand(v: read v4, new_shape: read mk(a: 4, b: 3, c: 0, n: 2))
+    dump_ints(label: read "expand(1,3->4,3).strides = ", l: read v5.strides)       // [0, 1]
+
+    // expr_idx: (2,3) at [1,2] -> 1*3 + 2*1 = 5
+    let off = v_expr(v: read v1, idx: read mk(a: 1, b: 2, c: 0, n: 2))
+    Log.write(message: read String.concat(left: read "expr (2,3)@[1,2] = ", right: read Int.to_string(value: read off)))  // 5
+
+    // contiguity
+    if v_contiguous(v: read v1) { Log.write(message: read "contiguous(create(2,3)) = yes") }
+    if v_contiguous(v: read v3) == false { Log.write(message: read "contiguous(permuted) = no") }
+    return Unit
+}

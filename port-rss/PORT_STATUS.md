@@ -15,6 +15,7 @@ earlier was a mischaracterization.
 | tinygrad file | scope | status |
 |---|---|---|
 | `dtype.py` | scalar dtypes, count-aware itemsize, predicates, can_lossless_cast, promo lattice + least_upper_dtype, **vec() vectorized dtypes** (`dtype.rss`); PtrDType/ImageDType blocked by rss clone-gap |
+| `shape`/ShapeTracker | **View: strides_for_shape + canonicalize + permute/expand/expr_idx/contiguous** (`shapetracker.rss`) | ✅ (2,3)->[3,1]; (4,3,2)->[6,2,1]; permute(2,0,1)->[1,6,2]; expand(1,3->4,3)->[0,1]; expr@[1,2]=5 |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
 | `uop/ops.py` (CORE) | `UOp`+interning (`uop.rss`); **PatternMatcher** symbolic rewrite (`rewrite.rss`); **generic UPat DSL** -- recursive pattern + wildcard + capture (`upat.rss`) | ✅ rewrite cases; UPat MUL(any,CONST 1) matches x*1 (captures Var), rejects x*2 |
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
@@ -52,6 +53,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
+- rss inference gap: `List.get` on a struct-field `List<Int>` returns `T` (not `Int`) in `==`/arithmetic contexts (RS0210/RS1001); a typed accessor helper works around it.
 - rss ergonomic gap: `==` on a `read` enum param fails (`&Ops == Ops`, RS1101) -- field-access compares work, but a bare `read Ops` param does not; use `match` instead. Minor; worth auto-deref in the comparison lowering.
 - rss clone-gap (managed-field clone): can't copy a String/managed struct field out of a `read` value (RS1101 'cannot move out of ... behind shared reference'); blocks generic vec(base: read DType) and PtrDType(base). Worked around with literal-based vec constructors. A callable `.clone()` for managed values / fields would resolve it.
 - rss stdlib gap (NOT fixed): no Int->Float conversion (`Int.to_float`/`Float.from_int` don't resolve) -- blocks numeric interpreters that mix Int consts with Float math. Adding it spans the checker type table, the reg_vm interpreter, and the rust-lowering ABI+runtime; deferred to avoid an unverified multi-site change. Worked around in device.rss by storing const as a Float field.

@@ -15,7 +15,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - [x] rss parser: parenthesized arithmetic — `f49ac9a`, suite green
 - [x] rss codegen: read-param double-borrow `&&T` — `1df5c48`+`f837bf8`, suite green
 - [x] mc: hosted I/O, negative float literals, float-array arithmetic, exp/log/tanh intrinsics
-- [ ] **mc: `UnsupportedCEmission` on nested call in a sequenced call arg** (e.g. `raw.store(.., (raw.load(..)+2)*3)`; inner `i*4` lacks target type) — blocks inline cstyle; lower_c.zig:3451
+- [x] **mc: `UnsupportedCEmission` on nested call in a call arg** — FIXED (modern-c 05ff744): float_literal + raw.load<T> now recognized as float; zig test 142/142 green
 - [ ] rss: `Int.to_float` / `Float.from_int` conversion (deep: reg_vm + builtin-interface sig + lowering ABI + runtime)
 - [ ] rss: `let mut x = <read-param>` clone-on-bind (codegen E0308)
 - [ ] rss: managed-field clone (callable `.clone()`/take-rebuild) — blocks generic `vec()`, `PtrDType`
@@ -47,7 +47,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `codegen/opt/*` (search/heuristic/tc/postrange ~875) — autotuning search; out of scope for a correctness port.
 
 ## renderer/, in-scope = cstyle only
-- 🟡 `renderer/cstyle.py` (572) → `cstyle_renderer.rss` (IN PROGRESS) — per-UOp render map over a lowered kernel arena (LOAD/CONST/ALU/STORE in a RANGE). **Remaining:** name-per-UOp temps (faithful + dodges the mc nested-call bug), DEFINE_GLOBAL/SPECIAL/index render, dtype-aware casts, full op render map, the C prologue/struct.
+- 🟡 `renderer/cstyle.py` (572) → `cstyle_renderer.rss` — **per-UOp render map over a lowered kernel arena (LOAD/CONST/ALU/STORE in a RANGE), compiles+runs via mc** ((x+2)*3 over a buffer). **Remaining:** DEFINE_GLOBAL/SPECIAL/index render, dtype-aware casts, full op render map, multi-output.
 - ⛔ `renderer/{amd,ptx,llvmir,nir,wgsl,isa}` (~3.9k) — other backends, not the mc/C target.
 
 ## engine/, ~265 in-scope

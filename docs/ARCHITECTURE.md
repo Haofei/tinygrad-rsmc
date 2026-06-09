@@ -171,7 +171,7 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | kernel source rendering (`renderer/cstyle.py`) | ✅ Python `MCRenderer` (oracle); ✅ **rss arena walker** (`uop_render.rss`) for elementwise add/mul, verified e2e |
 | compile + run (backend) | ✅ modern-c, hosted profile, numerically verified |
 | UOp data model + arena | ✅ minimal (SoA: ops/argi/s0/s1) in rss |
-| more ops in the rss renderer | ⏳ add/mul/relu/sum done+verified; matmul/broadcast/cast TODO |
+| more ops in the rss renderer | ✅ add/mul/relu/sum/**matmul** (nested loops+index math) verified; broadcast/cast TODO |
 | graph BUILDER (produce arenas from ops, not hand-listed) | ❌ not started |
 | `PatternMatcher`/rewrite engine | ❌ not started |
 | scheduler (Tensor graph -> kernels) | ❌ not started |

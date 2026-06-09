@@ -1,0 +1,184 @@
+// A PatternMatcher / graph-rewrite engine in rsscript -- a port of the heart of tinygrad
+// (uop/ops.py PatternMatcher + the symbolic simplification rules). It rewrites a UOp graph
+// to a fixpoint with algebraic + constant-folding rules:
+//   x*1 -> x,  1*x -> x,  x*0 -> 0,  0*x -> 0,  x+0 -> x,  0+x -> x,
+//   ADD(const a, const b) -> const (a+b),  MUL(const a, const b) -> const (a*b).
+// Nodes are a struct-of-arrays arena; rewrites use a union-find `repl` redirection (the
+// bottom-up rewrite tinygrad does). Runs in rss directly (pure graph logic).
+
+fn PM_VAR()   -> Int { return 0 }   // leaf variable (named)
+fn PM_CONST() -> Int { return 1 }   // integer constant, value in val[]
+fn PM_ADD()   -> Int { return 2 }
+fn PM_MUL()   -> Int { return 3 }
+
+fn node(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, val: mut List<Int>, repl: mut List<Int>,
+        o: Int, x: Int, y: Int, v: Int) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    List.push(list: mut val, value: read v)
+    List.push(list: mut repl, value: read idx)
+    return idx
+}
+
+// follow the redirection chain to the current representative node
+fn resolve(repl: read List<Int>, i: Int) -> Int {
+    let mut x = i
+    while List.get(list: read repl, index: x) != x {
+        x = List.get(list: read repl, index: x)
+    }
+    return x
+}
+
+fn is_const(op: read List<Int>, i: Int) -> Bool {
+    return List.get(list: read op, index: i) == PM_CONST()
+}
+
+// one rewrite sweep; returns true if anything changed
+fn sweep(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, val: mut List<Int>, repl: mut List<Int>) -> Bool {
+    let mut changed = false
+    let n = List.len(list: read op)
+    let mut i = 0
+    while i < n {
+        let o = List.get(list: read op, index: i)
+        let self_repl = List.get(list: read repl, index: i)
+        // only process live ALU nodes not already redirected
+        if self_repl == i {
+            if o == PM_MUL() {
+                let ra = resolve(repl: read repl, i: List.get(list: read a, index: i))
+                let rb = resolve(repl: read repl, i: List.get(list: read b, index: i))
+                let ca = is_const(op: read op, i: ra)
+                let cb = is_const(op: read op, i: rb)
+                if ca {
+                    if List.get(list: read val, index: ra) == 1 {
+                        List.set(list: mut repl, index: i, value: read rb)
+                        changed = true
+                    }
+                }
+                if cb {
+                    if List.get(list: read val, index: rb) == 1 {
+                        List.set(list: mut repl, index: i, value: read ra)
+                        changed = true
+                    }
+                }
+                if ca {
+                    if List.get(list: read val, index: ra) == 0 {
+                        let z = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1, v: 0)
+                        List.set(list: mut repl, index: i, value: read z)
+                        changed = true
+                    }
+                }
+                if cb {
+                    if List.get(list: read val, index: rb) == 0 {
+                        let z = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1, v: 0)
+                        List.set(list: mut repl, index: i, value: read z)
+                        changed = true
+                    }
+                }
+                if ca {
+                    if cb {
+                        let folded = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1,
+                                          v: List.get(list: read val, index: ra) * List.get(list: read val, index: rb))
+                        List.set(list: mut repl, index: i, value: read folded)
+                        changed = true
+                    }
+                }
+            }
+            if o == PM_ADD() {
+                let ra = resolve(repl: read repl, i: List.get(list: read a, index: i))
+                let rb = resolve(repl: read repl, i: List.get(list: read b, index: i))
+                let ca = is_const(op: read op, i: ra)
+                let cb = is_const(op: read op, i: rb)
+                if ca {
+                    if List.get(list: read val, index: ra) == 0 {
+                        List.set(list: mut repl, index: i, value: read rb)
+                        changed = true
+                    }
+                }
+                if cb {
+                    if List.get(list: read val, index: rb) == 0 {
+                        List.set(list: mut repl, index: i, value: read ra)
+                        changed = true
+                    }
+                }
+                if ca {
+                    if cb {
+                        let folded = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1,
+                                          v: List.get(list: read val, index: ra) + List.get(list: read val, index: rb))
+                        List.set(list: mut repl, index: i, value: read folded)
+                        changed = true
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return changed
+}
+
+fn rewrite_fixpoint(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, val: mut List<Int>, repl: mut List<Int>) -> Unit {
+    let mut go = true
+    while go {
+        go = sweep(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl)
+    }
+    return Unit
+}
+
+fn report(label: read String, value: Int) -> Unit {
+    Log.write(message: read cat(a: read label, b: read String.from_int(value: value)))
+    return Unit
+}
+fn cat(a: read String, b: read String) -> fresh String {
+    return String.concat(left: read a, right: read b)
+}
+
+fn main() -> Unit {
+    // ---- Test 1: fully foldable (2 + 3) * 4 -> 20 ----
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let val = List.new<Int>()
+    let repl = List.new<Int>()
+    let c2 = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1, v: 2)
+    let c3 = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1, v: 3)
+    let add = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_ADD(), x: c2, y: c3, v: 0)
+    let c4 = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_CONST(), x: -1, y: -1, v: 4)
+    let mul = node(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl, o: PM_MUL(), x: add, y: c4, v: 0)
+    rewrite_fixpoint(op: mut op, a: mut a, b: mut b, val: mut val, repl: mut repl)
+    let root = resolve(repl: read repl, i: mul)
+    if is_const(op: read op, i: root) {
+        report(label: read "fold (2+3)*4 = ", value: List.get(list: read val, index: root))
+    }
+
+    // ---- Test 2: (x*1) + (2+3) -> x + 5 (mul removed, const folded) ----
+    let op2 = List.new<Int>()
+    let a2 = List.new<Int>()
+    let b2 = List.new<Int>()
+    let val2 = List.new<Int>()
+    let repl2 = List.new<Int>()
+    let x = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_VAR(), x: -1, y: -1, v: 0)
+    let one = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_CONST(), x: -1, y: -1, v: 1)
+    let xm1 = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_MUL(), x: x, y: one, v: 0)
+    let k2 = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_CONST(), x: -1, y: -1, v: 2)
+    let k3 = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_CONST(), x: -1, y: -1, v: 3)
+    let kadd = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_ADD(), x: k2, y: k3, v: 0)
+    let root2 = node(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2, o: PM_ADD(), x: xm1, y: kadd, v: 0)
+    rewrite_fixpoint(op: mut op2, a: mut a2, b: mut b2, val: mut val2, repl: mut repl2)
+    let r2 = resolve(repl: read repl2, i: root2)
+    // root2 stays an ADD(x, 5); check its operands
+    let left = resolve(repl: read repl2, i: List.get(list: read a2, index: r2))
+    let right = resolve(repl: read repl2, i: List.get(list: read b2, index: r2))
+    if left == x {
+        Log.write(message: read "(x*1) left simplified to x: yes")
+    }
+    if is_const(op: read op2, i: right) {
+        report(label: read "(2+3) const-folded to ", value: List.get(list: read val2, index: right))
+    }
+    // confirm the *1 multiply node was removed (redirected away from itself)
+    let mulres = resolve(repl: read repl2, i: xm1)
+    if mulres == x {
+        Log.write(message: read "x*1 node eliminated: yes")
+    }
+    return Unit
+}

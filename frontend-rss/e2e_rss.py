@@ -106,4 +106,10 @@ if __name__ == "__main__":
   ok &= check_program("autograd (auto backward, dL/da,dL/db)", rss_render("autograd.rss"), [], [4.0, 2.0])
   # AUTOGRAD-DRIVEN MLP: 2-2-1 relu net trained by SGD with engine-generated gradients
   ok &= check_program("autograd MLP (engine grads, fit |x0-x1|)", rss_render("mlp_autograd.rss"), [], [0.0, 1.0, 2.0, 2.0], tol=2e-2)
+  # PatternMatcher graph-rewrite engine (runs in rss): const-fold + algebraic simplify
+  pm_out = rss_render("patternmatcher.rss")
+  pm_ok = ("fold (2+3)*4 = 20" in pm_out and "(2+3) const-folded to 5" in pm_out
+           and "x*1 node eliminated: yes" in pm_out)
+  print(f"{'PASS' if pm_ok else 'FAIL'} patternmatcher (rewrite to fixpoint): {pm_out.split(chr(10))}")
+  ok &= pm_ok
   sys.exit(0 if ok else 1)

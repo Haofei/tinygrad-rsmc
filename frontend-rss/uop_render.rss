@@ -304,6 +304,52 @@ fn assemble_chain(n: Int) -> fresh String {
     return String.join(parts: read lines, separator: read "\n")
 }
 
+// Emit a COMPLETE hosted MC program that TRAINS linear regression (y=w*x+b) by SGD on a
+// hardcoded dataset (t = 2x+1), then writes the learned [w, b]. End-to-end gradient
+// descent through the rss frontend -> mc backend. (Gradients explicit here; automatic
+// autograd over the UOp graph is the remaining "true port" step.)
+fn assemble_linreg(epochs: Int) -> fresh String {
+    let eps = String.from_int(value: epochs)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read "  var x: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  var t: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  x[0] = 0.0; x[1] = 1.0; x[2] = 2.0; x[3] = 3.0;")
+    pl(lines: mut lines, t: read "  t[0] = 1.0; t[1] = 3.0; t[2] = 5.0; t[3] = 7.0;")
+    pl(lines: mut lines, t: read "  var w: f32 = 0.0;")
+    pl(lines: mut lines, t: read "  var b: f32 = 0.0;")
+    pl(lines: mut lines, t: read "  let lr: f32 = 0.1;")
+    pl(lines: mut lines, t: read "  var ep: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "  while ep < ", b: read eps, c: read " {"))
+    pl(lines: mut lines, t: read "    var gw: f32 = 0.0;")
+    pl(lines: mut lines, t: read "    var gb: f32 = 0.0;")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read "    while i < 4 {")
+    pl(lines: mut lines, t: read "      let xi: f32 = x[i];")
+    pl(lines: mut lines, t: read "      let d: f32 = ((w * xi) + b) - t[i];")
+    pl(lines: mut lines, t: read "      gw = gw + ((2.0 * d) * xi);")
+    pl(lines: mut lines, t: read "      gb = gb + (2.0 * d);")
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "    gw = gw / 4.0;")
+    pl(lines: mut lines, t: read "    gb = gb / 4.0;")
+    pl(lines: mut lines, t: read "    w = w - (lr * gw);")
+    pl(lines: mut lines, t: read "    b = b - (lr * gb);")
+    pl(lines: mut lines, t: read "    ep = ep + 1;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  var out: [2]f32 = uninit;")
+    pl(lines: mut lines, t: read "  out[0] = w;")
+    pl(lines: mut lines, t: read "  out[1] = b;")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&out[0]) as usize), 8) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
 fn main() -> Unit {
     // emit several kernels separated by a marker the driver splits on
     Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0, with_prelude: true))
@@ -317,5 +363,7 @@ fn main() -> Unit {
     Log.write(message: read render_matmul(name: read "E_8", w: 4))
     Log.write(message: read "//---PROGRAM---")
     Log.write(message: read assemble_chain(n: 8))
+    Log.write(message: read "//---TRAIN---")
+    Log.write(message: read assemble_linreg(epochs: 300))
     return Unit
 }

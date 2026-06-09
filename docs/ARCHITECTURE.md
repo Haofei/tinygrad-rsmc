@@ -178,7 +178,8 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | scheduler (Tensor graph -> kernels) | ❌ not started |
 | `Tensor` API + movement/shapetracker | ❌ not started |
 | autograd (`function.py`/`gradient.py`) | ❌ not started |
-| end goal: train an MLP through rss->mc | ❌ not reached |
+| SGD training loop (end-to-end) | ✅ rss emits a full MC trainer; **linear regression converges** (fit 2x+1 -> w=2,b=1) |
+| end goal: train an **MLP** (hidden layer+relu+backprop) through rss->mc | ⏳ linreg done; MLP backprop next |
 
 Honest estimate: low-single-digit % of a complete tinygrad port. The backend half and the
 render stage are real and verified; the large frontend (graph/rewrite/schedule/Tensor/grad)

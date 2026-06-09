@@ -16,6 +16,9 @@ fn OP_ALU()   -> Int { return 4 }   // argi = symbol id: 0 '+', 1 '*', 2 '-'
 fn OP_STORE() -> Int { return 5 }
 fn OP_END()   -> Int { return 6 }
 fn OP_RELU()  -> Int { return 7 }   // unary: max(0, x) via select_f32 helper
+fn OP_CONSTI() -> Int { return 8 }   // integer constant (index); argi = value
+fn OP_DEFREG() -> Int { return 9 }   // reduce accumulator acc0, initialized to 0.0
+fn OP_ACCADD() -> Int { return 10 }  // acc0[0] = acc0[0] + s0
 
 fn alu_sym(id: Int) -> fresh String {
     if id == 0 { return "+" }
@@ -94,6 +97,18 @@ fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: rea
             List.push(list: mut lines, value: read "      Lidx0 = Lidx0 + 1;")
             List.push(list: mut lines, value: read "    }")
         }
+        if op == OP_CONSTI() {
+            List.set(list: mut expr, index: i, value: read String.from_int(value: arg))
+        }
+        if op == OP_DEFREG() {
+            List.set(list: mut expr, index: i, value: read "acc0[0]")
+            List.push(list: mut lines, value: read "    var acc0: [1]f32 = uninit;")
+            List.push(list: mut lines, value: read "    acc0[0] = 0.0;")
+        }
+        if op == OP_ACCADD() {
+            let ev = List.get(list: read expr, index: a)
+            List.push(list: mut lines, value: read cat3(a: read "      acc0[0] = (acc0[0]+", b: read ev, c: read ");"))
+        }
         i = i + 1
     }
 
@@ -165,6 +180,26 @@ fn render_binary(name: read String, n: Int, opsym: Int) -> fresh String {
     return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3)
 }
 
+// linearized graph for: data0[0] = sum(data1[0..n])
+fn render_sum(name: read String, n: Int) -> fresh String {
+    let mut ops = List.new<Int>()
+    let mut argi = List.new<Int>()
+    let mut s0 = List.new<Int>()
+    let mut s1 = List.new<Int>()
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(),  arg: 0, a: -1, b: -1) // 0 out
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_PARAM(),  arg: 1, a: -1, b: -1) // 1 in
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_DEFREG(), arg: 0, a: -1, b: -1) // 2 acc
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_RANGE(),  arg: n, a: -1, b: -1) // 3
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(),  arg: 0, a: 1, b: 3)   // 4
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_LOAD(),   arg: 0, a: 4, b: -1)  // 5
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_ACCADD(), arg: 0, a: 5, b: 2)   // 6
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),    arg: 0, a: 3, b: -1)  // 7
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_CONSTI(), arg: 0, a: -1, b: -1) // 8 idx 0
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(),  arg: 0, a: 0, b: 8)   // 9
+    emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(),  arg: 0, a: 9, b: 2)   // 10
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2)
+}
+
 fn main() -> Unit {
     // emit several kernels separated by a marker the driver splits on
     Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0))
@@ -172,5 +207,7 @@ fn main() -> Unit {
     Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 1))
     Log.write(message: read "//---KERNEL---")
     Log.write(message: read render_relu(name: read "E_8", n: 8))
+    Log.write(message: read "//---KERNEL---")
+    Log.write(message: read render_sum(name: read "E_8", n: 8))
     return Unit
 }

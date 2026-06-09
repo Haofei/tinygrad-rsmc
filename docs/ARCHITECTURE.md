@@ -186,7 +186,8 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | minimal **Tensor API** (t_param/t_mul/t_add/t_sub over the tape) | ✅ `tensor.rss`: model defined with Tensor ops, engine-trained (linreg -> w=2,b=1) |
 | tensor-level (n-dim) autograd -> backward **kernels** | ✅ `tensor_autograd.rss`: per-op vjp emits backward loops over buffers; verified dx for sum(relu(x)^2) |
 | **ShapeTracker** (movement ops as stride views) | ✅ `shapetracker.rss`: contiguous strides, permute(transpose)=same offset, expand(broadcast)=stride0 |
-| lazy scheduling+fusion / broad op+dtype coverage / symbolic | ❌ still not ported (remaining body of tinygrad) |
+| elementwise kernel **fusion** | ✅ `fusion.rss`: a chain of elementwise ops fuses into ONE kernel (no intermediate buffers); verified (relu(x)+y)*z |
+| full lazy scheduler / broad op+dtype coverage / symbolic | ❌ still not ported (remaining breadth of tinygrad) |
 
 Honest estimate: low-single-digit % of a complete tinygrad port. The backend half and the
 render stage are real and verified; the large frontend (graph/rewrite/schedule/Tensor/grad)

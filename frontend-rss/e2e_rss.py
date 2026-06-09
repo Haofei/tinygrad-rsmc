@@ -128,4 +128,8 @@ if __name__ == "__main__":
            and "broadcast offset[2,1] = 1" in st_out)
   print(f"{'PASS' if st_ok else 'FAIL'} shapetracker (zero-copy movement views): {st_out.split(chr(10))}")
   ok &= st_ok
+  # Kernel FUSION: 3 elementwise ops (relu,add,mul) fused into one kernel
+  xf = [-1.0, 2.0, -3.0, 4.0]; yf = [10.0, 20.0, 30.0, 40.0]; zf = [2.0, 2.0, 2.0, 2.0]
+  ok &= check_program("fusion ((relu(x)+y)*z, 3 ops -> 1 kernel)", rss_render("fusion.rss"),
+                      [xf, yf, zf], [(max(0.0, a) + b2) * c2 for a, b2, c2 in zip(xf, yf, zf)])
   sys.exit(0 if ok else 1)

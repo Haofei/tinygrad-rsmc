@@ -1,0 +1,168 @@
+// Lazy scheduling + elementwise kernel FUSION in rsscript -- a port of tinygrad's core
+// scheduling idea: a chain of elementwise ops over the same shape fuses into ONE kernel
+// (one loop, intermediate values kept in registers), instead of one kernel + buffer per op.
+//
+// Demo: out = (relu(x) + y) * z. The three ops fuse into a single kernel; the engine emits
+// one loop computing relu/add/mul per element. Verified out = (relu(x)+y)*z.
+
+fn F_IN()   -> Int { return 0 }   // input buffer leaf; argi = buffer slot (1..)
+fn F_RELU() -> Int { return 1 }
+fn F_ADD()  -> Int { return 2 }
+fn F_MUL()  -> Int { return 3 }
+
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+fn cp(x: read String) -> fresh String {
+    return String.concat(left: read x, right: read "")
+}
+fn rowp(lines: mut List<String>, parts: read List<String>) -> Unit {
+    List.push(list: mut lines, value: read String.join(parts: read parts, separator: read ""))
+    return Unit
+}
+fn sint(i: Int) -> fresh String { return String.from_int(value: i) }
+fn en(i: Int) -> fresh String { return String.concat(left: read "e", right: read sint(i: i)) }
+
+fn emit_fused() -> fresh String {
+    // elementwise graph: out = (relu(x) + y) * z
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let slot = List.new<Int>()
+    // 0 IN x (slot1), 1 IN y (slot2), 2 IN z (slot3), 3 RELU(0), 4 ADD(3,1), 5 MUL(4,2)
+    List.push(list: mut op, value: read F_IN())
+    List.push(list: mut a, value: read -1)
+    List.push(list: mut b, value: read -1)
+    List.push(list: mut slot, value: read 1)
+    List.push(list: mut op, value: read F_IN())
+    List.push(list: mut a, value: read -1)
+    List.push(list: mut b, value: read -1)
+    List.push(list: mut slot, value: read 2)
+    List.push(list: mut op, value: read F_IN())
+    List.push(list: mut a, value: read -1)
+    List.push(list: mut b, value: read -1)
+    List.push(list: mut slot, value: read 3)
+    List.push(list: mut op, value: read F_RELU())
+    List.push(list: mut a, value: read 0)
+    List.push(list: mut b, value: read -1)
+    List.push(list: mut slot, value: read -1)
+    List.push(list: mut op, value: read F_ADD())
+    List.push(list: mut a, value: read 3)
+    List.push(list: mut b, value: read 1)
+    List.push(list: mut slot, value: read -1)
+    List.push(list: mut op, value: read F_MUL())
+    List.push(list: mut a, value: read 4)
+    List.push(list: mut b, value: read 2)
+    List.push(list: mut slot, value: read -1)
+    let n = List.len(list: read op)
+    let root = n - 1
+    let nstr = "4"
+
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    // ---- the single FUSED kernel ----
+    pl(lines: mut lines, t: read "export fn fused(data0: PAddr, data1: PAddr, data2: PAddr, data3: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    let lp = List.new<String>()
+    List.push(list: mut lp, value: read "    while i < ")
+    List.push(list: mut lp, value: read cp(x: read nstr))
+    List.push(list: mut lp, value: read " {")
+    rowp(lines: mut lines, parts: read lp)
+    let mut k = 0
+    while k < n {
+        let o = List.get(list: read op, index: k)
+        let ek = en(i: k)
+        if o == F_IN() {
+            // ek = raw.load<f32>(pa_offset(data{slot}, i*4))
+            let p = List.new<String>()
+            List.push(list: mut p, value: read "      let ")
+            List.push(list: mut p, value: read ek)
+            List.push(list: mut p, value: read ": f32 = raw.load<f32>(pa_offset(data")
+            List.push(list: mut p, value: read sint(i: List.get(list: read slot, index: k)))
+            List.push(list: mut p, value: read ", (i) * 4));")
+            rowp(lines: mut lines, parts: read p)
+        }
+        if o == F_RELU() {
+            let src = en(i: List.get(list: read a, index: k))
+            let p = List.new<String>()
+            List.push(list: mut p, value: read "      var ")
+            List.push(list: mut p, value: read ek)
+            List.push(list: mut p, value: read ": f32 = 0.0; if ")
+            List.push(list: mut p, value: read src)
+            List.push(list: mut p, value: read " > 0.0 { ")
+            List.push(list: mut p, value: read ek)
+            List.push(list: mut p, value: read " = ")
+            List.push(list: mut p, value: read src)
+            List.push(list: mut p, value: read "; }")
+            rowp(lines: mut lines, parts: read p)
+        }
+        if o == F_ADD() {
+            let p = List.new<String>()
+            List.push(list: mut p, value: read "      let ")
+            List.push(list: mut p, value: read ek)
+            List.push(list: mut p, value: read ": f32 = (")
+            List.push(list: mut p, value: read en(i: List.get(list: read a, index: k)))
+            List.push(list: mut p, value: read " + ")
+            List.push(list: mut p, value: read en(i: List.get(list: read b, index: k)))
+            List.push(list: mut p, value: read ");")
+            rowp(lines: mut lines, parts: read p)
+        }
+        if o == F_MUL() {
+            let p = List.new<String>()
+            List.push(list: mut p, value: read "      let ")
+            List.push(list: mut p, value: read ek)
+            List.push(list: mut p, value: read ": f32 = (")
+            List.push(list: mut p, value: read en(i: List.get(list: read a, index: k)))
+            List.push(list: mut p, value: read " * ")
+            List.push(list: mut p, value: read en(i: List.get(list: read b, index: k)))
+            List.push(list: mut p, value: read ");")
+            rowp(lines: mut lines, parts: read p)
+        }
+        k = k + 1
+    }
+    // store the fused result
+    let st = List.new<String>()
+    List.push(list: mut st, value: read "      raw.store<f32>(pa_offset(data0, (i) * 4), ")
+    List.push(list: mut st, value: read en(i: root))
+    List.push(list: mut st, value: read ");")
+    rowp(lines: mut lines, parts: read st)
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "")
+    // ---- host harness: read x,y,z, run the one fused kernel, write out ----
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read "  var x: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  var y: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  var z: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  var o: [4]f32 = uninit;")
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), 16) { return 1; }")
+    pl(lines: mut lines, t: read "  if let err(e) = read_exact(input, pa((&y[0]) as usize), 16) { return 2; }")
+    pl(lines: mut lines, t: read "  if let err(e) = read_exact(input, pa((&z[0]) as usize), 16) { return 3; }")
+    pl(lines: mut lines, t: read "  fused(pa((&o[0]) as usize), pa((&x[0]) as usize), pa((&y[0]) as usize), pa((&z[0]) as usize));")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), 16) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    Log.write(message: read emit_fused())
+    return Unit
+}

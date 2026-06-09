@@ -1,0 +1,134 @@
+// Widen the ported codegen op catalog (the breadth gap): div, neg, max, exp, log, tanh.
+// Binary ops -> infix or select_f32; unary transcendental ops -> mc std/mathf f32 intrinsics
+// (exp_f32/log_f32/tanh_f32, backed by libc expf/logf/tanhf). Three composite kernels are
+// emitted and executed via mc:
+//   1) max((x/2)+1, -x)     2) tanh(x)     3) log(exp(x)) ~= x   (exp/log roundtrip)
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Div Max Neg Exp Log Tanh }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn udiv(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Div, src: take s, arg: 0)
+}
+fn umax(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Max, src: take s, arg: 0)
+}
+fn uneg(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Neg, src: take s, arg: 0)
+}
+fn uexp(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Exp, src: take s, arg: 0)
+}
+fn ulog(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Log, src: take s, arg: 0)
+}
+fn utanh(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Tanh, src: take s, arg: 0)
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+fn render_expr(u: read UOp) -> fresh String {
+    if u.op == Var { return cat(a: read "", b: read "xi") }
+    if u.op == Const { return cat(a: read Int.to_string(value: read u.arg), b: read ".0") }
+    let c0 = List.get(list: read u.src, index: 0)
+    if u.op == Neg { return cat3(a: read "(0.0 - ", b: read render_expr(u: read c0), c: read ")") }
+    if u.op == Exp { return cat3(a: read "exp_f32(", b: read render_expr(u: read c0), c: read ")") }
+    if u.op == Log { return cat3(a: read "log_f32(", b: read render_expr(u: read c0), c: read ")") }
+    if u.op == Tanh { return cat3(a: read "tanh_f32(", b: read render_expr(u: read c0), c: read ")") }
+    let c1 = List.get(list: read u.src, index: 1)
+    let left = render_expr(u: read c0)
+    let right = render_expr(u: read c1)
+    if u.op == Max { return cat3(a: read "select_f32((", b: read cat3(a: read left, b: read " < ", c: read right), c: read cat3(a: read "), ", b: read right, c: read cat3(a: read ", ", b: read left, c: read ")"))) }
+    let mut opsym = " + "
+    if u.op == Div { opsym = " / " }
+    return cat3(a: read "(", b: read cat3(a: read left, b: read opsym, c: read right), c: read ")")
+}
+
+fn emit_program(u: read UOp, n: Int) -> fresh String {
+    let body = render_expr(u: read u)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "import \"std/mathf.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {")
+    pl(lines: mut lines, t: read "  if c { return a; } else { return b; }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn E(data0: PAddr, data1: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read String.from_int(value: n), c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      raw.store<f32>(pa_offset(data0, i * 4), ", b: read body, c: read ");"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var o: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read "  E(pa((&o[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 9; }"))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    // 1) max((x/2)+1, -x)
+    let e1 = umax(a: read uadd(a: read udiv(a: read uvar(id: 0), b: read uconst(v: 2)), b: read uconst(v: 1)), b: read uneg(a: read uvar(id: 0)))
+    Log.write(message: read emit_program(u: read e1, n: 6))
+    Log.write(message: read "//---NEXT---")
+    // 2) tanh(x)
+    Log.write(message: read emit_program(u: read utanh(a: read uvar(id: 0)), n: 6))
+    Log.write(message: read "//---NEXT---")
+    // 3) log(exp(x)) ~= x
+    Log.write(message: read emit_program(u: read ulog(a: read uexp(a: read uvar(id: 0))), n: 6))
+    return Unit
+}

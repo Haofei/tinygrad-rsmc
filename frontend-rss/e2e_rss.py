@@ -63,9 +63,9 @@ def run_program(program, inputs):
     p = subprocess.run([os.path.join(w, "k")], input=stdin, capture_output=True)
     return [struct.unpack("<f", p.stdout[i:i+4])[0] for i in range(0, len(p.stdout), 4)]
 
-def check_program(label, program, inputs, expected):
+def check_program(label, program, inputs, expected, tol=1e-4):
   got = run_program(program, inputs)
-  ok = got is not None and len(got) == len(expected) and all(abs(g - e) < 1e-4 for g, e in zip(got, expected))
+  ok = got is not None and len(got) == len(expected) and all(abs(g - e) < tol for g, e in zip(got, expected))
   print(f"{'PASS' if ok else 'FAIL'} {label}: got {got}, want {expected}")
   return ok
 
@@ -79,9 +79,11 @@ if __name__ == "__main__":
   # real arena-walker path: several ops from one rss program, split on the marker
   full = rss_render("uop_render.rss")
   kernels_section, rest = full.split("//---PROGRAM---")
-  program, train_prog = rest.split("//---TRAIN---")
+  program, rest2 = rest.split("//---TRAIN---")
+  train_prog, mlp_prog = rest2.split("//---MLP---")
   program = program.strip() + "\n"
   train_prog = train_prog.strip() + "\n"
+  mlp_prog = mlp_prog.strip() + "\n"
   k_add, k_mul, k_relu, k_sum, k_mm = [k.strip() + "\n" for k in kernels_section.split("//---KERNEL---")]
   ok &= check("arena/add",  k_add,  [a, b], 2, [x + y for x, y in zip(a, b)])
   ok &= check("arena/mul",  k_mul,  [a, b], 2, [x * y for x, y in zip(a, b)])
@@ -98,4 +100,6 @@ if __name__ == "__main__":
   ok &= check_program("program/relu+add chain", program, [c, b], [max(0.0, x) + y for x, y in zip(c, b)])
   # end-to-end TRAINING: linear regression by SGD, fit t=2x+1 -> learned w~2, b~1
   ok &= check_program("train/linreg (SGD, fit 2x+1)", train_prog, [], [2.0, 1.0])
+  # end-to-end MLP TRAINING: 2->2->1 relu net trained by SGD to fit |x0-x1|
+  ok &= check_program("train/MLP (2-2-1 relu, fit |x0-x1|)", mlp_prog, [], [0.0, 1.0, 2.0, 2.0], tol=2e-2)
   sys.exit(0 if ok else 1)

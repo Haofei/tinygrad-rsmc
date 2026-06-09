@@ -1,0 +1,161 @@
+// Reverse-mode automatic differentiation in rsscript (a port of tinygrad/micrograd-style
+// autograd). Builds a scalar-op DAG (tape), then AUTOMATICALLY generates the backward pass
+// by reverse-traversing the tape with per-op vjp rules, emitting a complete hosted MC
+// program that computes the forward values and the gradients. Gradients are NOT hand-derived
+// -- they are produced by the engine's reverse pass.
+//
+// This file demonstrates the engine on L = a*b + a (so dL/da = b+1, dL/db = a). It emits MC
+// that writes [dL/da, dL/db]; the driver checks them against the analytic gradient.
+
+fn AG_PARAM() -> Int { return 0 }   // leaf; name[i] = MC variable name
+fn AG_ADD()   -> Int { return 1 }
+fn AG_MUL()   -> Int { return 2 }
+fn AG_SUB()   -> Int { return 3 }
+fn AG_RELU()  -> Int { return 4 }   // unary; uses a[i]
+fn AG_CONST() -> Int { return 5 }   // leaf; name[i] = MC float literal
+
+fn cat(a: read String, b: read String) -> fresh String {
+    return String.concat(left: read a, right: read b)
+}
+fn cat3(a: read String, b: read String, c: read String) -> fresh String {
+    return cat(a: read cat(a: read a, b: read b), b: read c)
+}
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+fn nname(i: Int) -> fresh String {
+    return cat(a: read "n", b: read String.from_int(value: i))
+}
+fn gname(i: Int) -> fresh String {
+    return cat(a: read "g", b: read String.from_int(value: i))
+}
+
+fn ag_emit(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, nm: mut List<String>,
+           o: Int, x: Int, y: Int, name: read String) -> Unit {
+    List.push(list: mut op, value: read o)
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    List.push(list: mut nm, value: read name)
+    return Unit
+}
+
+// Emit forward value `let nI = ...` for node i.
+fn fwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: read List<Int>, nm: read List<String>, i: Int) -> Unit {
+    let o = List.get(list: read op, index: i)
+    let ni = nname(i: i)
+    if o == AG_PARAM() {
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = "), b: read List.get(list: read nm, index: i), c: read ";"))
+    }
+    if o == AG_CONST() {
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = "), b: read List.get(list: read nm, index: i), c: read ";"))
+    }
+    if o == AG_ADD() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " + ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    if o == AG_MUL() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " * ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    if o == AG_SUB() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " - ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    if o == AG_RELU() {
+        let src = nname(i: List.get(list: read a, index: i))
+        pl(lines: mut lines, t: read cat3(a: read "  var ", b: read ni, c: read ": f32 = 0.0;"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  if ", b: read src, c: read " > 0.0 { "), b: read ni, c: read cat3(a: read " = ", b: read src, c: read "; }")))
+    }
+    return Unit
+}
+
+// Emit the reverse (adjoint) accumulation for node i.
+fn bwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: read List<Int>, i: Int) -> Unit {
+    let o = List.get(list: read op, index: i)
+    let gi = gname(i: i)
+    if o == AG_ADD() {
+        let ga = gname(i: List.get(list: read a, index: i))
+        let gb = gname(i: List.get(list: read b, index: i))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+    }
+    if o == AG_SUB() {
+        let ga = gname(i: List.get(list: read a, index: i))
+        let gb = gname(i: List.get(list: read b, index: i))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " - ", b: read gi, c: read ";")))
+    }
+    if o == AG_MUL() {
+        let ia = List.get(list: read a, index: i)
+        let ib = List.get(list: read b, index: i)
+        let ga = gname(i: ia)
+        let gb = gname(i: ib)
+        // ga += gi * n_b ; gb += gi * n_a
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + (", b: read gi, c: read cat3(a: read " * ", b: read nname(i: ib), c: read ");"))))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " + (", b: read gi, c: read cat3(a: read " * ", b: read nname(i: ia), c: read ");"))))
+    }
+    if o == AG_RELU() {
+        let ia = List.get(list: read a, index: i)
+        let ga = gname(i: ia)
+        let src = nname(i: ia)
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  if ", b: read src, c: read " > 0.0 { "), b: read ga, c: read cat3(a: read " = ", b: read ga, c: read cat3(a: read " + ", b: read gi, c: read "; }"))))
+    }
+    return Unit
+}
+
+fn emit_autograd() -> fresh String {
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let nm = List.new<String>()
+    // L = a*b + a  (params a, b)
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_PARAM(), x: -1, y: -1, name: read "wa") // 0
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_PARAM(), x: -1, y: -1, name: read "wb") // 1
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_MUL(),   x: 0,  y: 1,  name: read "")   // 2
+    ag_emit(op: mut op, a: mut a, b: mut b, nm: mut nm, o: AG_ADD(),   x: 2,  y: 0,  name: read "")   // 3 = loss
+    let n = List.len(list: read op)
+    let loss = n - 1
+
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    // parameter values
+    pl(lines: mut lines, t: read "  let wa: f32 = 2.0;")
+    pl(lines: mut lines, t: read "  let wb: f32 = 3.0;")
+    // forward
+    let mut i = 0
+    while i < n {
+        fwd_line(lines: mut lines, op: read op, a: read a, b: read b, nm: read nm, i: i)
+        i = i + 1
+    }
+    // init adjoints
+    let mut k = 0
+    while k < n {
+        pl(lines: mut lines, t: read cat3(a: read "  var ", b: read gname(i: k), c: read ": f32 = 0.0;"))
+        k = k + 1
+    }
+    pl(lines: mut lines, t: read cat3(a: read "  ", b: read gname(i: loss), c: read " = 1.0;"))
+    // reverse pass (high -> low)
+    let mut r = loss
+    while r >= 0 {
+        bwd_line(lines: mut lines, op: read op, a: read a, b: read b, i: r)
+        r = r - 1
+    }
+    // write gradients of the two params: [g0, g1]
+    pl(lines: mut lines, t: read "  var out: [2]f32 = uninit;")
+    pl(lines: mut lines, t: read cat3(a: read "  out[0] = ", b: read gname(i: 0), c: read ";"))
+    pl(lines: mut lines, t: read cat3(a: read "  out[1] = ", b: read gname(i: 1), c: read ";"))
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&out[0]) as usize), 8) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    Log.write(message: read emit_autograd())
+    return Unit
+}

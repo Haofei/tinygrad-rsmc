@@ -1,0 +1,14 @@
+/home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/deps/serde-e293ddd1db04c53b.d: /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/build/serde-3ba1578cd8fd899f/out/private.rs
+
+/home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/deps/libserde-e293ddd1db04c53b.rlib: /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/build/serde-3ba1578cd8fd899f/out/private.rs
+
+/home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/deps/libserde-e293ddd1db04c53b.rmeta: /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/build/serde-3ba1578cd8fd899f/out/private.rs
+
+/home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/zoe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/build/serde-3ba1578cd8fd899f/out/private.rs:
+
+# env-dep:OUT_DIR=/home/zoe/tinygrad-rsmc/target/rsscript-run-cache/autograd-c0026aa7cea39f01/target/debug/build/serde-3ba1578cd8fd899f/out

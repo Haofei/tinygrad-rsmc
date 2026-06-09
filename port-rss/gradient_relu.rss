@@ -1,0 +1,150 @@
+// Autodiff for RELU (extends gradient.rss with unary ops): d(relu(a))/dx = step(a) * da,
+// where step(a) = (a>0?1:0). Reverse-mode: the adjoint entering relu's child is g*step(a).
+// Validates the gradient graph shape d(relu(x))/dx = Step(x) and d(relu(2x))/dx = 2*step(2x).
+// (Step lowers in codegen to select_f32((0<a),1,0); here we validate the autodiff structure.)
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Relu Step }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn urelu(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Relu, src: take s, arg: 0)
+}
+fn ustep(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Step, src: take s, arg: 0)
+}
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn is_unary(u: read UOp) -> Bool {
+    if u.op == Relu { return true }
+    if u.op == Step { return true }
+    return false
+}
+
+fn clone_uop(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    if u.op == Relu { return urelu(a: read clone_uop(u: read c0)) }
+    if u.op == Step { return ustep(a: read clone_uop(u: read c0)) }
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return uadd(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1)) }
+    return umul(a: read clone_uop(u: read c0), b: read clone_uop(u: read c1))
+}
+
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    if u.op == Relu { return urelu(a: read simplify(u: read c0)) }
+    if u.op == Step { return ustep(a: read simplify(u: read c0)) }
+    let c1 = List.get(list: read u.src, index: 1)
+    let a = simplify(u: read c0)
+    let b = simplify(u: read c1)
+    if u.op == Mul {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }
+            if a.arg == 1 { return simplify(u: read c1) }
+            if a.arg == 0 { return uconst(v: 0) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 1 { return simplify(u: read c0) }
+            if b.arg == 0 { return uconst(v: 0) }
+        }
+        return umul(a: read a, b: read b)
+    }
+    if is_const(u: read a) {
+        if is_const(u: read b) { return uconst(v: a.arg + b.arg) }
+        if a.arg == 0 { return simplify(u: read c1) }
+    }
+    if is_const(u: read b) {
+        if b.arg == 0 { return simplify(u: read c0) }
+    }
+    return uadd(a: read a, b: read b)
+}
+
+fn grad_wrt(node: read UOp, g: read UOp, target: Int) -> fresh UOp {
+    if node.op == Const { return uconst(v: 0) }
+    if node.op == Var {
+        if node.arg == target { return clone_uop(u: read g) }
+        return uconst(v: 0)
+    }
+    let c0 = List.get(list: read node.src, index: 0)
+    if node.op == Relu {
+        // d(relu(a)) = step(a) * da ; adjoint into a is g*step(a)
+        let st = ustep(a: read clone_uop(u: read c0))
+        let newg = umul(a: read g, b: read st)
+        return grad_wrt(node: read c0, g: read newg, target: target)
+    }
+    let c1 = List.get(list: read node.src, index: 1)
+    if node.op == Add {
+        let ga = grad_wrt(node: read c0, g: read g, target: target)
+        let gb = grad_wrt(node: read c1, g: read g, target: target)
+        return uadd(a: read ga, b: read gb)
+    }
+    let gb_adj = umul(a: read g, b: read c1)
+    let ga = grad_wrt(node: read c0, g: read gb_adj, target: target)
+    let ga_adj = umul(a: read g, b: read c0)
+    let gb = grad_wrt(node: read c1, g: read ga_adj, target: target)
+    return uadd(a: read ga, b: read gb)
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    if u.op == Mul { return "Mul" }
+    if u.op == Relu { return "Relu" }
+    return "Step"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    let one = uconst(v: 1)
+    // d(relu(x))/dx = step(x)
+    let f1 = urelu(a: read uvar(id: 7))
+    let g1 = simplify(u: read grad_wrt(node: read f1, g: read one, target: 7))
+    describe(label: read "d(relu(x))/dx root = ", u: read g1)            // Step
+    let c = List.get(list: read g1.src, index: 0)
+    describe(label: read "  child = ", u: read c)                        // Var(7)
+
+    // d(relu(2*x))/dx = step(2x) * 2   (root Mul: step(2x) and 2)
+    let f2 = urelu(a: read umul(a: read uconst(v: 2), b: read uvar(id: 7)))
+    let g2 = simplify(u: read grad_wrt(node: read f2, g: read one, target: 7))
+    describe(label: read "d(relu(2x))/dx root = ", u: read g2)           // Mul
+    let g2l = List.get(list: read g2.src, index: 0)
+    let g2r = List.get(list: read g2.src, index: 1)
+    describe(label: read "  left  = ", u: read g2l)                      // Step
+    describe(label: read "  right = ", u: read g2r)                      // Const(2)
+    return Unit
+}

@@ -18,7 +18,7 @@ earlier was a mischaracterization.
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
 | `uop/ops.py` (CORE) | `UOp` node + interning (`uop.rss`); **PatternMatcher** bottom-up symbolic rewrite (`rewrite.rss`) | ✅ interning->2 unique; (2+3)*4->20, x*1->x, x+0->x, x*0->0, (x*1)+(2+3)->Add(x,5) |
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
-| `gradient.py` (CORE) | **reverse-mode autodiff over the UOp graph** (`gradient.rss`) | ✅ d(3x)/dx=3; d(x*x)/dx=x+x; d(x*x+5x)/dx has +5 |
+| `gradient.py` (CORE) | **reverse-mode autodiff over the UOp graph** -- add/mul/sub (`gradient.rss`), **relu** via step indicator (`gradient_relu.rss`) | ✅ d(3x)=3; d(x*x)=x+x; d(x-3x)=-2; d(relu(x))=step(x); d(relu(2x))=step(2x)*2 |
 | `codegen/`+`renderer/` (CORE) | **lower a ported UOp graph to an MC kernel + EXECUTE** -- elementwise (`render.rss`), **reduce** (`render_reduce.rss`), **matmul** (`render_matmul.rss`), **relu** (`render_relu.rss`, via select_f32); real loop render->MC->native | ✅ (x+2)*3 -> [9,12,21,-3]; sum(x+1) -> 14; 3x3 matmul matches reference |
 | `schedule/` (CORE) | **scheduler**: single-kernel dispatch (`schedule.rss`) + **multi-kernel split** (`schedule_multi.rss`): a reduce feeding an elementwise op becomes 2 ordered kernels with an intermediate buffer | ✅ (x+2)*3->1 kernel; sum(x*2)->reduce; **x-sum(x)->K1(reduce->s)+K2(x-s0)=[-9,-8,-7,-6]** |
 

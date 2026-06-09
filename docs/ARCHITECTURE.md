@@ -139,7 +139,11 @@ the harness generator must agree on it.
 - [x] **Numerical round-trip PROVEN** (`oracle/roundtrip.py`): add, mul, affine, relu, sum
       all produce results identical to tinygrad's CPU backend, through the full
       tinygrad -> MC -> native pipeline. **Phase 1 complete.**
-- [ ] Phase 2: port the frontend to rss, diffing rendered MC against this oracle.
+- [~] Phase 2 STARTED: rss frontend renderer (`frontend-rss/render_kernel.rss`) emits the
+      proven MC convention; `frontend-rss/e2e_rss.py` proves the full two-language pipeline
+      `rss -> MC -> mcc -> clang -> native` computes `a+b` correctly. Remaining Phase-2:
+      port the real UOp graph / scheduler / lowerer (large; needs rss payload-construction
+      for full `UOp.arg`, task #5).
 
 ### MC backend findings — validated against mcc (great hardening signal)
 

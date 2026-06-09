@@ -14,7 +14,7 @@ earlier was a mischaracterization.
 
 | tinygrad file | scope | status |
 |---|---|---|
-| `dtype.py` | scalar `DType` (fields, `itemsize`), the `dtypes` namespace (exact priorities/bitsizes/C-names/fmt, lines 176-197), predicates `is_float/is_int/is_unsigned/is_bool` | ✅ `dtype.rss`, values cross-checked equal to tinygrad |
+| `dtype.py` | scalar `DType`+`itemsize`; `dtypes` namespace (exact values, lines 176-197); `is_float/is_int/is_unsigned/is_bool`; **`can_lossless_cast`** (lines 255-272) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —
@@ -41,3 +41,7 @@ early single-digit-percent and is not complete.**
   `o + (a*b)`) rejected — must split into `let`s.
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
 - These are exactly the frictions to fix to make a real tinygrad port tractable in rss.
+
+## rss/mc bugs found and FIXED during the port
+- **rss parser**: parenthesized sub-expressions in arithmetic (`(a+b)`, `(a+b)*c`) were rejected (RS0015) due to a `trim_outer` double-call shadowing bug in `parse_expr`. Fixed; regression fixture added; `cargo test` green. (rsscript commit f49ac9a)
+- (earlier) mc: negative float literals, float array-element arithmetic, exp/log/tanh intrinsics; rss: Hashable/Eq.

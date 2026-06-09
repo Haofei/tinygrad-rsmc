@@ -17,8 +17,7 @@ struct DType derives(Clone, Eq, Hash) {
 
 // itemsize = (bitsize + 7) // 8   (dtype.py:65)
 fn DType.itemsize(self: read DType) -> Int {
-    let t = self.bitsize + 7
-    return t / 8
+    return (self.bitsize + 7) / 8
 }
 
 // ---- the dtypes namespace (dtype.py:176-197), exact values ----
@@ -70,6 +69,87 @@ fn dtypes_is_bool(x: read DType) -> Bool {
     return x.name == "bool"
 }
 
+// membership-by-name helpers (the fp8s/ints groups are checked by C name)
+fn is_fp8(n: read String) -> Bool {
+    if n == "float8_e4m3" { return true }
+    if n == "float8_e5m2" { return true }
+    if n == "float8_e4m3fnuz" { return true }
+    if n == "float8_e5m2fnuz" { return true }
+    return false
+}
+
+// can_lossless_cast(dt0, dt1): does dt1 preserve every value of dt0?  (dtype.py:255-272)
+fn can_lossless_cast(dt0: read DType, dt1: read DType) -> Bool {
+    if dt0.name == dt1.name { return true }
+    if dt0.name == "bool" { return true }
+    if dt1.name == "weakint" { return dtypes_is_int(x: read dt0) }
+    if dt1.name == "double" {
+        if dt0.name == "float" { return true }
+        if dt0.name == "half" { return true }
+        if dt0.name == "__bf16" { return true }
+        if is_fp8(n: read dt0.name) { return true }
+        if dt0.name == "unsigned int" { return true }
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "int" { return true }
+        if dt0.name == "short" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    if dt1.name == "float" {
+        if dt0.name == "half" { return true }
+        if dt0.name == "__bf16" { return true }
+        if is_fp8(n: read dt0.name) { return true }
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "short" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    if dt1.name == "half" {
+        if is_fp8(n: read dt0.name) { return true }
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    if dt1.name == "unsigned long" {
+        if dt0.name == "unsigned int" { return true }
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        return false
+    }
+    if dt1.name == "unsigned int" {
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        return false
+    }
+    if dt1.name == "unsigned short" {
+        return dt0.name == "unsigned char"
+    }
+    if dt1.name == "long" {
+        if dt0.name == "unsigned int" { return true }
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "int" { return true }
+        if dt0.name == "short" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    if dt1.name == "int" {
+        if dt0.name == "unsigned short" { return true }
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "short" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    if dt1.name == "short" {
+        if dt0.name == "unsigned char" { return true }
+        if dt0.name == "signed char" { return true }
+        return false
+    }
+    return false
+}
+
 fn yn(b: Bool) -> fresh String {
     let r = String.concat(left: read "", right: read "")
     if b {
@@ -100,5 +180,11 @@ fn main() -> Unit {
     show(label: read "is_int(int32) = ",      b: dtypes_is_int(x: read i32))      // yes
     show(label: read "is_unsigned(uint8) = ", b: dtypes_is_unsigned(x: read u8))  // yes
     show(label: read "is_bool(bool) = ",      b: dtypes_is_bool(x: read bl))      // yes
+    // can_lossless_cast checks (validated against tinygrad)
+    show(label: read "lossless(int8->int32) = ",   b: can_lossless_cast(dt0: read d_int8(),    dt1: read d_int32()))   // yes
+    show(label: read "lossless(float32->int32) = ",b: can_lossless_cast(dt0: read d_float32(), dt1: read d_int32()))   // no
+    show(label: read "lossless(uint8->int16) = ",  b: can_lossless_cast(dt0: read d_uint8(),   dt1: read d_int16()))   // yes
+    show(label: read "lossless(half->float32) = ", b: can_lossless_cast(dt0: read d_float16(), dt1: read d_float32())) // yes
+    show(label: read "lossless(int32->uint32) = ", b: can_lossless_cast(dt0: read d_int32(),   dt1: read d_uint32()))  // no
     return Unit
 }

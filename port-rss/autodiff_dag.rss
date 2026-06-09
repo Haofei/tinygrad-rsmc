@@ -1,0 +1,109 @@
+// DAG-shared reverse-mode autodiff (the accumulation tinygrad does over a shared UOp graph):
+// nodes are a flat arena (indices = identity, so sharing is real), gradients accumulate in a
+// parallel array -- a node used by multiple parents sums contributions from all of them.
+// Numeric here (directly validatable). vjp: ADD-> g to both; MUL-> g*val(other) to each.
+//
+// Diamond test: t = x*x has ONE shared input node feeding both MUL operands; grad accumulates
+// to 2*x (the hallmark of DAG accumulation, vs a tree that would double-count differently).
+
+fn OP_INPUT() -> Int { return 0 }
+fn OP_CONST() -> Int { return 1 }
+fn OP_ADD()   -> Int { return 2 }
+fn OP_MUL()   -> Int { return 3 }
+
+fn emit(op: mut List<Int>, a: mut List<Int>, b: mut List<Int>, val: mut List<Float>,
+        o: Int, x: Int, y: Int, v: Float) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    List.push(list: mut val, value: read v)
+    return idx
+}
+
+fn report(label: read String, v: Float) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read String.from_float(value: v)))
+    return Unit
+}
+
+// returns grad of the INPUT node (index 0) for loss = node[root]
+fn autodiff(op: read List<Int>, a: read List<Int>, b: read List<Int>, val: read List<Float>, root: Int) -> Float {
+    let n = List.len(list: read op)
+    // forward pass: fval[i]
+    let fval = List.new<Float>()
+    let mut i = 0
+    while i < n {
+        let o = List.get(list: read op, index: i)
+        if o == OP_INPUT() { List.push(list: mut fval, value: read List.get(list: read val, index: i)) }
+        if o == OP_CONST() { List.push(list: mut fval, value: read List.get(list: read val, index: i)) }
+        if o == OP_ADD() {
+            let va = List.get(list: read fval, index: List.get(list: read a, index: i))
+            let vb = List.get(list: read fval, index: List.get(list: read b, index: i))
+            let sm = va + vb
+            List.push(list: mut fval, value: read sm)
+        }
+        if o == OP_MUL() {
+            let va = List.get(list: read fval, index: List.get(list: read a, index: i))
+            let vb = List.get(list: read fval, index: List.get(list: read b, index: i))
+            let pr = va * vb
+            List.push(list: mut fval, value: read pr)
+        }
+        i = i + 1
+    }
+    // grad[] init 0, grad[root]=1
+    let grad = List.new<Float>()
+    let mut k = 0
+    while k < n {
+        List.push(list: mut grad, value: read 0.0)
+        k = k + 1
+    }
+    List.set(list: mut grad, index: root, value: read 1.0)
+    // reverse pass: accumulate (this is the DAG accumulation)
+    let mut r = n - 1
+    while r >= 0 {
+        let o = List.get(list: read op, index: r)
+        let gi = List.get(list: read grad, index: r)
+        if o == OP_ADD() {
+            let ia = List.get(list: read a, index: r)
+            let ib = List.get(list: read b, index: r)
+            let na = List.get(list: read grad, index: ia) + gi
+            List.set(list: mut grad, index: ia, value: read na)
+            let nb = List.get(list: read grad, index: ib) + gi
+            List.set(list: mut grad, index: ib, value: read nb)
+        }
+        if o == OP_MUL() {
+            let ia = List.get(list: read a, index: r)
+            let ib = List.get(list: read b, index: r)
+            let fb = List.get(list: read fval, index: ib)
+            let fa = List.get(list: read fval, index: ia)
+            let na = List.get(list: read grad, index: ia) + (gi * fb)
+            List.set(list: mut grad, index: ia, value: read na)
+            let nb = List.get(list: read grad, index: ib) + (gi * fa)
+            List.set(list: mut grad, index: ib, value: read nb)
+        }
+        r = r - 1
+    }
+    return List.get(list: read grad, index: 0)
+}
+
+fn main() -> Unit {
+    // t = x*x, x = 3  -> dt/dx = 2x = 6 (shared input node accumulates from both MUL operands)
+    let op = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let val = List.new<Float>()
+    let x = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_INPUT(), x: -1, y: -1, v: 3.0) // 0
+    let t = emit(op: mut op, a: mut a, b: mut b, val: mut val, o: OP_MUL(), x: x, y: x, v: 0.0)      // 1 (shares node 0)
+    report(label: read "d(x*x)/dx at x=3 = ", v: autodiff(op: read op, a: read a, b: read b, val: read val, root: t))  // 6
+
+    // t = (x + x) * x, x = 2 -> dt/dx = 3x^2 ... actually d((2x)*x)=d(2x^2)=4x=8
+    let op2 = List.new<Int>()
+    let a2 = List.new<Int>()
+    let b2 = List.new<Int>()
+    let val2 = List.new<Float>()
+    let x2 = emit(op: mut op2, a: mut a2, b: mut b2, val: mut val2, o: OP_INPUT(), x: -1, y: -1, v: 2.0)  // 0
+    let s2 = emit(op: mut op2, a: mut a2, b: mut b2, val: mut val2, o: OP_ADD(), x: x2, y: x2, v: 0.0)     // 1 = x+x
+    let t2 = emit(op: mut op2, a: mut a2, b: mut b2, val: mut val2, o: OP_MUL(), x: s2, y: x2, v: 0.0)     // 2 = (x+x)*x
+    report(label: read "d((x+x)*x)/dx at x=2 = ", v: autodiff(op: read op2, a: read a2, b: read b2, val: read val2, root: t2))  // 8
+    return Unit
+}

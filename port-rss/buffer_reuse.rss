@@ -1,0 +1,110 @@
+// Port of the buffer-reuse CORE of tinygrad's scheduler/memory planner: assign intermediate
+// results to a minimal set of buffers by liveness (a linear-scan allocation, like register
+// allocation). Compute each node's last-use, walk in topo order assigning a free slot to each
+// node and freeing a slot once its node is last-used. Peak live slots = buffers needed.
+// This is what lets a long fused chain run in O(1) buffers instead of one-per-node.
+
+features: local
+
+fn min2(a: Int, b: Int) -> Int { if a < b { return a } return b }
+fn max2(a: Int, b: Int) -> Int { if a > b { return a } return b }
+
+// nodes given as input edges: a[i], b[i] are source indices (-1 = none). Topo order = index.
+// returns peak number of buffers needed (with reuse).
+fn plan_buffers(a: read List<Int>, b: read List<Int>) -> Int {
+    let n = List.len(list: read a)
+    // last_use[i] = last index j that consumes node i (or i itself if never consumed)
+    let last_use = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        List.push(list: mut last_use, value: read i)
+        i = i + 1
+    }
+    let mut j = 0
+    while j < n {
+        let ja = List.get(list: read a, index: j)
+        if ja >= 0 { List.set(list: mut last_use, index: ja, value: read j) }
+        let jb = List.get(list: read b, index: j)
+        if jb >= 0 { List.set(list: mut last_use, index: jb, value: read j) }
+        j = j + 1
+    }
+    // linear scan: assign slots, reuse freed ones
+    let slot = List.new<Int>()
+    let mut z = 0
+    while z < n {
+        List.push(list: mut slot, value: read 0)
+        z = z + 1
+    }
+    let free = List.new<Int>()
+    let mut nextslot = 0
+    let mut live = 0
+    let mut peak = 0
+    let mut k = 0
+    while k < n {
+        let mut s = 0
+        if List.len(list: read free) > 0 {
+            s = List.get(list: read free, index: List.len(list: read free) - 1)
+            List.pop(list: mut free)
+        } else {
+            s = nextslot
+            nextslot = nextslot + 1
+        }
+        List.set(list: mut slot, index: k, value: read s)
+        live = live + 1
+        peak = max2(a: peak, b: live)
+        // free inputs whose last use is this node
+        let ka = List.get(list: read a, index: k)
+        if ka >= 0 {
+            if List.get(list: read last_use, index: ka) == k {
+                List.push(list: mut free, value: read List.get(list: read slot, index: ka))
+                live = live - 1
+            }
+        }
+        let kb = List.get(list: read b, index: k)
+        if kb >= 0 {
+            if List.get(list: read last_use, index: kb) == k {
+                List.push(list: mut free, value: read List.get(list: read slot, index: kb))
+                live = live - 1
+            }
+        }
+        k = k + 1
+    }
+    return peak
+}
+
+fn report(label: read String, a: read List<Int>, b: read List<Int>) -> Unit {
+    let peak = plan_buffers(a: read a, b: read b)
+    let mut s = String.concat(left: read label, right: read Int.to_string(value: read List.len(list: read a)))
+    s = String.concat(left: read s, right: read " nodes -> ")
+    s = String.concat(left: read s, right: read Int.to_string(value: read peak))
+    s = String.concat(left: read s, right: read " buffers")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn push2(a: mut List<Int>, b: mut List<Int>, x: Int, y: Int) -> Unit {
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    return Unit
+}
+
+fn main() -> Unit {
+    // chain: n0; n1=f(n0); n2=f(n1); n3=f(n2)  -> reuses to 2 buffers
+    let ca = List.new<Int>()
+    let cb = List.new<Int>()
+    push2(a: mut ca, b: mut cb, x: -1, y: -1)
+    push2(a: mut ca, b: mut cb, x: 0, y: -1)
+    push2(a: mut ca, b: mut cb, x: 1, y: -1)
+    push2(a: mut ca, b: mut cb, x: 2, y: -1)
+    report(label: read "chain:   ", a: read ca, b: read cb)   // 4 -> 2
+
+    // diamond: n0; n1=f(n0); n2=f(n0); n3=g(n1,n2)  -> needs 3 buffers
+    let da = List.new<Int>()
+    let db = List.new<Int>()
+    push2(a: mut da, b: mut db, x: -1, y: -1)
+    push2(a: mut da, b: mut db, x: 0, y: -1)
+    push2(a: mut da, b: mut db, x: 0, y: -1)
+    push2(a: mut da, b: mut db, x: 1, y: 2)
+    report(label: read "diamond: ", a: read da, b: read db)   // 4 -> 3
+    return Unit
+}

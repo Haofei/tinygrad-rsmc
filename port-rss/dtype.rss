@@ -37,6 +37,146 @@ fn d_bfloat16()-> fresh DType { return DType(priority: 12, bitsize: 16,  name: "
 fn d_float32() -> fresh DType { return DType(priority: 13, bitsize: 32,  name: "float",          fmt: Some("f"), count: 1) }
 fn d_float64() -> fresh DType { return DType(priority: 14, bitsize: 64,  name: "double",         fmt: Some("d"), count: 1) }
 
+fn d_fp8e4m3()    -> fresh DType { return DType(priority: 9,  bitsize: 8, name: "float8_e4m3",     fmt: None, count: 1) }
+fn d_fp8e5m2()    -> fresh DType { return DType(priority: 10, bitsize: 8, name: "float8_e5m2",     fmt: None, count: 1) }
+fn d_fp8e4m3fnuz()-> fresh DType { return DType(priority: 9,  bitsize: 8, name: "float8_e4m3fnuz", fmt: None, count: 1) }
+fn d_fp8e5m2fnuz()-> fresh DType { return DType(priority: 10, bitsize: 8, name: "float8_e5m2fnuz", fmt: None, count: 1) }
+
+// inverse of the dtypes namespace: C name -> DType
+fn dtype_by_name(n: read String) -> fresh DType {
+    if n == "void" { return d_void() }
+    if n == "weakint" { return d_weakint() }
+    if n == "bool" { return d_bool() }
+    if n == "signed char" { return d_int8() }
+    if n == "unsigned char" { return d_uint8() }
+    if n == "short" { return d_int16() }
+    if n == "unsigned short" { return d_uint16() }
+    if n == "int" { return d_int32() }
+    if n == "unsigned int" { return d_uint32() }
+    if n == "long" { return d_int64() }
+    if n == "unsigned long" { return d_uint64() }
+    if n == "float8_e4m3" { return d_fp8e4m3() }
+    if n == "float8_e5m2" { return d_fp8e5m2() }
+    if n == "float8_e4m3fnuz" { return d_fp8e4m3fnuz() }
+    if n == "float8_e5m2fnuz" { return d_fp8e5m2fnuz() }
+    if n == "half" { return d_float16() }
+    if n == "__bf16" { return d_bfloat16() }
+    if n == "float" { return d_float32() }
+    return d_float64()
+}
+
+fn contains_name(l: read List<String>, n: read String) -> Bool {
+    let mut i = 0
+    let m = List.len(list: read l)
+    while i < m {
+        let e = List.get(list: read l, index: i)
+        if e == n { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// immediate parents in the promotion lattice (dtype.py:235-241), by C name
+fn imm_parents(n: read String, out: mut List<String>) -> Unit {
+    if n == "bool" { List.push(list: mut out, value: read "weakint") }
+    if n == "weakint" {
+        List.push(list: mut out, value: read "signed char")
+        List.push(list: mut out, value: read "unsigned char")
+    }
+    if n == "signed char" { List.push(list: mut out, value: read "short") }
+    if n == "short" { List.push(list: mut out, value: read "int") }
+    if n == "int" { List.push(list: mut out, value: read "long") }
+    if n == "long" { List.push(list: mut out, value: read "unsigned long") }
+    if n == "unsigned char" {
+        List.push(list: mut out, value: read "short")
+        List.push(list: mut out, value: read "unsigned short")
+    }
+    if n == "unsigned short" {
+        List.push(list: mut out, value: read "int")
+        List.push(list: mut out, value: read "unsigned int")
+    }
+    if n == "unsigned int" {
+        List.push(list: mut out, value: read "long")
+        List.push(list: mut out, value: read "unsigned long")
+    }
+    if n == "unsigned long" {
+        List.push(list: mut out, value: read "float8_e4m3")
+        List.push(list: mut out, value: read "float8_e5m2")
+        List.push(list: mut out, value: read "float8_e4m3fnuz")
+        List.push(list: mut out, value: read "float8_e5m2fnuz")
+    }
+    if n == "float8_e4m3" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e5m2" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e4m3fnuz" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e5m2fnuz" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "half" { List.push(list: mut out, value: read "float") }
+    if n == "__bf16" { List.push(list: mut out, value: read "float") }
+    if n == "float" { List.push(list: mut out, value: read "double") }
+    return Unit
+}
+
+// recursive parents (self + all transitive parents), dedup  (dtype.py:243-245)
+fn rec_parents(n: read String, out: mut List<String>) -> Unit {
+    if contains_name(l: read out, n: read n) { return Unit }
+    List.push(list: mut out, value: read n)
+    let ps = List.new<String>()
+    imm_parents(n: read n, out: mut ps)
+    let mut i = 0
+    let m = List.len(list: read ps)
+    while i < m {
+        let p = List.get(list: read ps, index: i)
+        rec_parents(n: read p, out: mut out)
+        i = i + 1
+    }
+    return Unit
+}
+
+// least_upper_dtype(a, b): min common ancestor in the lattice  (dtype.py:247-249)
+fn least_upper_dtype(a: read DType, b: read DType) -> fresh DType {
+    let ra = List.new<String>()
+    rec_parents(n: read a.name, out: mut ra)
+    let rb = List.new<String>()
+    rec_parents(n: read b.name, out: mut rb)
+    let mut best = "double"
+    let mut have = false
+    let mut bestp = 0
+    let mut bestb = 0
+    let mut i = 0
+    let m = List.len(list: read ra)
+    while i < m {
+        let cand = List.get(list: read ra, index: i)
+        if contains_name(l: read rb, n: read cand) {
+            let cd = dtype_by_name(n: read cand)
+            let mut better = false
+            if have == false { better = true }
+            if cd.priority < bestp { better = true }
+            if cd.priority == bestp {
+                if cd.bitsize < bestb { better = true }
+            }
+            if better {
+                best = cand
+                bestp = cd.priority
+                bestb = cd.bitsize
+                have = true
+            }
+        }
+        i = i + 1
+    }
+    return dtype_by_name(n: read best)
+}
+
 // ---- predicates (dtype.py:150-160). count==1 here, so scalar(x) == x; check by C name. ----
 fn dtypes_is_float(x: read DType) -> Bool {
     if x.name == "half" { return true }
@@ -165,6 +305,10 @@ fn show(label: read String, b: Bool) -> Unit {
     Log.write(message: read String.concat(left: read label, right: read yn(b: b)))
     return Unit
 }
+fn showname(label: read String, d: read DType) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read d.name))
+    return Unit
+}
 
 fn main() -> Unit {
     let f32 = d_float32()
@@ -186,5 +330,12 @@ fn main() -> Unit {
     show(label: read "lossless(uint8->int16) = ",  b: can_lossless_cast(dt0: read d_uint8(),   dt1: read d_int16()))   // yes
     show(label: read "lossless(half->float32) = ", b: can_lossless_cast(dt0: read d_float16(), dt1: read d_float32())) // yes
     show(label: read "lossless(int32->uint32) = ", b: can_lossless_cast(dt0: read d_int32(),   dt1: read d_uint32()))  // no
+    // least_upper_dtype (validated against tinygrad)
+    showname(label: read "lud(int32,float32) = ", d: read least_upper_dtype(a: read d_int32(),   b: read d_float32()))  // float
+    showname(label: read "lud(int8,uint8) = ",    d: read least_upper_dtype(a: read d_int8(),    b: read d_uint8()))    // short
+    showname(label: read "lud(uint64,int64) = ",  d: read least_upper_dtype(a: read d_uint64(),  b: read d_int64()))    // unsigned long
+    showname(label: read "lud(half,bfloat16) = ", d: read least_upper_dtype(a: read d_float16(), b: read d_bfloat16())) // float
+    showname(label: read "lud(int32,int64) = ",   d: read least_upper_dtype(a: read d_int32(),   b: read d_int64()))    // long
+    showname(label: read "lud(bool,int8) = ",     d: read least_upper_dtype(a: read d_bool(),    b: read d_int8()))     // signed char
     return Unit
 }

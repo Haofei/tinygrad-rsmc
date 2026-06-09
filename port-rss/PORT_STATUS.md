@@ -14,7 +14,7 @@ earlier was a mischaracterization.
 
 | tinygrad file | scope | status |
 |---|---|---|
-| `dtype.py` | scalar `DType`+`itemsize`; `dtypes` namespace (exact values, lines 176-197); `is_float/is_int/is_unsigned/is_bool`; **`can_lossless_cast`** (lines 255-272) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
+| `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (lines 176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —

@@ -183,7 +183,8 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | automatic autograd (reverse-mode) | ✅ engine in `autograd.rss`: builds a scalar-op DAG, **auto-generates the backward pass** (add/mul/sub/relu vjp rules); verified dL/da,dL/db |
 | autograd-driven MLP training (grads from the engine) | ✅ `mlp_autograd.rss`: 2-2-1 relu MLP on the tape; **all grads engine-generated**; trains to ~[0,1,2,2] |
 | **PatternMatcher** graph-rewrite engine | ✅ `patternmatcher.rss`: union-find rewrite to fixpoint; const-fold + x*1/x*0/x+0 algebraic rules |
-| full Tensor API / lazy scheduling+fusion / broad op+dtype+movement coverage / tensor-level autograd | ❌ still not ported (remaining body of tinygrad) |
+| minimal **Tensor API** (t_param/t_mul/t_add/t_sub over the tape) | ✅ `tensor.rss`: model defined with Tensor ops, engine-trained (linreg -> w=2,b=1) |
+| lazy scheduling+fusion / broad op+dtype+movement coverage / tensor-level (n-dim) autograd | ❌ still not ported (remaining body of tinygrad) |
 
 Honest estimate: low-single-digit % of a complete tinygrad port. The backend half and the
 render stage are real and verified; the large frontend (graph/rewrite/schedule/Tensor/grad)

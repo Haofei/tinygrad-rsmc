@@ -1,0 +1,203 @@
+// A minimal Tensor API in rsscript (the user-facing layer of the port), built over the
+// autograd tape. Models are written with ergonomic ops -- t_param / t_const / t_mul /
+// t_add / t_sub -- and trained by the engine's reverse pass. Demonstrates training linear
+// regression (y = w*x + b) to fit t = 2x+1, emitting a complete hosted MC program.
+//
+// This ties the pieces together: Tensor ops build the autograd graph, the engine produces
+// gradients automatically, and the result lowers to modern-c.
+
+features: local
+
+fn AG_PARAM() -> Int { return 0 }
+fn AG_ADD()   -> Int { return 1 }
+fn AG_MUL()   -> Int { return 2 }
+fn AG_SUB()   -> Int { return 3 }
+fn AG_CONST() -> Int { return 5 }
+
+fn cat(a: read String, b: read String) -> fresh String {
+    return String.concat(left: read a, right: read b)
+}
+fn cat3(a: read String, b: read String, c: read String) -> fresh String {
+    return cat(a: read cat(a: read a, b: read b), b: read c)
+}
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+fn nname(i: Int) -> fresh String { return cat(a: read "n", b: read String.from_int(value: i)) }
+fn gname(i: Int) -> fresh String { return cat(a: read "g", b: read String.from_int(value: i)) }
+
+// The autograd tape (op/operands/leaf-name SoA) bundled as one value.
+struct Tape {
+    op: List<Int>
+    a: List<Int>
+    b: List<Int>
+    nm: List<String>
+}
+
+// A Tensor is just a handle to a tape node.
+struct Tensor derives(Clone) {
+    idx: Int
+}
+
+fn tape_new() -> fresh Tape {
+    local o = List.new<Int>()
+    local x = List.new<Int>()
+    local y = List.new<Int>()
+    local n = List.new<String>()
+    return Tape(op: take o, a: take x, b: take y, nm: take n)
+}
+
+fn t_node(tape: mut Tape, o: Int, x: Int, y: Int, name: read String) -> fresh Tensor {
+    let idx = List.len(list: read tape.op)
+    List.push(list: mut tape.op, value: read o)
+    List.push(list: mut tape.a, value: read x)
+    List.push(list: mut tape.b, value: read y)
+    List.push(list: mut tape.nm, value: read name)
+    return Tensor(idx: idx)
+}
+
+fn t_param(tape: mut Tape, name: read String) -> fresh Tensor {
+    return t_node(tape: mut tape, o: AG_PARAM(), x: -1, y: -1, name: read name)
+}
+fn t_const(tape: mut Tape, lit: read String) -> fresh Tensor {
+    return t_node(tape: mut tape, o: AG_CONST(), x: -1, y: -1, name: read lit)
+}
+fn t_add(tape: mut Tape, x: read Tensor, y: read Tensor) -> fresh Tensor {
+    return t_node(tape: mut tape, o: AG_ADD(), x: x.idx, y: y.idx, name: read "")
+}
+fn t_mul(tape: mut Tape, x: read Tensor, y: read Tensor) -> fresh Tensor {
+    return t_node(tape: mut tape, o: AG_MUL(), x: x.idx, y: y.idx, name: read "")
+}
+fn t_sub(tape: mut Tape, x: read Tensor, y: read Tensor) -> fresh Tensor {
+    return t_node(tape: mut tape, o: AG_SUB(), x: x.idx, y: y.idx, name: read "")
+}
+
+fn fwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: read List<Int>, nm: read List<String>, i: Int) -> Unit {
+    let o = List.get(list: read op, index: i)
+    let ni = nname(i: i)
+    if o == AG_PARAM() {
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    let ", b: read ni, c: read ": f32 = "), b: read List.get(list: read nm, index: i), c: read ";"))
+    }
+    if o == AG_CONST() {
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    let ", b: read ni, c: read ": f32 = "), b: read List.get(list: read nm, index: i), c: read ";"))
+    }
+    if o == AG_ADD() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " + ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    if o == AG_MUL() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " * ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    if o == AG_SUB() {
+        let e = cat3(a: read "(", b: read nname(i: List.get(list: read a, index: i)), c: read cat3(a: read " - ", b: read nname(i: List.get(list: read b, index: i)), c: read ")"))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    let ", b: read ni, c: read ": f32 = "), b: read e, c: read ";"))
+    }
+    return Unit
+}
+
+fn bwd_line(lines: mut List<String>, op: read List<Int>, a: read List<Int>, b: read List<Int>, i: Int) -> Unit {
+    let o = List.get(list: read op, index: i)
+    let gi = gname(i: i)
+    if o == AG_ADD() {
+        let ga = gname(i: List.get(list: read a, index: i))
+        let gb = gname(i: List.get(list: read b, index: i))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+    }
+    if o == AG_SUB() {
+        let ga = gname(i: List.get(list: read a, index: i))
+        let gb = gname(i: List.get(list: read b, index: i))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + ", b: read gi, c: read ";")))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " - ", b: read gi, c: read ";")))
+    }
+    if o == AG_MUL() {
+        let ia = List.get(list: read a, index: i)
+        let ib = List.get(list: read b, index: i)
+        let ga = gname(i: ia)
+        let gb = gname(i: ib)
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read ga, c: read " = "), b: read ga, c: read cat3(a: read " + (", b: read gi, c: read cat3(a: read " * ", b: read nname(i: ib), c: read ");"))))
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "    ", b: read gb, c: read " = "), b: read gb, c: read cat3(a: read " + (", b: read gi, c: read cat3(a: read " * ", b: read nname(i: ia), c: read ");"))))
+    }
+    return Unit
+}
+
+fn emit_linreg() -> fresh String {
+    let mut tape = tape_new()
+    // params
+    let w = t_param(tape: mut tape, name: read "w")
+    let bb = t_param(tape: mut tape, name: read "b")
+    // dataset (t = 2x + 1)
+    let dx = List.new<String>()
+    List.push(list: mut dx, value: read "0.0")
+    List.push(list: mut dx, value: read "1.0")
+    List.push(list: mut dx, value: read "2.0")
+    List.push(list: mut dx, value: read "3.0")
+    let dt = List.new<String>()
+    List.push(list: mut dt, value: read "1.0")
+    List.push(list: mut dt, value: read "3.0")
+    List.push(list: mut dt, value: read "5.0")
+    List.push(list: mut dt, value: read "7.0")
+    // loss = sum_s (w*x_s + b - t_s)^2 , built with Tensor ops
+    let mut loss = t_const(tape: mut tape, lit: read "0.0")
+    let mut s = 0
+    while s < 4 {
+        let xs = t_const(tape: mut tape, lit: read List.get(list: read dx, index: s))
+        let ts = t_const(tape: mut tape, lit: read List.get(list: read dt, index: s))
+        let wx = t_mul(tape: mut tape, x: read w, y: read xs)
+        let y = t_add(tape: mut tape, x: read wx, y: read bb)
+        let diff = t_sub(tape: mut tape, x: read y, y: read ts)
+        let sq = t_mul(tape: mut tape, x: read diff, y: read diff)
+        loss = t_add(tape: mut tape, x: read loss, y: read sq)
+        s = s + 1
+    }
+    let n = List.len(list: read tape.op)
+    let lossidx = loss.idx
+    let widx = w.idx
+    let bidx = bb.idx
+
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read "  var w: f32 = 0.0;")
+    pl(lines: mut lines, t: read "  var b: f32 = 0.0;")
+    pl(lines: mut lines, t: read "  let lr: f32 = 0.0125;")
+    pl(lines: mut lines, t: read "  var ep: usize = 0;")
+    pl(lines: mut lines, t: read "  while ep < 2000 {")
+    let mut i = 0
+    while i < n {
+        fwd_line(lines: mut lines, op: read tape.op, a: read tape.a, b: read tape.b, nm: read tape.nm, i: i)
+        i = i + 1
+    }
+    let mut k = 0
+    while k < n {
+        pl(lines: mut lines, t: read cat3(a: read "    var ", b: read gname(i: k), c: read ": f32 = 0.0;"))
+        k = k + 1
+    }
+    pl(lines: mut lines, t: read cat3(a: read "    ", b: read gname(i: lossidx), c: read " = 1.0;"))
+    let mut r = n - 1
+    while r >= 0 {
+        bwd_line(lines: mut lines, op: read tape.op, a: read tape.a, b: read tape.b, i: r)
+        r = r - 1
+    }
+    pl(lines: mut lines, t: read cat3(a: read "    w = w - (lr * ", b: read gname(i: widx), c: read ");"))
+    pl(lines: mut lines, t: read cat3(a: read "    b = b - (lr * ", b: read gname(i: bidx), c: read ");"))
+    pl(lines: mut lines, t: read "    ep = ep + 1;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  var out: [2]f32 = uninit;")
+    pl(lines: mut lines, t: read "  out[0] = w;")
+    pl(lines: mut lines, t: read "  out[1] = b;")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read "  if let err(e) = io_write_all(output, pa((&out[0]) as usize), 8) { return 9; }")
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    Log.write(message: read emit_linreg())
+    return Unit
+}

@@ -116,4 +116,6 @@ if __name__ == "__main__":
            and "x*1 node eliminated: yes" in pm_out)
   print(f"{'PASS' if pm_ok else 'FAIL'} patternmatcher (rewrite to fixpoint): {pm_out.split(chr(10))}")
   ok &= pm_ok
+  # Tensor API: model defined with ergonomic ops (t_param/t_mul/t_add/t_sub), engine-trained
+  ok &= check_program("tensor API (linreg via Tensor ops)", rss_render("tensor.rss"), [], [2.0, 1.0])
   sys.exit(0 if ok else 1)

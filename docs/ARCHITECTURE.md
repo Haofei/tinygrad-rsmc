@@ -172,7 +172,8 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | compile + run (backend) | ✅ modern-c, hosted profile, numerically verified |
 | UOp data model + arena | ✅ minimal (SoA: ops/argi/s0/s1) in rss |
 | more ops in the rss renderer | ✅ add/mul/relu/sum/**matmul** (nested loops+index math) verified; broadcast/cast TODO |
-| graph BUILDER (produce arenas from ops, not hand-listed) | ❌ not started |
+| multi-kernel program assembly (host main + shared buffers) | ✅ rss emits a full hosted MC program (relu->add chain), verified e2e |
+| graph BUILDER (produce arenas from ops, not hand-listed) | ⏳ kernels are per-op builders; auto-fusion not started |
 | `PatternMatcher`/rewrite engine | ❌ not started |
 | scheduler (Tensor graph -> kernels) | ❌ not started |
 | `Tensor` API + movement/shapetracker | ❌ not started |

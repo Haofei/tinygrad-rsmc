@@ -41,7 +41,7 @@ fn emit(ops: mut List<Int>, argi: mut List<Int>, s0: mut List<Int>, s1: mut List
 }
 
 fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: read List<Int>,
-          name: read String, nbuf: Int) -> fresh String {
+          name: read String, nbuf: Int, with_prelude: Bool) -> fresh String {
     let n = List.len(list: read ops)
     let expr = List.new<String>()
     let mut j = 0
@@ -139,9 +139,12 @@ fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: rea
         }
         k = k + 1
     }
-    let mut prelude = "import \"std/addr.mc\";\n\n"
-    if need_select {
-        prelude = cat(a: read prelude, b: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {\n  if c { return a; } else { return b; }\n}\n\n")
+    let mut prelude = ""
+    if with_prelude {
+        prelude = "import \"std/addr.mc\";\n\n"
+        if need_select {
+            prelude = cat(a: read prelude, b: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {\n  if c { return a; } else { return b; }\n}\n\n")
+        }
     }
 
     let body = String.join(parts: read lines, separator: read "\n")
@@ -153,7 +156,7 @@ fn render(ops: read List<Int>, argi: read List<Int>, s0: read List<Int>, s1: rea
 }
 
 // linearized graph for: data0[i] = relu(data1[i])
-fn render_relu(name: read String, n: Int) -> fresh String {
+fn render_relu(name: read String, n: Int, with_prelude: Bool) -> fresh String {
     let mut ops = List.new<Int>()
     let mut argi = List.new<Int>()
     let mut s0 = List.new<Int>()
@@ -167,11 +170,11 @@ fn render_relu(name: read String, n: Int) -> fresh String {
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 0, b: 2)   // 6
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(), arg: 0, a: 6, b: 5)   // 7
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),   arg: 0, a: 2, b: -1)  // 8
-    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2)
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2, with_prelude: with_prelude)
 }
 
 // linearized graph for: data0[i] = data1[i] <op> data2[i]
-fn render_binary(name: read String, n: Int, opsym: Int) -> fresh String {
+fn render_binary(name: read String, n: Int, opsym: Int, with_prelude: Bool) -> fresh String {
     let mut ops = List.new<Int>()
     let mut argi = List.new<Int>()
     let mut s0 = List.new<Int>()
@@ -188,7 +191,7 @@ fn render_binary(name: read String, n: Int, opsym: Int) -> fresh String {
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(), arg: 0, a: 0, b: 3)   // 9
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(), arg: 0, a: 9, b: 8)   // 10
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),   arg: 0, a: 3, b: -1)  // 11
-    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3)
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3, with_prelude: with_prelude)
 }
 
 // linearized graph for: data0[0] = sum(data1[0..n])
@@ -209,7 +212,7 @@ fn render_sum(name: read String, n: Int) -> fresh String {
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_CONSTI(),  arg: 0, a: -1, b: -1) // 9 idx 0
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_INDEX(),   arg: 0, a: 0, b: 9)   // 10
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(),   arg: 0, a: 10, b: 2)  // 11
-    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2)
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 2, with_prelude: true)
 }
 
 // linearized graph for square matmul: out[i*w+j] = sum_k a[i*w+k]*b[k*w+j]
@@ -244,19 +247,75 @@ fn render_matmul(name: read String, w: Int) -> fresh String {
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_STORE(),   arg: 0, a: 22, b: 3)  // 23
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),     arg: 0, a: 6, b: -1)  // 24 end j
     emit(ops: mut ops, argi: mut argi, s0: mut s0, s1: mut s1, op: OP_END(),     arg: 0, a: 5, b: -1)  // 25 end i
-    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3)
+    return render(ops: read ops, argi: read argi, s0: read s0, s1: read s1, name: read name, nbuf: 3, with_prelude: true)
+}
+
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+// Assemble a COMPLETE hosted MC program: K_relu then K_add over a shared buffer t.
+// out[i] = relu(x[i]) + y[i]. Proves multi-kernel orchestration + a generated host
+// driver + shared intermediate buffers -- all produced by the rss frontend.
+fn assemble_chain(n: Int) -> fresh String {
+    let nb = n * 4
+    let nbs = String.from_int(value: nb)
+    let ns = String.from_int(value: n)
+    let relu_k = render_relu(name: read "K_relu", n: n, with_prelude: false)
+    let add_k = render_binary(name: read "K_add", n: n, opsym: 0, with_prelude: false)
+
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {")
+    pl(lines: mut lines, t: read "  if c { return a; } else { return b; }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read relu_k)
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read add_k)
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var y: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var t: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var o: [", b: read ns, c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read nbs, c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&y[0]) as usize), ", b: read nbs, c: read ") { return 2; }"))
+    pl(lines: mut lines, t: read "  K_relu(pa((&t[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read "  K_add(pa((&o[0]) as usize), pa((&t[0]) as usize), pa((&y[0]) as usize));")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), ", b: read nbs, c: read ") { return 9; }"))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
 }
 
 fn main() -> Unit {
     // emit several kernels separated by a marker the driver splits on
-    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0))
+    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 0, with_prelude: true))
     Log.write(message: read "//---KERNEL---")
-    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 1))
+    Log.write(message: read render_binary(name: read "E_8", n: 8, opsym: 1, with_prelude: true))
     Log.write(message: read "//---KERNEL---")
-    Log.write(message: read render_relu(name: read "E_8", n: 8))
+    Log.write(message: read render_relu(name: read "E_8", n: 8, with_prelude: true))
     Log.write(message: read "//---KERNEL---")
     Log.write(message: read render_sum(name: read "E_8", n: 8))
     Log.write(message: read "//---KERNEL---")
     Log.write(message: read render_matmul(name: read "E_8", w: 4))
+    Log.write(message: read "//---PROGRAM---")
+    Log.write(message: read assemble_chain(n: 8))
     return Unit
 }

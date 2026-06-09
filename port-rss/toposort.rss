@@ -1,0 +1,90 @@
+// Port of UOp graph toposort (tinygrad uop/ops.py UOp.toposort): linearize the DAG so every
+// node appears after all its sources, with shared subgraphs visited once. Uses a structural
+// Set<UOp> (the rss Hashable feature) as the visited set -- so a node reused in multiple
+// places is emitted a single time. This ordering is what codegen/scheduling consume.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+
+// post-order DFS: sources before the node; Set dedups shared subgraphs
+fn visit(u: read UOp, seen: mut Set<UOp>, order: mut List<UOp>) -> Unit {
+    if Set.contains(set: read seen, value: read u) { return Unit }
+    let n = List.len(list: read u.src)
+    let mut i = 0
+    while i < n {
+        let c = List.get(list: read u.src, index: i)
+        visit(u: read c, seen: mut seen, order: mut order)
+        i = i + 1
+    }
+    Set.insert(set: mut seen, value: read u)
+    List.push(list: mut order, value: read u)
+    return Unit
+}
+
+fn toposort(root: read UOp, order: mut List<UOp>) -> Unit {
+    let seen = Set.new<UOp>()
+    visit(u: read root, seen: mut seen, order: mut order)
+    return Unit
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+fn dump(order: read List<UOp>) -> Unit {
+    let n = List.len(list: read order)
+    let mut i = 0
+    while i < n {
+        let u = List.get(list: read order, index: i)
+        let mut s = String.concat(left: read "  ", right: read Int.to_string(value: read i))
+        s = String.concat(left: read s, right: read ": ")
+        s = String.concat(left: read s, right: read op_name(u: read u))
+        s = String.concat(left: read s, right: read "(")
+        s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+        s = String.concat(left: read s, right: read ")")
+        Log.write(message: read s)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    // (2 + 3) * 4  -> topo: 2, 3, Add, 4, Mul  (5 nodes, sources first)
+    let e1 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    let o1 = List.new<UOp>()
+    toposort(root: read e1, order: mut o1)
+    Log.write(message: read String.concat(left: read "toposort((2+3)*4): nodes=", right: read Int.to_string(value: read List.len(list: read o1))))
+    dump(order: read o1)
+
+    // x * x  with x shared -> x visited ONCE: topo = x, Mul  (2 nodes, not 3)
+    let x = uvar(id: 7)
+    let e2 = umul(a: read x, b: read x)
+    let o2 = List.new<UOp>()
+    toposort(root: read e2, order: mut o2)
+    Log.write(message: read String.concat(left: read "toposort(x*x) shared x: nodes=", right: read Int.to_string(value: read List.len(list: read o2))))
+    dump(order: read o2)
+    return Unit
+}

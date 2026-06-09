@@ -14,7 +14,7 @@ earlier was a mischaracterization.
 
 | tinygrad file | scope | status |
 |---|---|---|
-| `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
+| `dtype.py` | scalar dtypes, count-aware itemsize, predicates, can_lossless_cast, promo lattice + least_upper_dtype, **vec() vectorized dtypes** (`dtype.rss`); PtrDType/ImageDType blocked by rss clone-gap |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
 | `uop/ops.py` (CORE) | `UOp`+interning (`uop.rss`); **PatternMatcher** symbolic rewrite (`rewrite.rss`); **generic UPat DSL** -- recursive pattern + wildcard + capture (`upat.rss`) | ✅ rewrite cases; UPat MUL(any,CONST 1) matches x*1 (captures Var), rejects x*2 |
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
@@ -51,6 +51,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
+- rss clone-gap (managed-field clone): can't copy a String/managed struct field out of a `read` value (RS1101 'cannot move out of ... behind shared reference'); blocks generic vec(base: read DType) and PtrDType(base). Worked around with literal-based vec constructors. A callable `.clone()` for managed values / fields would resolve it.
 - rss stdlib gap (NOT fixed): no Int->Float conversion (`Int.to_float`/`Float.from_int` don't resolve) -- blocks numeric interpreters that mix Int consts with Float math. Adding it spans the checker type table, the reg_vm interpreter, and the rust-lowering ABI+runtime; deferred to avoid an unverified multi-site change. Worked around in device.rss by storing const as a Float field.
 - rss codegen bug (NOT fixed): `let mut s = <read-param>` then reassign emits ill-typed Rust (unmappable E0308). Root cause confirmed (mut local bound to a read-param `&T`, then assigned an owned `T`). A naive fix (clone the read-param at the binding when mutable) was tried but **broke 21 checker_lowering snapshot tests** (too broad -- it changes valid no-reassign lowerings), so it was reverted. Needs a precise fix gated on actual later owned-reassignment. Worked around in the port by avoiding the pattern.
 - ~~rss codegen bug: read-PARAM passed as a read arg emits `&&T` (E0308)~~ -- **FIXED & VERIFIED GREEN** (rsscript: read-param no longer double-borrowed). NOTE: the fix changed the (latent-buggy) output of 21 checker_lowering snapshot tests -- they had encoded `f(&<read-param>)` = `&&T` which never compiled; corrected to the right `f(<read-param>)`. Full rss suite green incl. the parity suite that COMPILES+RUNS generated Rust (checker_lowering 212/0, parity 112/0). An earlier 'green' claim for this fix was premature and is now corrected.

@@ -3,9 +3,11 @@
 // fmt chars from dtype.py lines 176-223 -- into rsscript, not a re-imagining.
 //
 // DType derives(Eq, Hash) so it can be interned/compared exactly like tinygrad's
-// metaclass-cached, eq=False dataclass (uses the rss Hashable feature). PtrDType/ImageDType
-// and vec()/scalar() (which need self-referential/owning clones) are the next slice; this
-// is the scalar core: construction, itemsize, and the is_* predicates.
+// metaclass-cached, eq=False dataclass (uses the rss Hashable feature). Covers: the scalar
+// dtypes, count-aware itemsize, the is_* predicates, the promotion lattice + least_upper_dtype,
+// and vec() (vectorized dtypes). PtrDType/ImageDType remain unported -- they must store a
+// dynamic base DType, which hits the rss clone-gap (can't clone a String/managed field out of
+// a `read` value); documented in PORT_STATUS.
 
 struct DType derives(Clone, Eq, Hash) {
     priority: Int
@@ -15,9 +17,10 @@ struct DType derives(Clone, Eq, Hash) {
     count: Int
 }
 
-// itemsize = (bitsize + 7) // 8   (dtype.py:65)
+// itemsize = scalar_bytes * count   (dtype.py: vec multiplies itemsize by count, so a vec's
+// itemsize is the per-lane byte size times the lane count; scalar count==1 is unchanged).
 fn DType.itemsize(self: read DType) -> Int {
-    return (self.bitsize + 7) / 8
+    return ((self.bitsize + 7) / 8) * self.count
 }
 
 // ---- the dtypes namespace (dtype.py:176-197), exact values ----
@@ -41,6 +44,14 @@ fn d_fp8e4m3()    -> fresh DType { return DType(priority: 9,  bitsize: 8, name: 
 fn d_fp8e5m2()    -> fresh DType { return DType(priority: 10, bitsize: 8, name: "float8_e5m2",     fmt: None, count: 1) }
 fn d_fp8e4m3fnuz()-> fresh DType { return DType(priority: 9,  bitsize: 8, name: "float8_e4m3fnuz", fmt: None, count: 1) }
 fn d_fp8e5m2fnuz()-> fresh DType { return DType(priority: 10, bitsize: 8, name: "float8_e5m2fnuz", fmt: None, count: 1) }
+
+// vec(sz): vectorized dtype (dtype.py DType.vec) -- same scalar fields, count=sz, so
+// itemsize = scalar_bytes * sz. Provided as literal-based per-scalar constructors: rss can't
+// clone a String field out of a read DType (the documented clone-gap), so a generic
+// vec(base: read DType) cannot rebuild the name; these build from the literals directly.
+fn d_float32_vec(sz: Int) -> fresh DType { return DType(priority: 13, bitsize: 32, name: "float", fmt: Some("f"), count: sz) }
+fn d_int32_vec(sz: Int)   -> fresh DType { return DType(priority: 5,  bitsize: 32, name: "int",   fmt: Some("i"), count: sz) }
+fn d_bool_vec(sz: Int)    -> fresh DType { return DType(priority: 0,  bitsize: 1,  name: "bool",  fmt: Some("?"), count: sz) }
 
 // inverse of the dtypes namespace: C name -> DType
 fn dtype_by_name(n: read String) -> fresh DType {
@@ -337,5 +348,13 @@ fn main() -> Unit {
     showname(label: read "lud(half,bfloat16) = ", d: read least_upper_dtype(a: read d_float16(), b: read d_bfloat16())) // float
     showname(label: read "lud(int32,int64) = ",   d: read least_upper_dtype(a: read d_int32(),   b: read d_int64()))    // long
     showname(label: read "lud(bool,int8) = ",     d: read least_upper_dtype(a: read d_bool(),    b: read d_int8()))     // signed char
+    // vec dtypes: float32.vec(4) itemsize 16 (4*4); bool.vec(4) itemsize 4 (1*4); count tracked
+    let f32x4 = d_float32_vec(sz: 4)
+    report(label: read "float32.vec(4).itemsize = ", v: DType.itemsize(self: read f32x4))   // 16
+    report(label: read "float32.vec(4).count = ",    v: f32x4.count)                          // 4
+    let blx4 = d_bool_vec(sz: 4)
+    report(label: read "bool.vec(4).itemsize = ",    v: DType.itemsize(self: read blx4))      // 4
+    let i32x8 = d_int32_vec(sz: 8)
+    report(label: read "int32.vec(8).itemsize = ",   v: DType.itemsize(self: read i32x8))     // 32
     return Unit
 }

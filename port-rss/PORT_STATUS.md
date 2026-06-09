@@ -20,6 +20,7 @@ earlier was a mischaracterization.
 | `tensor.py` (CORE) | **Tensor as a lazy UOp-graph wrapper** (`tensor.rss`) | ✅ (x*1)+(2+3)->Add(Var7,Const5); (2*3)+4->Const(10) |
 | `uop/ops.py` symbolic | **vmin/vmax integer bounds** (`symbolic.rss`) | ✅ x+2->[2,12]; x*3->[0,30]; x*x in[1,4]->[1,16]; x*x in[-2,3]->[-6,9] |
 | `uop/ops.py` toposort | **UOp DAG toposort** with structural dedup (`toposort.rss`) | ✅ (2+3)*4->5 nodes sources-first; x*x shared x->2 nodes |
+| `uop/ops.py` Ops enum | **complete 93-opcode Ops enum + GroupOp groups** (Unary/Binary/Ternary/Movement/ALU) (`ops_enum.rss`) | ✅ all group predicates match tinygrad (is_unary(NEG), is_alu(MULACC), etc.) |
 | **capstone: training** | **SGD training loop driven by the ported autodiff** (`train.rss`) | ✅ loss 56->~0; w converges to slope 2.0 |
 | `device.py`/`runtime` | **Device[name] dispatch + CPU-interpreter runtime backend** (`device.rss`) | ✅ Device[interp] (x+2)*3 -> 9 12 15; unknown device handled |
 | scheduler memory planner | **liveness-based buffer reuse** (linear-scan) (`buffer_reuse.rss`) | ✅ chain 4 nodes->2 buffers; diamond 4->3 buffers |
@@ -51,6 +52,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
+- rss ergonomic gap: `==` on a `read` enum param fails (`&Ops == Ops`, RS1101) -- field-access compares work, but a bare `read Ops` param does not; use `match` instead. Minor; worth auto-deref in the comparison lowering.
 - rss clone-gap (managed-field clone): can't copy a String/managed struct field out of a `read` value (RS1101 'cannot move out of ... behind shared reference'); blocks generic vec(base: read DType) and PtrDType(base). Worked around with literal-based vec constructors. A callable `.clone()` for managed values / fields would resolve it.
 - rss stdlib gap (NOT fixed): no Int->Float conversion (`Int.to_float`/`Float.from_int` don't resolve) -- blocks numeric interpreters that mix Int consts with Float math. Adding it spans the checker type table, the reg_vm interpreter, and the rust-lowering ABI+runtime; deferred to avoid an unverified multi-site change. Worked around in device.rss by storing const as a Float field.
 - rss codegen bug (NOT fixed): `let mut s = <read-param>` then reassign emits ill-typed Rust (unmappable E0308). Root cause confirmed (mut local bound to a read-param `&T`, then assigned an owned `T`). A naive fix (clone the read-param at the binding when mutable) was tried but **broke 21 checker_lowering snapshot tests** (too broad -- it changes valid no-reassign lowerings), so it was reverted. Needs a precise fix gated on actual later owned-reassignment. Worked around in the port by avoiding the pattern.

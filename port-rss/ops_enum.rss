@@ -1,0 +1,102 @@
+// Complete port of tinygrad/uop/ops.py Ops enum (all 93 opcodes) + GroupOp classifications
+// (Unary/Binary/Ternary/Movement; ALU = Unary U Binary U Ternary). Faithful 1:1 with the
+// tinygrad enum and group sets, so the full opcode catalog + categorization is translated.
+
+features: local
+
+
+sum Ops derives(Clone, Eq, Hash) {
+    DEFINE_VAR BIND SPECIAL DEFINE_LOCAL DEFINE_REG NOOP REWRITE_ERROR PARAM FUNCTION CALL
+    PROGRAM LINEAR SOURCE BINARY SINK AFTER GROUP GEP STACK TUPLE
+    GETTUPLE GETADDR INDEX LOAD STORE WMMA SHAPED_WMMA CAST BITCAST EXP2
+    LOG2 SIN SQRT RECIPROCAL NEG TRUNC ADD MUL SHL SHR
+    CDIV MAX CMOD CMPLT CMPNE CMPEQ XOR OR AND THREEFRY
+    SUB FDIV POW FLOORDIV FLOORMOD WHERE MULACC BARRIER RANGE IF
+    END ENDIF WAIT CONST CUSTOM CUSTOMI INS UNIQUE DEVICE LUNIQUE
+    CONTIGUOUS CONTIGUOUS_BACKWARD DETACH STAGE COPY BUFFER SLICE MSELECT MSTACK CUSTOM_FUNCTION
+    RESHAPE PERMUTE EXPAND PAD SHRINK FLIP MULTI REDUCE ALLREDUCE UNROLL
+    CONTRACT VCAT PTRCAT
+}
+
+fn is_unary(op: read Ops) -> Bool {
+    match op {
+        EXP2 => { return true }
+        LOG2 => { return true }
+        NEG => { return true }
+        RECIPROCAL => { return true }
+        SIN => { return true }
+        SQRT => { return true }
+        TRUNC => { return true }
+        _ => { return false }
+    }
+}
+
+fn is_binary(op: read Ops) -> Bool {
+    match op {
+        ADD => { return true }
+        AND => { return true }
+        CDIV => { return true }
+        CMOD => { return true }
+        CMPEQ => { return true }
+        CMPLT => { return true }
+        CMPNE => { return true }
+        FDIV => { return true }
+        FLOORDIV => { return true }
+        FLOORMOD => { return true }
+        MAX => { return true }
+        MUL => { return true }
+        OR => { return true }
+        POW => { return true }
+        SHL => { return true }
+        SHR => { return true }
+        SUB => { return true }
+        THREEFRY => { return true }
+        XOR => { return true }
+        _ => { return false }
+    }
+}
+
+fn is_ternary(op: read Ops) -> Bool {
+    match op {
+        MULACC => { return true }
+        WHERE => { return true }
+        _ => { return false }
+    }
+}
+
+fn is_movement(op: read Ops) -> Bool {
+    match op {
+        EXPAND => { return true }
+        FLIP => { return true }
+        PAD => { return true }
+        PERMUTE => { return true }
+        RESHAPE => { return true }
+        SHRINK => { return true }
+        _ => { return false }
+    }
+}
+
+fn is_alu(op: read Ops) -> Bool {
+    if is_unary(op: read op) { return true }
+    if is_binary(op: read op) { return true }
+    if is_ternary(op: read op) { return true }
+    return false
+}
+
+fn show(label: read String, b: Bool) -> Unit {
+    if b { Log.write(message: read String.concat(left: read label, right: read "yes")) }
+    if b == false { Log.write(message: read String.concat(left: read label, right: read "no")) }
+    return Unit
+}
+
+fn main() -> Unit {
+    show(label: read "is_unary(NEG) = ",      b: is_unary(op: read NEG))
+    show(label: read "is_binary(ADD) = ",     b: is_binary(op: read ADD))
+    show(label: read "is_binary(NEG) = ",     b: is_binary(op: read NEG))
+    show(label: read "is_ternary(WHERE) = ",  b: is_ternary(op: read WHERE))
+    show(label: read "is_movement(RESHAPE) = ",b: is_movement(op: read RESHAPE))
+    show(label: read "is_alu(EXP2) = ",       b: is_alu(op: read EXP2))
+    show(label: read "is_alu(RESHAPE) = ",    b: is_alu(op: read RESHAPE))
+    show(label: read "is_alu(MULACC) = ",     b: is_alu(op: read MULACC))
+    return Unit
+}

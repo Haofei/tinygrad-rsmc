@@ -1,0 +1,82 @@
+// Port of the symbolic-bounds CORE of tinygrad/uop/ops.py (UOp.vmin/vmax): compute the
+// integer [min,max] range of a UOp expression given a variable's range, via interval
+// arithmetic. tinygrad uses these bounds to fold/simplify and to prove index validity.
+// Rules: Const c -> [c,c]; Var -> [lo,hi]; Add -> [amin+bmin, amax+bmax];
+// Mul -> [min,max] over the 4 corner products (handles negative ranges correctly).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+
+fn min2(a: Int, b: Int) -> Int { if a < b { return a } return b }
+fn max2(a: Int, b: Int) -> Int { if a > b { return a } return b }
+fn min4(a: Int, b: Int, c: Int, d: Int) -> Int { return min2(a: min2(a: a, b: b), b: min2(a: c, b: d)) }
+fn max4(a: Int, b: Int, c: Int, d: Int) -> Int { return max2(a: max2(a: a, b: b), b: max2(a: c, b: d)) }
+
+fn vmin(u: read UOp, lo: Int, hi: Int) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return lo }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmin(u: read c0, lo: lo, hi: hi) + vmin(u: read c1, lo: lo, hi: hi) }
+    // Mul: min of the 4 corner products
+    let amin = vmin(u: read c0, lo: lo, hi: hi)
+    let amax = vmax(u: read c0, lo: lo, hi: hi)
+    let bmin = vmin(u: read c1, lo: lo, hi: hi)
+    let bmax = vmax(u: read c1, lo: lo, hi: hi)
+    return min4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+}
+fn vmax(u: read UOp, lo: Int, hi: Int) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return hi }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmax(u: read c0, lo: lo, hi: hi) + vmax(u: read c1, lo: lo, hi: hi) }
+    let amin = vmin(u: read c0, lo: lo, hi: hi)
+    let amax = vmax(u: read c0, lo: lo, hi: hi)
+    let bmin = vmin(u: read c1, lo: lo, hi: hi)
+    let bmax = vmax(u: read c1, lo: lo, hi: hi)
+    return max4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+}
+
+fn report(label: read String, u: read UOp, lo: Int, hi: Int) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    s = String.concat(left: read s, right: read Int.to_string(value: read vmin(u: read u, lo: lo, hi: hi)))
+    s = String.concat(left: read s, right: read ", ")
+    s = String.concat(left: read s, right: read Int.to_string(value: read vmax(u: read u, lo: lo, hi: hi)))
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    // x in [0,10]
+    report(label: read "x+2 in [0,10]:  ", u: read uadd(a: read uvar(id: 0), b: read uconst(v: 2)), lo: 0, hi: 10)   // [2,12]
+    report(label: read "x*3 in [0,10]:  ", u: read umul(a: read uvar(id: 0), b: read uconst(v: 3)), lo: 0, hi: 10)   // [0,30]
+    report(label: read "(x*3)+2 [0,10]: ", u: read uadd(a: read umul(a: read uvar(id: 0), b: read uconst(v: 3)), b: read uconst(v: 2)), lo: 0, hi: 10)  // [2,32]
+    // x in [1,4]: x*x -> [1,16]
+    report(label: read "x*x in [1,4]:   ", u: read umul(a: read uvar(id: 0), b: read uvar(id: 0)), lo: 1, hi: 4)     // [1,16]
+    // x in [-2,3]: x*x -> interval arithmetic [-6,9] (looser than true [0,9])
+    report(label: read "x*x in [-2,3]:  ", u: read umul(a: read uvar(id: 0), b: read uvar(id: 0)), lo: -2, hi: 3)    // [-6,9]
+    return Unit
+}

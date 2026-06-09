@@ -1,0 +1,100 @@
+// Widen the ported op set: RELU in the codegen. relu(x) lowers to a select (MC `if` is a
+// statement, so a pure select_f32 helper is emitted -- the convention proven in Phase 1).
+// Demo: out[i] = relu(x[i] - 2), executed via mc. (Autodiff rule for relu: g*(x>0?1:0).)
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Sub Mul Relu }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn usub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
+fn urelu(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Relu, src: take s, arg: 0)
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+fn render_expr(u: read UOp) -> fresh String {
+    if u.op == Var { return cat(a: read "", b: read "xi") }
+    if u.op == Const { return cat(a: read Int.to_string(value: read u.arg), b: read ".0") }
+    if u.op == Relu {
+        let c = List.get(list: read u.src, index: 0)
+        let inner = render_expr(u: read c)
+        return cat3(a: read "select_f32((0.0 < ", b: read inner, c: read cat3(a: read "), ", b: read inner, c: read ", 0.0)"))
+    }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let mut opsym = " + "
+    if u.op == Mul { opsym = " * " }
+    if u.op == Sub { opsym = " - " }
+    let left = render_expr(u: read c0)
+    let right = render_expr(u: read c1)
+    return cat3(a: read "(", b: read cat3(a: read left, b: read opsym, c: read right), c: read ")")
+}
+
+fn emit_program(u: read UOp, n: Int) -> fresh String {
+    let body = render_expr(u: read u)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "fn select_f32(c: bool, a: f32, b: f32) -> f32 {")
+    pl(lines: mut lines, t: read "  if c { return a; } else { return b; }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn E(data0: PAddr, data1: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read String.from_int(value: n), c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      raw.store<f32>(pa_offset(data0, i * 4), ", b: read body, c: read ");"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var o: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read "  E(pa((&o[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 9; }"))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    // relu(x - 2)
+    let expr = urelu(a: read usub(a: read uvar(id: 0), b: read uconst(v: 2)))
+    Log.write(message: read emit_program(u: read expr, n: 6))
+    return Unit
+}

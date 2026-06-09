@@ -131,13 +131,37 @@ the harness generator must agree on it.
 
 - [x] Confirmed toolchain (python3.14, clang, zig) and tinygrad runs on CPU/clang.
 - [x] Captured oracle C kernel shapes (`oracle/c_reference/`).
-- [x] Phase-1 `MCRenderer` working (`oracle/mc_renderer.py`) for elementwise, reduce,
-      select, matmul (nested loops + reduce), and 2D broadcast. Generator + dual C/MC
-      output in `oracle/gen_oracle.py` -> `oracle/{c_reference,mc_generated}/`.
-- [ ] rss Hashable feature (subagent, task #1, in progress).
-- [ ] mc hosted-I/O + mathf (subagent, task #2, in progress).
-- [ ] mcc-compile the generated MC (blocked on mc task #2's proven buffer/IO convention).
-- [ ] Phase 2 rss frontend port.
+- [x] Phase-1 `MCRenderer` (`oracle/mc_renderer.py`): elementwise, reduce, select, matmul
+      (nested loops + reduce), 2D broadcast. Dual C/MC generator `oracle/gen_oracle.py`.
+- [x] rss Hashable/Eq feature landed (subagent, task #1) — branch `feat/hashable-map-keys`.
+- [x] mc hosted-I/O + mathf landed (subagent, task #2) — branch `feat/hosted-io-and-mathf`.
+- [x] **All generated MC kernels compile** mcc -> C -> clang.
+- [x] **Numerical round-trip PROVEN** (`oracle/roundtrip.py`): add, mul, affine, relu, sum
+      all produce results identical to tinygrad's CPU backend, through the full
+      tinygrad -> MC -> native pipeline. **Phase 1 complete.**
+- [ ] Phase 2: port the frontend to rss, diffing rendered MC against this oracle.
+
+### MC backend findings — validated against mcc (great hardening signal)
+
+The locked kernel/buffer convention (all confirmed by compiling + running):
+- Global buffers are `PAddr`; accessed via `raw.load/store<T>(pa_offset(buf, idx*itemsize))`
+  inside an `unsafe {}` block. (`*mut f32` indexing is rejected: arrays/slices only.)
+- Reduce accumulators are local fixed arrays (`var acc: [n]f32 = uninit;`) with `acc[i]`.
+- reg-vs-global is decided by **addrspace** (REG vs GLOBAL), not src op (acc reads index
+  through an `AFTER` node, so an op check misses them).
+- Index arithmetic unified to `usize` — MC forbids implicit int<->usize conversion.
+
+MC language gaps the port surfaced (candidate MC hardening features):
+- **`if` is a statement, not an expression** — `WHERE`/select lowered to a generated pure
+  `select_T(c,a,b)` helper. A MC if-/ternary-expression would remove the helper.
+- **Negative float literals & `a + (-c)` are rejected** by the MIR verifier; only
+  subtraction by a positive literal works. Renderer rewrites `ADD(x, neg_const)` ->
+  `(x - |c|)`. General `NEG`/negative-literal support is the obvious MC follow-up.
+
+### rss frontend finding (affects Phase 2 design)
+- rss v0.6 can `match` sum-payload variants but **cannot construct** them (RS0206). `UOp.arg`
+  is heterogeneous; the port must encode it without constructing payload variants (e.g.
+  parallel typed fields, or extend rss — relates to task #5).
 
 ### Phase-1 findings (drive Phase-2 + feed the language tasks)
 

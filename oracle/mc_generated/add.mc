@@ -1,9 +1,13 @@
-export fn E_8n1(data0_8: *mut f32, data1_8: *mut f32, data2_8: *mut f32) -> void {
-  var Lidx0: usize = 0;
-  while Lidx0 < 8 {
-    let val0: f32 = data1_8[Lidx0];
-    let val1: f32 = data2_8[Lidx0];
-    data0_8[Lidx0] = (val0+val1);
-    Lidx0 = Lidx0 + 1;
+import "std/addr.mc";
+
+export fn E_8n1(data0_8: PAddr, data1_8: PAddr, data2_8: PAddr) -> void {
+  unsafe {
+    var Lidx0: usize = 0;
+    while Lidx0 < 8 {
+      let val0: f32 = raw.load<f32>(pa_offset(data1_8, (Lidx0) * 4));
+      let val1: f32 = raw.load<f32>(pa_offset(data2_8, (Lidx0) * 4));
+      raw.store<f32>(pa_offset(data0_8, (Lidx0) * 4), (val0+val1));
+      Lidx0 = Lidx0 + 1;
+    }
   }
 }

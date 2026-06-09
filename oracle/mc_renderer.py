@@ -18,26 +18,43 @@ from collections import defaultdict
 from tinygrad.uop.ops import Ops, UOp, GroupOp, PatternMatcher, UPat, range_str, axis_letters
 from tinygrad.dtype import dtypes, DType, PtrDType, AddrSpace
 from tinygrad.renderer.cstyle import CStyleLanguage, ClangRenderer, base_rewrite
+from tinygrad.helpers import dedup as dedup_dtypes
 
 # MC-specific per-UOp text. Listed FIRST so they shadow the C patterns in base_rewrite.
+# Buffer convention LOCKED against mcc (mc task #2): global buffers are `PAddr`, accessed
+# via `raw.load/store<T>(pa_offset(buf, idx*itemsize))` inside an `unsafe {}` block; reduce
+# accumulators are local fixed arrays accessed with normal `[idx]` indexing.
+# reg-ness is carried by addrspace (REG accumulators vs GLOBAL buffers), NOT by src op:
+# acc reads index through an AFTER node, so an op-based check misses them.
+def _is_reg(u): return u.addrspace == AddrSpace.REG
+
 mc_rewrite = PatternMatcher([
-  # reduce accumulator: C `float acc0[1];` -> MC `var acc0: [1]f32;`
-  (UPat(Ops.DEFINE_REG, name="x"), lambda ctx,x: f"var {ctx[x]}: [{x.max_numel()}]{ctx.render_dtype(x.dtype.base)};"),
+  # reduce accumulator: local fixed array
+  (UPat(Ops.DEFINE_REG, name="x"), lambda ctx,x: f"var {ctx[x]}: [{x.max_numel()}]{ctx.render_dtype(x.dtype.base)} = uninit;"),
 
-  # indexing: C `(buf+idx)` -> MC `buf[idx]`  (lvalue; LOAD/STORE use it directly)
-  (UPat.var("buf").index(UPat.var("idx")), lambda ctx,buf,idx: f"{ctx[buf]}[{ctx[idx]}]"),
+  # indexing: REG accumulator -> `acc[idx]`; GLOBAL buffer -> byte address `pa_offset(buf, idx*size)`
+  (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var("idx")), name="x"), lambda ctx,x,buf,idx:
+    f"{ctx[buf]}[{ctx[idx]}]" if _is_reg(x) else f"pa_offset({ctx[buf]}, ({ctx[idx]}) * {buf.dtype.base.itemsize})"),
 
-  # load/store: the index expr is already the element lvalue in MC
-  (UPat(Ops.LOAD, src=(UPat.var("bidx"),)), lambda ctx,bidx: f"{ctx[bidx]}"),
-  (UPat(Ops.STORE, src=(UPat.var("bidx"), UPat.var("var"))), lambda ctx,bidx,var: f"{ctx[bidx]} = {ctx[var]};"),
+  # load/store: REG reads/writes the array element directly; GLOBAL goes through raw.load/store<T>
+  (UPat(Ops.LOAD, src=(UPat.var("bidx"),), name="x"), lambda ctx,x,bidx:
+    f"{ctx[bidx]}" if _is_reg(bidx) else f"raw.load<{ctx.render_dtype(x.dtype)}>({ctx[bidx]})"),
+  (UPat(Ops.STORE, src=(UPat.var("bidx"), UPat.var("var"))), lambda ctx,bidx,var:
+    f"{ctx[bidx]} = {ctx[var]};" if _is_reg(bidx) else f"raw.store<{ctx.render_dtype(var.dtype)}>({ctx[bidx]}, {ctx[var]});"),
 
   # float const: C `0.0f` -> MC `0.0`
   (UPat(Ops.CONST, dtype=dtypes.float, name="x"), lambda ctx,x: f"{float(x.arg)}"),
 
-  # select: C ternary `(c?a:b)` -> MC if-expression. TODO(mc-task#2): verify the exact
-  # expression-level conditional syntax against mcc; demos show statement `switch`/`if`,
-  # expression form assumed Zig-like here.
-  (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"(if {ctx[x.src[0]]} {{ {ctx[x.src[1]]} }} else {{ {ctx[x.src[2]]} }})"),
+  # select: MC `if` is a STATEMENT, not an expression, so `let x = if..` won't parse.
+  # Lower to a pure helper call (a call IS an expression). Helper emitted by render_kernel.
+  (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"select_{ctx.render_dtype(x.dtype)}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
+
+  # MC rejects negative float literals and `a + -c`. tinygrad lowers `x - c` to `x + (-c)`,
+  # so rewrite ADD-with-negative-float-const back into subtraction by a positive literal.
+  (UPat(Ops.ADD, src=(UPat.var("a"), UPat(Ops.CONST, dtype=dtypes.float, name="c"))),
+   lambda ctx,a,c: f"({ctx[a]} - {-float(c.arg)})" if c.arg < 0 else None),
+  (UPat(Ops.ADD, src=(UPat(Ops.CONST, dtype=dtypes.float, name="c"), UPat.var("a"))),
+   lambda ctx,a,c: f"({ctx[a]} - {-float(c.arg)})" if c.arg < 0 else None),
 ]) + base_rewrite   # ALU / CMP / etc. infix forms are identical in MC, reuse them
 
 class MCRenderer(ClangRenderer):
@@ -57,19 +74,27 @@ class MCRenderer(ClangRenderer):
 
   def render_dtype(self, dt:DType, mutable=True) -> str:
     if isinstance(dt, PtrDType):
-      return f"*mut {self.render_dtype(dt.base)}"
+      return "PAddr"   # global buffers are passed as physical addresses (see buffer convention)
     return self.type_map.get(dt.scalar(), dt.scalar().name)
 
   def render_kernel(self, function_name:str, kernel:list[str], bufs, uops, prefix=None) -> str:
-    # MC: `export fn NAME(name: type, ...) -> void { ... }`
+    # MC: `export fn NAME(name: PAddr, ...) -> void { unsafe { ... } }`
     params = []
     for name,(u,mutable) in bufs:
-      if isinstance(u.dtype, PtrDType): t = self.render_dtype(u.dtype, mutable)
-      elif u.dtype == dtypes.int: t = "i32"
+      if isinstance(u.dtype, PtrDType): t = "PAddr"
+      elif u.dtype == dtypes.int: t = "usize"
       else: t = self.render_dtype(u.dtype)
       params.append(f"{name}: {t}")
-    body = "\n".join(kernel)
-    return f"export fn {function_name}({', '.join(params)}) -> void {{\n{body}\n}}"
+    body = "\n".join("  "+ln for ln in kernel)  # extra indent: body lives in an unsafe block
+    # emit a pure select helper per dtype used by WHERE (MC `if` is a statement, not an expr)
+    helpers = ""
+    for dt in dedup_dtypes(w.dtype for w in uops if w.op is Ops.WHERE):
+      ty = self.render_dtype(dt)
+      helpers += (f"fn select_{ty}(c: bool, a: {ty}, b: {ty}) -> {ty} {{\n"
+                  f"  if c {{ return a; }} else {{ return b; }}\n}}\n\n")
+    return (f'import "std/addr.mc";\n\n{helpers}'
+            f"export fn {function_name}({', '.join(params)}) -> void {{\n"
+            f"  unsafe {{\n{body}\n  }}\n}}")
 
   def _render(self, uops:list[UOp]) -> tuple[str, list[str], list]:
     # MC-flavored copy of CStyleLanguage._render: `let/var name: T = expr;` decls and

@@ -1,0 +1,95 @@
+// Faithful port of renderer/cstyle.py's approach: a per-UOp render map over a *lowered kernel
+// graph* (LOAD/CONST/ALU/STORE inside a RANGE), instead of fixed per-shape templates. Each
+// opcode renders to a C/mc fragment; STORE drives the loop body. The kernel graph is a flat
+// arena (op, a, b, arg). Demo lowers out[i] = (x[i]+2)*3 and runs it via mc.
+
+features: local
+
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+// op codes: 0=Load 1=Const 2=Add 3=Mul 4=Store
+fn LOAD()->Int{return 0}
+fn CONST()->Int{return 1}
+fn ADD()->Int{return 2}
+fn MUL()->Int{return 3}
+fn STORE()->Int{return 4}
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+
+// the per-UOp render map: lower one value node to a C expression (LOAD reads data1[ridx])
+fn render_val(ops: read List<Int>, a: read List<Int>, b: read List<Int>, arg: read List<Int>, idx: Int) -> fresh String {
+    let op = iget(l: read ops, i: idx)
+    if op == LOAD() { return cat(a: read "", b: read "raw.load<f32>(pa_offset(data1, ridx * 4))") }
+    if op == CONST() { return cat(a: read Int.to_string(value: read iget(l: read arg, i: idx)), b: read ".0") }
+    let la = render_val(ops: read ops, a: read a, b: read b, arg: read arg, idx: iget(l: read a, i: idx))
+    let lb = render_val(ops: read ops, a: read a, b: read b, arg: read arg, idx: iget(l: read b, i: idx))
+    let mut sym = " + "
+    if op == MUL() { sym = " * " }
+    return cat3(a: read "(", b: read cat3(a: read la, b: read sym, c: read lb), c: read ")")
+}
+
+fn render_kernel(ops: read List<Int>, a: read List<Int>, b: read List<Int>, arg: read List<Int>, store_idx: Int, n: Int) -> fresh String {
+    // STORE's value child is a[store_idx]
+    let body = render_val(ops: read ops, a: read a, b: read b, arg: read arg, idx: iget(l: read a, i: store_idx))
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    pl(lines: mut lines, t: read "export fn E(data0: PAddr, data1: PAddr) -> void {")
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var ridx: usize = 0;")           // RANGE
+    pl(lines: mut lines, t: read cat3(a: read "    while ridx < ", b: read String.from_int(value: n), c: read " {"))
+    pl(lines: mut lines, t: read cat3(a: read "      raw.store<f32>(pa_offset(data0, ridx * 4), ", b: read body, c: read ");"))  // STORE
+    pl(lines: mut lines, t: read "      ridx = ridx + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    pl(lines: mut lines, t: read cat3(a: read "  var x: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read cat3(a: read "  var o: [", b: read String.from_int(value: n), c: read "]f32 = uninit;"))
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, pa((&x[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 1; }"))
+    pl(lines: mut lines, t: read "  E(pa((&o[0]) as usize), pa((&x[0]) as usize));")
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, pa((&o[0]) as usize), ", b: read String.from_int(value: n * 4), c: read ") { return 9; }"))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn emit(ops: mut List<Int>, a: mut List<Int>, b: mut List<Int>, arg: mut List<Int>, o: Int, x: Int, y: Int, g: Int) -> Int {
+    let idx = List.len(list: read ops)
+    List.push(list: mut ops, value: read o)
+    List.push(list: mut a, value: read x)
+    List.push(list: mut b, value: read y)
+    List.push(list: mut arg, value: read g)
+    return idx
+}
+
+fn main() -> Unit {
+    // lowered kernel for out[i] = (x[i] + 2) * 3
+    let ops = List.new<Int>()
+    let a = List.new<Int>()
+    let b = List.new<Int>()
+    let arg = List.new<Int>()
+    let ld = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: LOAD(),  x: -1, y: -1, g: 0)   // 0
+    let c2 = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: CONST(), x: -1, y: -1, g: 2)    // 1
+    let ad = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: ADD(),   x: ld, y: c2, g: 0)    // 2
+    let c3 = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: CONST(), x: -1, y: -1, g: 3)    // 3
+    let ml = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: MUL(),   x: ad, y: c3, g: 0)    // 4
+    let st = emit(ops: mut ops, a: mut a, b: mut b, arg: mut arg, o: STORE(), x: ml, y: -1, g: 0)    // 5
+    Log.write(message: read render_kernel(ops: read ops, a: read a, b: read b, arg: read arg, store_idx: st, n: 6))
+    return Unit
+}

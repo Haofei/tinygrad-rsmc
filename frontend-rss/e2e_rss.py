@@ -104,4 +104,6 @@ if __name__ == "__main__":
   ok &= check_program("train/MLP (2-2-1 relu, fit |x0-x1|)", mlp_prog, [], [0.0, 1.0, 2.0, 2.0], tol=2e-2)
   # AUTOMATIC reverse-mode autograd: engine generates the backward pass for L=a*b+a
   ok &= check_program("autograd (auto backward, dL/da,dL/db)", rss_render("autograd.rss"), [], [4.0, 2.0])
+  # AUTOGRAD-DRIVEN MLP: 2-2-1 relu net trained by SGD with engine-generated gradients
+  ok &= check_program("autograd MLP (engine grads, fit |x0-x1|)", rss_render("mlp_autograd.rss"), [], [0.0, 1.0, 2.0, 2.0], tol=2e-2)
   sys.exit(0 if ok else 1)

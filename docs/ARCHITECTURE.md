@@ -181,7 +181,8 @@ This is a partial port in active progress. Rough state of the tinygrad pipeline:
 | SGD training loop (end-to-end) | ✅ rss emits a full MC trainer; **linear regression converges** (fit 2x+1 -> w=2,b=1) |
 | train an **MLP** (2-2-1 relu + backprop + SGD) through rss->mc | ✅ rss emits the trainer; **fits |x0-x1|**, preds ~[0,1,2,2] |
 | automatic autograd (reverse-mode) | ✅ engine in `autograd.rss`: builds a scalar-op DAG, **auto-generates the backward pass** (add/mul/sub/relu vjp rules); verified dL/da,dL/db |
-| autograd-driven MLP training (grads from the engine, not hand-coded) | ⏳ next: build MLP on the autograd tape |
+| autograd-driven MLP training (grads from the engine) | ✅ `mlp_autograd.rss`: 2-2-1 relu MLP on the tape; **all grads engine-generated**; trains to ~[0,1,2,2] |
+| full Tensor API / PatternMatcher rewrite engine / lazy scheduling+fusion / broad op+dtype+movement coverage | ❌ not ported (the large remaining body of tinygrad) |
 
 Honest estimate: low-single-digit % of a complete tinygrad port. The backend half and the
 render stage are real and verified; the large frontend (graph/rewrite/schedule/Tensor/grad)

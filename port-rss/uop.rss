@@ -1,77 +1,42 @@
-// Port of the CORE of tinygrad/uop/ops.py: the UOp IR node + its structural identity.
-// tinygrad's UOp is metaclass-interned (uop/ops.py:98-124): two structurally-equal UOps are
-// the SAME object (eq=False + a ucache keyed on (op,dtype,src,arg,tag)). This ports that
-// defining behavior: UOp is a recursive managed node deriving Eq+Hash, so structural equality
-// and dedup work -- the prerequisite for interning -- using the rss Hashable feature, with a
-// Set as the intern cache (UOpMetaClass.ucache).
-//
-// Faithful in shape: op:Ops, dtype, recursive src:List<UOp>, arg. Simplifications (noted in
-// PORT_STATUS): dtype is its name string; arg is an Int; the Ops set is a starting subset.
-// Internal nodes are built INLINE (not via uadd(a,b) helpers) due to an rss codegen bug:
-// pushing a `read`-PARAM managed value into an owned collection emits ill-typed Rust, so
-// children must be managed `let` bindings in the same scope (leaf construction is a fn).
-//
-//   e1 = (2 + 3) * 4 ;  e2 = (2 + 3) * 4  (identical) ;  e3 = (2 + 3) * 5  (different)
-
+// Port of the CORE of tinygrad/uop/ops.py: the UOp IR node + structural identity/interning.
+// tinygrad's UOp is metaclass-interned (uop/ops.py:98-124): structurally-equal UOps are the
+// SAME object. UOp here is a recursive managed node (op/dtype/src/arg) deriving Eq+Hash, so
+// structural equality + Set dedup reproduce that behavior (rss Hashable feature).
+// uadd/umul build internal nodes from `read` UOp children -- this now works after fixing the
+// rss read-param->owned-collection codegen bug (rsscript: lower_call_arg + retain arms).
+// Faithful in shape; simplifications noted in PORT_STATUS (dtype as name, arg as Int, Ops subset).
+//   e1 = (2+3)*4 ; e2 = (2+3)*4 (identical) ; e3 = (2+3)*5 (different) -> 2 unique interned nodes
 features: local
-
 sum Ops derives(Clone, Eq, Hash) { Const Add Mul Max }
-
 struct UOp derives(Clone, Eq, Hash) {
     op: Ops
     dtype: String
     src: List<UOp>
     arg: Int
 }
-
 fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, dtype: "float", src: List.new<UOp>(), arg: v) }
-
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, dtype: "float", src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, dtype: "float", src: take s, arg: 0)
+}
 fn main() -> Unit {
-    // e1 = (2 + 3) * 4
-    let a2 = uconst(v: 2)
-    let a3 = uconst(v: 3)
-    local s1 = List.new<UOp>()
-    List.push(list: mut s1, value: read a2)
-    List.push(list: mut s1, value: read a3)
-    let add1 = UOp(op: Add, dtype: "float", src: take s1, arg: 0)
-    let a4 = uconst(v: 4)
-    local s2 = List.new<UOp>()
-    List.push(list: mut s2, value: read add1)
-    List.push(list: mut s2, value: read a4)
-    let e1 = UOp(op: Mul, dtype: "float", src: take s2, arg: 0)
-
-    // e2 = (2 + 3) * 4  (structurally identical, separately constructed)
-    let b2 = uconst(v: 2)
-    let b3 = uconst(v: 3)
-    local s3 = List.new<UOp>()
-    List.push(list: mut s3, value: read b2)
-    List.push(list: mut s3, value: read b3)
-    let add2 = UOp(op: Add, dtype: "float", src: take s3, arg: 0)
-    let b4 = uconst(v: 4)
-    local s4 = List.new<UOp>()
-    List.push(list: mut s4, value: read add2)
-    List.push(list: mut s4, value: read b4)
-    let e2 = UOp(op: Mul, dtype: "float", src: take s4, arg: 0)
-
-    // e3 = (2 + 3) * 5  (different)
-    let c2 = uconst(v: 2)
-    let c3 = uconst(v: 3)
-    local s5 = List.new<UOp>()
-    List.push(list: mut s5, value: read c2)
-    List.push(list: mut s5, value: read c3)
-    let add3 = UOp(op: Add, dtype: "float", src: take s5, arg: 0)
-    let c5 = uconst(v: 5)
-    local s6 = List.new<UOp>()
-    List.push(list: mut s6, value: read add3)
-    List.push(list: mut s6, value: read c5)
-    let e3 = UOp(op: Mul, dtype: "float", src: take s6, arg: 0)
-
+    let e1 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    let e2 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    let e3 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 5))
     if e1 == e2 { Log.write(message: read "e1 == e2 (structural identity): yes") }
     if e1 == e3 { Log.write(message: read "e1 == e3: yes (unexpected)") }
     let seen = Set.new<UOp>()
     Set.insert(set: mut seen, value: read e1)
     Set.insert(set: mut seen, value: read e2)
     Set.insert(set: mut seen, value: read e3)
-    Log.write(message: read String.concat(left: read "unique UOps after interning e1,e2,e3 = ", right: read Int.to_string(value: read Set.len(set: read seen))))
+    Log.write(message: read String.concat(left: read "unique UOps = ", right: read Int.to_string(value: read Set.len(set: read seen))))
     return Unit
 }

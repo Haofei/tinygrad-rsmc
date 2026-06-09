@@ -16,7 +16,7 @@ earlier was a mischaracterization.
 |---|---|---|
 | `dtype.py` | scalar `DType`+`itemsize`; full `dtypes` namespace incl **fp8** (176-197); `is_float/is_int/is_unsigned/is_bool`; `can_lossless_cast`; **promo lattice + `least_upper_dtype`** (235-249) | ✅ `dtype.rss`, all cross-checked equal to tinygrad |
 | `helpers.py` | `prod`, `ceildiv`, `round_up`, `all_same`, `dedup`, `argsort` (+ floor-div) | ✅ `helpers.rss`, all cross-checked equal to tinygrad |
-| `uop/ops.py` (CORE) | `UOp` as a recursive managed node (op/dtype/src/arg) + **structural identity / interning** (UOpMetaClass.ucache behavior) via derived Eq+Hash and a Set cache | ✅ `uop.rss`: e1==e2 for identical graphs; interning e1,e2,e3 -> 2 unique nodes |
+| `uop/ops.py` (CORE) | `UOp` recursive managed node + **structural identity / interning** (UOpMetaClass.ucache) via derived Eq+Hash + Set; ergonomic `uadd`/`umul` builders | ✅ `uop.rss`: e1==e2 for identical graphs; interning e1,e2,e3 -> 2 unique nodes |
 
 Validation: `dtype.rss` prints float32.priority=13, itemsize=4, bool.itemsize=1,
 is_float(float32)=yes, is_float(int32)=no, is_int(int32)=yes, is_unsigned(uint8)=yes —
@@ -42,7 +42,7 @@ early single-digit-percent and is not complete.**
 - No `;`-multi-statement lines (one statement per line).
 - ~~parenthesized sub-expressions in arithmetic rejected~~ — FIXED (see below).
 - No struct-field shadowing across sibling blocks (function-wide unique locals, by design).
-- **rss codegen bug**: pushing a `read`-PARAM managed value into an owned collection (`List.push(value: read param)`) emits ill-typed Rust (RS1101/RS1102 E0308) -- it stores the borrow where an owned value is expected; should auto-clone (retain) or be a clean diagnostic. Forces recursive-IR nodes to be built inline from managed `let` children, not via `fn build(a,b)` helpers. Also: a `let mut s = <read-param>` then reassign triggers the same. (Real bug, deeper than the parser fix; documented, worked around.)
+- ~~rss codegen bug: read-PARAM pushed into an owned collection emits `&&T` (E0308)~~ -- **FIXED** (rsscript: lower_call_arg read-param no longer double-borrowed, mirrors the mut-param case). uadd/umul-style recursive-IR helpers now work; regression fixture added; cargo test green.
 - `derives(Clone)` is accepted but there is no callable `.clone()`/`Clone.clone(..)` in source -> cannot copy a managed value; blocks `scalar()`/`vec()` clones (worked around via reconstruction-by-name). Candidate rss feature (larger than a bug fix).
 - rss `/` truncates toward zero; Python `//` floors -> ceildiv/round_up need an explicit floordiv (handled in helpers.rss).
 - These are exactly the frictions to fix to make a real tinygrad port tractable in rss.

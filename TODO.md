@@ -45,7 +45,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - 🟡 `uop/divandmod.py` (116) → `divandmod.rss` — **floor div/mod (Python semantics) + folding rules** (const-fold, x//1, x%1, (x*c)//c, (x*c)%c, c|lm: (x*lm+r)//c→x*(lm/c)+r//c, %→r%c); matches tinygrad. **Remaining:** gcd_with_remainder, congruence folding, nested mod.
 - 🟡 `uop/decompositions.py` (572) → `decompositions.rss` — **transcendental decompositions as UOp rewrites** (EXP→EXP2·log2e, LOG→LOG2·ln2, POW→exp2(log2·b), TAN→sin/sin(x+π/2)), constants match tinygrad. **Remaining:** full ID set, range reduction for sin, fp edge cases.
 - 🟡 `uop/spec.py` (280) + `validate.py` (78) → `spec.rss` — **structural validation**: per-op arity table + ALU same-dtype + WHERE bool-cond checks, recursive over the graph (valid/invalid cases match). **Remaining:** full per-op dtype/shape spec rules, z3 symbolic bound checking.
-- ⬜ `uop/__init__.py` (145).
+- 🟡 `uop/__init__.py` (145) → covered by `ops_enum.rss` — its substance is `FastEnum` + the `Ops` enum (all 93 ops ported). **Remaining:** FastEnum auto-numbering is a Python metaclass detail, N/A for rss.
 
 ## codegen/, ~1000 LOC in-scope (opt-search excluded)
 - 🟡 lowering to kernels → `render*.rss` (elementwise/reduce/matmul + relu/div/neg/max/exp/log/tanh emitters), `buffer_reuse.rss` (liveness memory planner), **`linearizer.rss`** (toposort + priority-heap ordering -> SSA instruction stream, RANGE/ENDRANGE placement; matches tinygrad ordering). **Remaining:** `simplify.py` (157), `late/devectorizer.py` (390), `late/expander.py` (160), `late/regalloc.py` (137), gpudims (GPU-only).

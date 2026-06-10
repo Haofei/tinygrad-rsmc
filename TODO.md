@@ -23,10 +23,10 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - [x] mc: hosted I/O, negative float literals, float-array arithmetic, exp/log/tanh intrinsics
 - [x] **mc: `UnsupportedCEmission` on nested call in a call arg** — FIXED (modern-c 05ff744): float_literal + raw.load<T> now recognized as float; zig test 142/142 green
 - [x] rss: `Int.to_float` conversion — DONE (rss d9387f8): reg_vm + .rssi sig + runtime ABI; full cargo test green
-- [ ] rss: `let mut x = <read-param>` clone-on-bind (codegen E0308)
+- [x] rss: `let mut x = <read-param>` clone-on-bind — DONE (rss f5fab92)
 - [x] rss: managed-field clone — DONE (rss 7358f50): Clone protocol + Clone.clone<T>/String.clone; full suite green; unblocked generic vec() + PtrDType
 - [x] rss: `==` on a `read` enum param — DONE (rss 5dd4063)
-- [ ] rss: `List.get` element-type inference on struct-field lists
+- [x] rss: `List.get` element-type inference on struct-field lists — DONE (rss f5fab92)
 - [x] rss: payload-less sum value params — DONE (rss 5dd4063)
 
 ---

@@ -1,0 +1,339 @@
+// Numeric port of the REMAINING tinygrad nn optimizers + normalization layers, operating
+// directly on dense List<Float> vectors (the pure-numeric path, no lazy graph / codegen).
+// Companion to nn_layers.rss (SGD-plain/Adam/LayerNorm/fsqrt) and nn_conv.rss (BatchNorm).
+//
+// Faithful to /home/zoe/tinygrad/tinygrad/nn/optim.py and nn/__init__.py:
+//   - SGD (momentum + weight_decay + nesterov) one step.  SGD == LARS(tcoef=0, classic=True,
+//       pre_wd=True). With velocity b seeded 0 on the first step:
+//         g = g + wd*p              (pre_wd)
+//         g = g * r * lr  (r=1)     (classic: post-lr scale)
+//         b = momentum*0 + g = g
+//         g = g + momentum*b  (nesterov)  else  g = b
+//         p' = p - g
+//   - AdamW (== LAMB(adam=True)) one step (t=1, m=v=0 seeds):
+//         m = (1-b1)*g ; v = (1-b2)*g^2
+//         mhat = m/(1-b1_t) ; vhat = v/(1-b2_t)   with b1_t=b1, b2_t=b2 after one *=
+//         up = mhat/(sqrt(vhat)+eps) + wd*p       (decoupled / "decoupled" weight decay)
+//         p' = p - lr*r*up   (adam=True -> r=1)
+//   - LARS (the trust-ratio optimizer, classic=True default, tcoef=0.001) one step:
+//         r1 = ||p||_2 ; r2 = ||g||_2
+//         r  = tcoef*r1/(r2 + wd*r1)   (when r1>0 and r2>0, else 1.0)
+//         then same body as SGD (pre_wd, classic post-lr scale by r, momentum).
+//   - GroupNorm: reshape (N,C,*) -> (N, num_groups, -1), layernorm over the last axis (group
+//       channels + spatial, biased var), reshape back, then per-channel affine x*w + b.
+//   - RMSNorm: x / sqrt(mean(x^2)+eps) * weight   (per last-dim row).
+//
+// rss gaps used (see BRIEFING.md): no Int->Float on managed reads (we use Int.to_float where it
+// resolves, else Float accumulators), no sqrt intrinsic (fsqrt Newton, copied from nn_layers),
+// list returns via out-params, one statement per line, binary exprs bound to a let before push.
+
+// ---------- Float helpers (same numeric style as nn_layers.rss / nn_conv.rss) ----------
+
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+// Newton sqrt: y_{k+1} = 0.5*(y + a/y), seed 1.0, 20 iters. sqrt(0)=0.
+fn fsqrt(a: Float) -> Float {
+    if a <= 0.0 { return 0.0 }
+    let mut y = 1.0
+    let mut k = 0
+    while k < 20 {
+        let ny = 0.5 * (y + a / y)
+        y = ny
+        k = k + 1
+    }
+    return y
+}
+
+// ==========================================================================================
+// SGD step: momentum + weight_decay + nesterov, velocity b seeded 0 (first step).
+// ==========================================================================================
+// nesterov is passed as 1 (true) / 0 (false) to avoid a bare Bool param dance.
+fn sgd_step(p: read List<Float>, g: read List<Float>, lr: Float, momentum: Float,
+            wd: Float, nesterov: Int, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read p)
+    let mut i = 0
+    while i < n {
+        let pi = fget(l: read p, i: i)
+        let gi = fget(l: read g, i: i)
+        let gwd = gi + wd * pi
+        let gscaled = gwd * lr
+        let b = gscaled
+        let mut upd = b
+        if nesterov == 1 {
+            upd = gscaled + momentum * b
+        }
+        let nv = pi - upd
+        List.push(list: mut out, value: read nv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ==========================================================================================
+// AdamW step (t=1, decoupled weight decay), m=v=0 seeds. r=1 (adam path).
+// ==========================================================================================
+fn adamw_step(p: read List<Float>, g: read List<Float>, lr: Float, b1: Float, b2: Float,
+              eps: Float, wd: Float, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read p)
+    let mut i = 0
+    while i < n {
+        let pi = fget(l: read p, i: i)
+        let gi = fget(l: read g, i: i)
+        let m = (1.0 - b1) * gi
+        let v = (1.0 - b2) * (gi * gi)
+        let mhat = m / (1.0 - b1)
+        let vhat = v / (1.0 - b2)
+        let denom = fsqrt(a: vhat) + eps
+        let adam_up = mhat / denom
+        let up = adam_up + wd * pi
+        let upd = lr * up
+        let nv = pi - upd
+        List.push(list: mut out, value: read nv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ==========================================================================================
+// LARS step (trust-ratio, classic=True, momentum, velocity b seeded 0). tcoef!=0 path.
+// ==========================================================================================
+fn lars_step(p: read List<Float>, g: read List<Float>, lr: Float, momentum: Float,
+             wd: Float, tcoef: Float, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read p)
+    // r1 = ||p||_2, r2 = ||g||_2
+    let mut s1 = 0.0
+    let mut s2 = 0.0
+    let mut k = 0
+    while k < n {
+        let pk = fget(l: read p, i: k)
+        let gk = fget(l: read g, i: k)
+        s1 = s1 + pk * pk
+        s2 = s2 + gk * gk
+        k = k + 1
+    }
+    let r1 = fsqrt(a: s1)
+    let r2 = fsqrt(a: s2)
+    let mut r = 1.0
+    if r1 > 0.0 {
+        if r2 > 0.0 {
+            let trust = tcoef * r1 / (r2 + wd * r1)
+            r = trust
+        }
+    }
+    let mut i = 0
+    while i < n {
+        let pi = fget(l: read p, i: i)
+        let gi = fget(l: read g, i: i)
+        let gwd = gi + wd * pi
+        let gscaled = gwd * r * lr
+        let b = gscaled
+        let upd = b
+        let nv = pi - upd
+        List.push(list: mut out, value: read nv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ==========================================================================================
+// GroupNorm: x flat (C*spatial) for a single batch element. num_groups divides C. Each group
+// holds gc = C/num_groups channels; normalize over (group channels + spatial) jointly (biased
+// var), then per-channel affine. weight/bias are length C.
+// ==========================================================================================
+fn groupnorm(x: read List<Float>, c: Int, spatial: Int, num_groups: Int, eps: Float,
+             weight: read List<Float>, bias: read List<Float>, out: mut List<Float>) -> Unit {
+    let gc = c / num_groups
+    let group_len = gc * spatial
+    // First normalize per group into a temp (same order as x: channel-major within batch).
+    let normed = List.new<Float>()
+    let mut grp = 0
+    while grp < num_groups {
+        let base = grp * group_len
+        // mean / biased var over the group_len elements
+        let mut sum = 0.0
+        let mut nf = 0.0
+        let mut a = 0
+        while a < group_len {
+            sum = sum + fget(l: read x, i: base + a)
+            nf = nf + 1.0
+            a = a + 1
+        }
+        let mean = sum / nf
+        let mut vs = 0.0
+        let mut b = 0
+        while b < group_len {
+            let d = fget(l: read x, i: base + b) - mean
+            vs = vs + d * d
+            b = b + 1
+        }
+        let var = vs / nf
+        let denom = fsqrt(a: var + eps)
+        let mut e = 0
+        while e < group_len {
+            let nv = (fget(l: read x, i: base + e) - mean) / denom
+            List.push(list: mut normed, value: read nv)
+            e = e + 1
+        }
+        grp = grp + 1
+    }
+    // Per-channel affine: element at (channel ch, spatial s) uses weight[ch], bias[ch].
+    let mut ch = 0
+    while ch < c {
+        let wc = fget(l: read weight, i: ch)
+        let bc = fget(l: read bias, i: ch)
+        let cbase = ch * spatial
+        let mut s = 0
+        while s < spatial {
+            let nv = fget(l: read normed, i: cbase + s)
+            let yv = nv * wc + bc
+            List.push(list: mut out, value: read yv)
+            s = s + 1
+        }
+        ch = ch + 1
+    }
+    return Unit
+}
+
+// ==========================================================================================
+// RMSNorm over a single row of length dim: x / sqrt(mean(x^2)+eps) * weight.
+// ==========================================================================================
+fn rmsnorm_row(x: read List<Float>, base: Int, dim: Int, eps: Float,
+               weight: read List<Float>, out: mut List<Float>) -> Unit {
+    let mut ss = 0.0
+    let mut nf = 0.0
+    let mut i = 0
+    while i < dim {
+        let xv = fget(l: read x, i: base + i)
+        ss = ss + xv * xv
+        nf = nf + 1.0
+        i = i + 1
+    }
+    let ms = ss / nf
+    let denom = fsqrt(a: ms + eps)
+    let mut j = 0
+    while j < dim {
+        let xv = fget(l: read x, i: base + j)
+        let wv = fget(l: read weight, i: j)
+        let nv = xv / denom * wv
+        List.push(list: mut out, value: read nv)
+        j = j + 1
+    }
+    return Unit
+}
+
+// RMSNorm over a batch of rows (rows x dim, row-major).
+fn rmsnorm(x: read List<Float>, rows: Int, dim: Int, eps: Float,
+           weight: read List<Float>, out: mut List<Float>) -> Unit {
+    let mut r = 0
+    while r < rows {
+        let base = r * dim
+        rmsnorm_row(x: read x, base: base, dim: dim, eps: eps, weight: read weight, out: mut out)
+        r = r + 1
+    }
+    return Unit
+}
+
+// ---------- printing ----------
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    // ===== SGD step: p=[1,2,3], g=[0.1,0.2,0.3], lr=0.1, momentum=0.9, wd=0.01 =====
+    let p = List.new<Float>()
+    pushf(l: mut p, v: 1.0)
+    pushf(l: mut p, v: 2.0)
+    pushf(l: mut p, v: 3.0)
+    let g = List.new<Float>()
+    pushf(l: mut g, v: 0.1)
+    pushf(l: mut g, v: 0.2)
+    pushf(l: mut g, v: 0.3)
+
+    // nesterov=True
+    let sgd_n = List.new<Float>()
+    sgd_step(p: read p, g: read g, lr: 0.1, momentum: 0.9, wd: 0.01, nesterov: 1, out: mut sgd_n)
+    show_vec(label: read "SGD(mom,wd,nesterov) = ", v: read sgd_n)
+    Log.write(message: read "  tinygrad:            [0.9791, 1.9582, 2.9373]")
+
+    // nesterov=False
+    let sgd_p = List.new<Float>()
+    sgd_step(p: read p, g: read g, lr: 0.1, momentum: 0.9, wd: 0.01, nesterov: 0, out: mut sgd_p)
+    show_vec(label: read "SGD(mom,wd,plain)    = ", v: read sgd_p)
+    Log.write(message: read "  tinygrad:            [0.989, 1.978, 2.967]")
+
+    // ===== AdamW step (t=1): lr=0.1, b1=0.9, b2=0.999, eps=1e-8, wd=0.01 =====
+    let aw = List.new<Float>()
+    adamw_step(p: read p, g: read g, lr: 0.1, b1: 0.9, b2: 0.999, eps: 0.00000001, wd: 0.01, out: mut aw)
+    show_vec(label: read "AdamW                = ", v: read aw)
+    Log.write(message: read "  tinygrad:            [0.8990006, 1.8980007, 2.8970006]")
+
+    // ===== LARS step: lr=0.1, momentum=0.9, wd=1e-4, tcoef=0.001 =====
+    let la = List.new<Float>()
+    lars_step(p: read p, g: read g, lr: 0.1, momentum: 0.9, wd: 0.0001, tcoef: 0.001, out: mut la)
+    show_vec(label: read "LARS(trust-ratio)    = ", v: read la)
+    Log.write(message: read "  tinygrad:            [0.9999, 1.9998, 2.9997]")
+
+    // ===== GroupNorm: C=4, spatial=2, num_groups=2, eps=1e-5 =====
+    // x (channel-major) = [[1,2],[3,4],[5,6],[7,8]] flat = [1,2,3,4,5,6,7,8]
+    // weight=[1,2,0.5,1.5], bias=[0,0.1,-0.1,0.2]
+    let gx = List.new<Float>()
+    pushf(l: mut gx, v: 1.0)
+    pushf(l: mut gx, v: 2.0)
+    pushf(l: mut gx, v: 3.0)
+    pushf(l: mut gx, v: 4.0)
+    pushf(l: mut gx, v: 5.0)
+    pushf(l: mut gx, v: 6.0)
+    pushf(l: mut gx, v: 7.0)
+    pushf(l: mut gx, v: 8.0)
+    let gw = List.new<Float>()
+    pushf(l: mut gw, v: 1.0)
+    pushf(l: mut gw, v: 2.0)
+    pushf(l: mut gw, v: 0.5)
+    pushf(l: mut gw, v: 1.5)
+    let gb = List.new<Float>()
+    pushf(l: mut gb, v: 0.0)
+    pushf(l: mut gb, v: 0.1)
+    pushf(l: mut gb, v: -0.1)
+    pushf(l: mut gb, v: 0.2)
+    let gout = List.new<Float>()
+    groupnorm(x: read gx, c: 4, spatial: 2, num_groups: 2, eps: 0.00001, weight: read gw, bias: read gb, out: mut gout)
+    show_vec(label: read "GroupNorm            = ", v: read gout)
+    Log.write(message: read "  tinygrad:            [-1.3416355, -0.4472118, 0.9944237, 2.7832708, -0.7708178, -0.3236059, 0.8708178, 2.2124531]")
+
+    // ===== RMSNorm: rows=2, dim=4, eps=1e-6, weight=[1,0.5,2,1.5] =====
+    // x = [[1,2,3,4],[5,6,7,8]]
+    let rx = List.new<Float>()
+    pushf(l: mut rx, v: 1.0)
+    pushf(l: mut rx, v: 2.0)
+    pushf(l: mut rx, v: 3.0)
+    pushf(l: mut rx, v: 4.0)
+    pushf(l: mut rx, v: 5.0)
+    pushf(l: mut rx, v: 6.0)
+    pushf(l: mut rx, v: 7.0)
+    pushf(l: mut rx, v: 8.0)
+    let rw = List.new<Float>()
+    pushf(l: mut rw, v: 1.0)
+    pushf(l: mut rw, v: 0.5)
+    pushf(l: mut rw, v: 2.0)
+    pushf(l: mut rw, v: 1.5)
+    let rout = List.new<Float>()
+    rmsnorm(x: read rx, rows: 2, dim: 4, eps: 0.000001, weight: read rw, out: mut rout)
+    show_vec(label: read "RMSNorm              = ", v: read rout)
+    Log.write(message: read "  tinygrad:            [0.3651484, 0.3651484, 2.1908903, 2.1908903, 0.7580981, 0.4548588, 2.1226745, 1.8194354]")
+    return Unit
+}

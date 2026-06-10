@@ -67,8 +67,8 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `schedule/multi.py` (175), `allreduce.py` (62) — multi-GPU, out of scope.
 
 ## nn/, ~900 in-scope
-- 🟡 `nn/optim.py` (179) → `train.rss`,`nn_layers.rss` — SGD step (to convergence) + **SGD/Adam update steps validated vs tinygrad** (`nn_layers.rss`). **Remaining:** momentum/weight-decay, AdamW/LARS as stateful classes.
-- 🟡 `nn/__init__.py` (419) → `nn_layers.rss`,`nn_conv.rss` — **Linear, relu, layernorm + Conv2d (single/multi-ch), BatchNorm (inference), Embedding** as layer structs, validated vs tinygrad. **Remaining:** GroupNorm/InstanceNorm, training-mode BN stats, weight init.
+- ✅ `nn/optim.py` (179) → `nn_layers.rss`,`train.rss`,`nn_more.rss` — SGD (+momentum/weight_decay/nesterov), Adam, AdamW, LARS/LAMB trust-ratio; SGD trains to convergence. (Validated vs nn.optim.*)
+- ✅ `nn/__init__.py` (419) → `nn_layers.rss`,`nn_conv.rss`,`nn_more.rss` — Linear, relu, LayerNorm, Conv2d, BatchNorm, Embedding, GroupNorm/InstanceNorm, RMSNorm (validated vs nn.*).
 - ✅ `nn/state.py` (294) → `nn_state.rss` — get/load_state_dict round-trip. (Out of scope: safetensors/torch binary formats = host file I/O.)
 - ⛔ `nn/onnx.py` (1314) — ONNX import; out of scope.
 

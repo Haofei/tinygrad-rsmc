@@ -9,11 +9,11 @@ Status key: ✅ complete · 🟡 partial (core ported, methods/behaviour remain)
 Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first**, then continue.
 "Done" = every in-scope file is ✅ (and the rss/mc fixes it required are landed).
 
-> **STATUS: NOT COMPLETE — ~45% of the in-scope target.** 37 rss port files exist and
-> run/validate against tinygrad, but **no large file is ✅ fully complete** (cores done, full
-> method/rule sets remain). Tally: 0 ✅ · 18 🟡 partial · 2 ⬜ not started · ⛔ as marked.
-> rss/mc fixes: 5 landed (incl. mc nested-call) · Int→Float verifying · ~5 pending. The items
-> below are the remaining work; the port is **not finished**.
+> **STATUS: IN PROGRESS — ~60% of the in-scope target.** 45 rss port files, every
+> in-scope file ported at least in core and validated against tinygrad; the full lazy
+> pipeline + autodiff + codegen + schedule + realize execute end-to-end via mc. rss/mc
+> fixes: 11 landed (2 pending). Remaining = depth (full method/rule surfaces of the
+> big files), not breadth. The port is **not 100% complete**.
 
 ---
 ## rss/mc fixes (land as they block the port)

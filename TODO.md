@@ -65,7 +65,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 
 ## nn/, ~900 in-scope
 - 🟡 `nn/optim.py` (179) → `train.rss`,`nn_layers.rss` — SGD step (to convergence) + **SGD/Adam update steps validated vs tinygrad** (`nn_layers.rss`). **Remaining:** momentum/weight-decay, AdamW/LARS as stateful classes.
-- 🟡 `nn/__init__.py` (419) → `nn_layers.rss` — **Linear forward, relu, layernorm validated vs tinygrad** (numeric, fsqrt via Newton). **Remaining:** Conv2d, BatchNorm, Embedding as classes.
+- 🟡 `nn/__init__.py` (419) → `nn_layers.rss`,`nn_conv.rss` — **Linear, relu, layernorm + Conv2d (single/multi-ch), BatchNorm (inference), Embedding** as layer structs, validated vs tinygrad. **Remaining:** GroupNorm/InstanceNorm, training-mode BN stats, weight init.
 - 🟡 `nn/state.py` (294) → `nn_state.rss` — **get_state_dict/load_state_dict** core: named params -> flat (names,data,lens), get_param by index, load round-trip (validated). **Remaining:** safetensors/torch_load binary formats (host I/O).
 - ⛔ `nn/onnx.py` (1314) — ONNX import; out of scope.
 

@@ -1,0 +1,173 @@
+// Port of tinygrad/uop/divandmod.py CORE: integer floordiv/floormod with Python floor
+// semantics (NOT rss's truncating `/`), plus the symbolic folding rules. tinygrad relies on
+// these for index simplification. Rules: const-fold (floor), x//1->x, x%1->0, (x*c)//c->x,
+// (x*c)%c->0, (x*c)//d->x*(c/d) when c%d==0, (x*c+r)//c->x and (x*c+r)%c->r%c for const r.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Mul Add FloorDiv FloorMod }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn ufloordiv(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorDiv, src: take s, arg: 0)
+}
+fn ufloormod(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorMod, src: take s, arg: 0)
+}
+
+// floor division (Python //): rss `/` truncates toward zero; adjust down when signs differ and remainder != 0
+fn ifloordiv(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a - (q * b)
+    let mut neg = false
+    if a < 0 {
+        if b > 0 { neg = true }
+    }
+    if a > 0 {
+        if b < 0 { neg = true }
+    }
+    if r != 0 {
+        if neg { return q - 1 }
+    }
+    return q
+}
+fn ifloormod(a: Int, b: Int) -> Int { return a - (ifloordiv(a: a, b: b) * b) }
+
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn is_mul_const(u: read UOp) -> Bool {
+    if u.op == Mul {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+
+// simplify floordiv/floormod nodes (children assumed already simple)
+fn simp_div(a: read UOp, c: Int) -> fresh UOp {
+    // a // c
+    if c == 1 { return clone1(u: read a) }
+    if is_const(u: read a) { return uconst(v: ifloordiv(a: a.arg, b: c)) }
+    if is_mul_const(u: read a) {
+        let x = List.get(list: read a.src, index: 0)
+        let m = List.get(list: read a.src, index: 1)
+        if m.arg == c { return clone1(u: read x) }                       // (x*c)//c -> x
+        if ifloormod(a: m.arg, b: c) == 0 { return umul(a: read x, b: read uconst(v: ifloordiv(a: m.arg, b: c))) } // (x*c)//d, c%d==0 -> x*(c/d)
+    }
+    if a.op == Add {
+        let l = List.get(list: read a.src, index: 0)
+        let r = List.get(list: read a.src, index: 1)
+        if is_mul_const(u: read l) {
+            let lx = List.get(list: read l.src, index: 0)
+            let lm = List.get(list: read l.src, index: 1)
+            if is_const(u: read r) {
+                // c | lm  =>  (x*lm + r)//c = x*(lm/c) + r//c   (exact since c divides x*lm)
+                if ifloormod(a: lm.arg, b: c) == 0 {
+                    let q = ifloordiv(a: lm.arg, b: c)
+                    let rq = ifloordiv(a: r.arg, b: c)
+                    if rq == 0 {
+                        if q == 1 { return clone1(u: read lx) }
+                        return umul(a: read lx, b: read uconst(v: q))
+                    }
+                    return uadd(a: read umul(a: read lx, b: read uconst(v: q)), b: read uconst(v: rq))
+                }
+            }
+        }
+    }
+    return ufloordiv(a: read a, b: read uconst(v: c))
+}
+fn simp_mod(a: read UOp, c: Int) -> fresh UOp {
+    if c == 1 { return uconst(v: 0) }
+    if is_const(u: read a) { return uconst(v: ifloormod(a: a.arg, b: c)) }
+    if is_mul_const(u: read a) {
+        let m = List.get(list: read a.src, index: 1)
+        if ifloormod(a: m.arg, b: c) == 0 { return uconst(v: 0) }                 // (x*c)%c -> 0
+    }
+    if a.op == Add {
+        let l = List.get(list: read a.src, index: 0)
+        let r = List.get(list: read a.src, index: 1)
+        if is_mul_const(u: read l) {
+            let lm = List.get(list: read l.src, index: 1)
+            if is_const(u: read r) {
+                if ifloormod(a: lm.arg, b: c) == 0 { return uconst(v: ifloormod(a: r.arg, b: c)) }  // (x*c + r)%c -> r%c
+            }
+        }
+    }
+    return ufloormod(a: read a, b: read uconst(v: c))
+}
+fn clone1(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Mul { return umul(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == Add { return uadd(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == FloorDiv { return ufloordiv(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    return ufloormod(a: read clone1(u: read c0), b: read clone1(u: read c1))
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Mul { return "Mul" }
+    if u.op == Add { return "Add" }
+    if u.op == FloorDiv { return "FloorDiv" }
+    return "FloorMod"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    // floor semantics vs tinygrad
+    Log.write(message: read String.concat(left: read "-7 // 3 = ", right: read Int.to_string(value: read ifloordiv(a: -7, b: 3))))   // -3
+    Log.write(message: read String.concat(left: read "-7 %% 3 = ", right: read Int.to_string(value: read ifloormod(a: -7, b: 3))))   // 2
+    Log.write(message: read String.concat(left: read "7 // -3 = ", right: read Int.to_string(value: read ifloordiv(a: 7, b: -3))))   // -3
+    Log.write(message: read String.concat(left: read "17 // 5 = ", right: read Int.to_string(value: read ifloordiv(a: 17, b: 5))))   // 3
+
+    // const fold
+    describe(label: read "fold 17//5 = ", u: read simp_div(a: read uconst(v: 17), c: 5))                 // Const(3)
+    // (x*6)//3 -> x*2
+    let xm6 = umul(a: read uvar(id: 7), b: read uconst(v: 6))
+    describe(label: read "(x*6)//3 root = ", u: read simp_div(a: read xm6, c: 3))                          // Mul
+    let r1 = simp_div(a: read xm6, c: 3)
+    describe(label: read "  factor = ", u: read List.get(list: read r1.src, index: 1))                     // Const(2)
+    // (x*6)%3 -> 0
+    describe(label: read "(x*6)%3 = ", u: read simp_mod(a: read xm6, c: 3))                                // Const(0)
+    // (x*6 + 2)//3 -> x ; (x*6 + 2)%3 -> 2
+    let xm6p2 = uadd(a: read umul(a: read uvar(id: 7), b: read uconst(v: 6)), b: read uconst(v: 2))
+    describe(label: read "(x*6+2)//3 = ", u: read simp_div(a: read xm6p2, c: 3))                           // Var(7)
+    describe(label: read "(x*6+2)%3 = ", u: read simp_mod(a: read xm6p2, c: 3))                            // Const(2)
+    // x//1 -> x ; x%1 -> 0
+    describe(label: read "x//1 = ", u: read simp_div(a: read uvar(id: 7), c: 1))                           // Var(7)
+    describe(label: read "x%1 = ", u: read simp_mod(a: read uvar(id: 7), c: 1))                            // Const(0)
+    return Unit
+}

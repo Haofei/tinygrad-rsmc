@@ -42,7 +42,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - 🟡 `uop/symbolic.py` (485) → `symbolic.rss` (vmin/vmax only) — **Remaining:** the symbolic algebra simplification rules (the bulk).
 - 🟡 `uop/upat.py` (168) → `upat.rss` — core recursive matcher + capture. **Remaining:** named captures, sets of ops, location/dtype constraints, allow_any_len.
 - ⬜ `uop/render.py` (159) — UOp graph → string render helpers (overlaps cstyle).
-- ⬜ `uop/divandmod.py` (116) — div/mod symbolic folding rules.
+- 🟡 `uop/divandmod.py` (116) → `divandmod.rss` — **floor div/mod (Python semantics) + folding rules** (const-fold, x//1, x%1, (x*c)//c, (x*c)%c, c|lm: (x*lm+r)//c→x*(lm/c)+r//c, %→r%c); matches tinygrad. **Remaining:** gcd_with_remainder, congruence folding, nested mod.
 - 🟡 `uop/decompositions.py` (572) → `decompositions.rss` — **transcendental decompositions as UOp rewrites** (EXP→EXP2·log2e, LOG→LOG2·ln2, POW→exp2(log2·b), TAN→sin/sin(x+π/2)), constants match tinygrad. **Remaining:** full ID set, range reduction for sin, fp edge cases.
 - ⬜ `uop/spec.py` (280) — UOp validation spec (type/shape constraints per op).
 - ⬜ `uop/validate.py` (78) — graph validation.

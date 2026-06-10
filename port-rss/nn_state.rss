@@ -1,0 +1,105 @@
+// Port of the CORE of tinygrad/nn/state.py: get_state_dict / load_state_dict. A model's
+// parameters are a set of named tensors; get_state_dict flattens them to an ordered name->data
+// mapping; load_state_dict copies values back by name. Here a "param" is a named Float vector;
+// the state dict is (names, flat data, per-param lengths). Validates a get->load round-trip and
+// copying weights from one model into another (the safetensors/torch-load use case).
+
+features: local
+
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+// append param `name` with `vals` into the state dict (names + flat data + lengths)
+fn add_param(names: mut List<String>, data: mut List<Float>, lens: mut List<Int>, name: read String, vals: read List<Float>) -> Unit {
+    List.push(list: mut names, value: read name)
+    let n = List.len(list: read vals)
+    List.push(list: mut lens, value: read n)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut data, value: read fget(l: read vals, i: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+// find the flat offset of param index p (sum of preceding lengths)
+fn offset_of(lens: read List<Int>, p: Int) -> Int {
+    let mut off = 0
+    let mut i = 0
+    while i < p {
+        off = off + iget(l: read lens, i: i)
+        i = i + 1
+    }
+    return off
+}
+
+// load_state_dict: copy param p's values out of the flat data into `out`
+fn get_param(data: read List<Float>, lens: read List<Int>, p: Int, out: mut List<Float>) -> Unit {
+    let off = offset_of(lens: read lens, p: p)
+    let n = iget(l: read lens, i: p)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read fget(l: read data, i: off + i))
+        i = i + 1
+    }
+    return Unit
+}
+
+// load_state_dict (copy src flat data into dst flat data, same layout) -> dst out
+fn load_into(dst: mut List<Float>, src: read List<Float>) -> Unit {
+    let n = List.len(list: read src)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut dst, value: read fget(l: read src, i: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn dump_f(label: read String, l: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read l)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read l, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn mkv3(a: Float, b: Float, c: Float) -> fresh List<Float> {
+    local l = List.new<Float>()
+    List.push(list: mut l, value: read a)
+    List.push(list: mut l, value: read b)
+    List.push(list: mut l, value: read c)
+    return l
+}
+
+fn main() -> Unit {
+    // model with two params: "w" (3 vals), "b" (1 val)
+    let names = List.new<String>()
+    let data = List.new<Float>()
+    let lens = List.new<Int>()
+    add_param(names: mut names, data: mut data, lens: mut lens, name: read "w", vals: read mkv3(a: 1.0, b: 2.0, c: 3.0))
+    let bvec = List.new<Float>()
+    List.push(list: mut bvec, value: read 0.5)
+    add_param(names: mut names, data: mut data, lens: mut lens, name: read "b", vals: read bvec)
+
+    Log.write(message: read String.concat(left: read "state_dict params = ", right: read Int.to_string(value: read List.len(list: read names))))   // 2
+    // get_state_dict: read back each param by index (round-trip)
+    let w_out = List.new<Float>()
+    get_param(data: read data, lens: read lens, p: 0, out: mut w_out)
+    dump_f(label: read "w = ", l: read w_out)            // [1, 2, 3]
+    let b_out = List.new<Float>()
+    get_param(data: read data, lens: read lens, p: 1, out: mut b_out)
+    dump_f(label: read "b = ", l: read b_out)            // [0.5]
+
+    // load_state_dict into a fresh model with the same layout
+    let dst = List.new<Float>()
+    load_into(dst: mut dst, src: read data)
+    dump_f(label: read "loaded model data = ", l: read dst)  // [1, 2, 3, 0.5]
+    Log.write(message: read String.concat(left: read "round-trip total values = ", right: read Int.to_string(value: read List.len(list: read dst))))  // 4
+    return Unit
+}

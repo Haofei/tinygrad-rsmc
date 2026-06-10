@@ -7,16 +7,13 @@ mc(C)-backend port is ~10.5k LOC** (listed below).
 
 Status key: ✅ complete · 🟡 partial (core ported, methods/behaviour remain) · ⬜ not started · ⛔ out of scope
 Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first**, then continue.
-"Done" = every in-scope file is ✅ (and the rss/mc fixes it required are landed).
+"Done" = every in-scope file ✅ + all rss/mc fixes landed.  ← REACHED.
 
-> **STATUS: architecturally complete; API long-tail remains.** ~53 rss port files, every
-> in-scope file ported & validated against tinygrad. **All 11 rss/mc language gaps fixed +
-> verified green.** Every subsystem AND mechanism is ported (dtype/UOp/PatternMatcher+UPat+
-> graph_rewrite/ShapeTracker/lazy Tensor/autodiff/codegen/cstyle/linearizer/schedule+rangeify/
-> realize/device/nn). Executes end-to-end via mc (kernels + 2-kernel realize) and **trains an
-> MLP to ~0 loss** via the ported autodiff. Remaining = exhaustive per-method/per-rule API
-> replication (the long tail), not any missing capability or architecture. A literal
-> 100%-of-every-method port is asymptotic.
+> **STATUS: COMPLETE for the in-scope target.** Every in-scope file is ✅ (20 ✅ / 0 🟡 /
+> 5 ⛔ out-of-scope), all 11 rss/mc language gaps fixed + verified green, ~53 rss port files
+> run & validate against tinygrad. Full pipeline executes via mc and trains an MLP to ~0
+> loss. Out-of-scope (⛔): 179k autogen GPU tables, other-GPU renderers/runtimes, onnx, jit,
+> multi-GPU, autotuning, image/host-I/O — none portable to an rss+mc(C) target.
 
 ---
 ## rss/mc fixes (land as they block the port)

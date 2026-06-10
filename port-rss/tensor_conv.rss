@@ -1,0 +1,291 @@
+// Numeric port of tinygrad Tensor's conv2d + pooling op surface, on a flat List<Float> `data`
+// plus a `shape: List<Int>`, reusing the numeric style from tensor_ops.rss / tensor_higher.rss
+// (flat data is List<Float>, shapes are List<Int>, typed `iget`/`fget`, list returns via
+// out-params, one statement per line).
+//
+// Faithful to /home/zoe/tinygrad/tinygrad/mixin/movement.py:_pool and
+// /home/zoe/tinygrad/tinygrad/mixin/__init__.py:{conv2d, max_pool2d, avg_pool2d}.
+//
+// tinygrad's _pool builds, for each output position, the kernel window via repeat/shrink/reshape/
+// permute so the reduce axes (kernel dims) sit at the end; conv2d then multiplies by the weight
+// and sums over (cin, kh, kw); max_pool2d / avg_pool2d reduce that window with max / mean. Here we
+// compute the same windowed reductions directly with nested loops over the output grid + window,
+// using flat row-major indexing -- numerically identical, validated vs tinygrad .tolist() (tol 1e-4).
+//
+// Cases covered (all stride matches tinygrad defaults, no padding, no dilation):
+//   - conv2d single-channel: x (H,W) * w (kh,kw), stride 1 -> (H-kh+1, W-kw+1) windowed sum.
+//   - max_pool2d (H,W) with k x k, stride k -> (H/k, W/k) windowed max.
+//   - avg_pool2d (H,W) with k x k, stride k -> (H/k, W/k) windowed mean.
+//   - conv2d multichannel: x (Cin,H,W) * w (Cout,Cin,kh,kw), stride 1 -> (Cout,H-kh+1,W-kw+1).
+
+// ---------- typed accessors ----------
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+fn fmaxf(a: Float, b: Float) -> Float {
+    if a > b { return a }
+    return b
+}
+
+// ---------- conv2d single-channel: x (H,W) * w (kh,kw), stride 1, no pad ----------
+// out[oy,ox] = sum over (i in kh, j in kw) of x[oy+i, ox+j] * w[i, j].
+fn conv2d_1ch(xdata: read List<Float>, h: Int, wd: Int,
+              wdata: read List<Float>, kh: Int, kw: Int,
+              out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let oh = h - kh + 1
+    let ow = wd - kw + 1
+    List.push(list: mut out_shape, value: read oh)
+    List.push(list: mut out_shape, value: read ow)
+    let mut oy = 0
+    while oy < oh {
+        let mut ox = 0
+        while ox < ow {
+            let mut acc = 0.0
+            let mut i = 0
+            while i < kh {
+                let mut j = 0
+                while j < kw {
+                    let xidx = (oy + i) * wd + (ox + j)
+                    let widx = i * kw + j
+                    let xv = fget(l: read xdata, i: xidx)
+                    let wv = fget(l: read wdata, i: widx)
+                    acc = acc + xv * wv
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            List.push(list: mut out, value: read acc)
+            ox = ox + 1
+        }
+        oy = oy + 1
+    }
+    return Unit
+}
+
+// ---------- max_pool2d: x (H,W), k x k window, stride k, no pad ----------
+// out[oy,ox] = max over the k x k window starting at (oy*k, ox*k).
+fn max_pool2d_2d(xdata: read List<Float>, h: Int, wd: Int, k: Int,
+                 out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let oh = h / k
+    let ow = wd / k
+    List.push(list: mut out_shape, value: read oh)
+    List.push(list: mut out_shape, value: read ow)
+    let mut oy = 0
+    while oy < oh {
+        let mut ox = 0
+        while ox < ow {
+            let by = oy * k
+            let bx = ox * k
+            let mut m = fget(l: read xdata, i: by * wd + bx)
+            let mut i = 0
+            while i < k {
+                let mut j = 0
+                while j < k {
+                    let xidx = (by + i) * wd + (bx + j)
+                    let xv = fget(l: read xdata, i: xidx)
+                    m = fmaxf(a: m, b: xv)
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            List.push(list: mut out, value: read m)
+            ox = ox + 1
+        }
+        oy = oy + 1
+    }
+    return Unit
+}
+
+// ---------- avg_pool2d: x (H,W), k x k window, stride k, no pad ----------
+// out[oy,ox] = mean over the k x k window (count_include_pad default, no pad here).
+fn avg_pool2d_2d(xdata: read List<Float>, h: Int, wd: Int, k: Int,
+                 out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let oh = h / k
+    let ow = wd / k
+    List.push(list: mut out_shape, value: read oh)
+    List.push(list: mut out_shape, value: read ow)
+    let denomi = k * k
+    let denom = Int.to_float(value: read denomi)
+    let mut oy = 0
+    while oy < oh {
+        let mut ox = 0
+        while ox < ow {
+            let by = oy * k
+            let bx = ox * k
+            let mut acc = 0.0
+            let mut i = 0
+            while i < k {
+                let mut j = 0
+                while j < k {
+                    let xidx = (by + i) * wd + (bx + j)
+                    let xv = fget(l: read xdata, i: xidx)
+                    acc = acc + xv
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            let avg = acc / denom
+            List.push(list: mut out, value: read avg)
+            ox = ox + 1
+        }
+        oy = oy + 1
+    }
+    return Unit
+}
+
+// ---------- conv2d multichannel: x (Cin,H,W) * w (Cout,Cin,kh,kw), stride 1, no pad ----------
+// out[oc,oy,ox] = sum over (ic in Cin, i in kh, j in kw) of
+//                 x[ic, oy+i, ox+j] * w[oc, ic, i, j].
+fn conv2d_mc(xdata: read List<Float>, cin: Int, h: Int, wd: Int,
+             wdata: read List<Float>, cout: Int, kh: Int, kw: Int,
+             out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let oh = h - kh + 1
+    let ow = wd - kw + 1
+    List.push(list: mut out_shape, value: read cout)
+    List.push(list: mut out_shape, value: read oh)
+    List.push(list: mut out_shape, value: read ow)
+    let xplane = h * wd
+    let wplane = kh * kw
+    let wic = cin * wplane
+    let mut oc = 0
+    while oc < cout {
+        let mut oy = 0
+        while oy < oh {
+            let mut ox = 0
+            while ox < ow {
+                let mut acc = 0.0
+                let mut ic = 0
+                while ic < cin {
+                    let xbase = ic * xplane
+                    let wbase = oc * wic + ic * wplane
+                    let mut i = 0
+                    while i < kh {
+                        let mut j = 0
+                        while j < kw {
+                            let xidx = xbase + (oy + i) * wd + (ox + j)
+                            let widx = wbase + i * kw + j
+                            let xv = fget(l: read xdata, i: xidx)
+                            let wv = fget(l: read wdata, i: widx)
+                            acc = acc + xv * wv
+                            j = j + 1
+                        }
+                        i = i + 1
+                    }
+                    ic = ic + 1
+                }
+                List.push(list: mut out, value: read acc)
+                ox = ox + 1
+            }
+            oy = oy + 1
+        }
+        oc = oc + 1
+    }
+    return Unit
+}
+
+// ---------- printing ----------
+fn show_shape(label: read String, shape: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read shape, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    // ===== single-channel conv2d: x (4,4), w (2,2) = [[1,0],[0,1]], stride 1 =====
+    // x = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]
+    let x = List.new<Float>()
+    pushf(l: mut x, v: 1.0)
+    pushf(l: mut x, v: 2.0)
+    pushf(l: mut x, v: 3.0)
+    pushf(l: mut x, v: 4.0)
+    pushf(l: mut x, v: 5.0)
+    pushf(l: mut x, v: 6.0)
+    pushf(l: mut x, v: 7.0)
+    pushf(l: mut x, v: 8.0)
+    pushf(l: mut x, v: 9.0)
+    pushf(l: mut x, v: 10.0)
+    pushf(l: mut x, v: 11.0)
+    pushf(l: mut x, v: 12.0)
+    pushf(l: mut x, v: 13.0)
+    pushf(l: mut x, v: 14.0)
+    pushf(l: mut x, v: 15.0)
+    pushf(l: mut x, v: 16.0)
+    let w = List.new<Float>()
+    pushf(l: mut w, v: 1.0)
+    pushf(l: mut w, v: 0.0)
+    pushf(l: mut w, v: 0.0)
+    pushf(l: mut w, v: 1.0)
+    let cshp = List.new<Int>()
+    let cout = List.new<Float>()
+    conv2d_1ch(xdata: read x, h: 4, wd: 4, wdata: read w, kh: 2, kw: 2, out_shape: mut cshp, out: mut cout)
+    show_shape(label: read "conv2d (4,4)*(2,2) shape = ", shape: read cshp)   // [3, 3]
+    show_vec(label: read "conv2d (4,4)*(2,2) = ", v: read cout)               // [7,9,11,15,17,19,23,25,27]
+    Log.write(message: read "  tinygrad: [[7, 9, 11], [15, 17, 19], [23, 25, 27]]")
+
+    // ===== max_pool2d: x (4,4), k=2, stride 2 -> (2,2) =====
+    let mshp = List.new<Int>()
+    let mout = List.new<Float>()
+    max_pool2d_2d(xdata: read x, h: 4, wd: 4, k: 2, out_shape: mut mshp, out: mut mout)
+    show_shape(label: read "max_pool2d (4,4) k=2 shape = ", shape: read mshp)  // [2, 2]
+    show_vec(label: read "max_pool2d (4,4) k=2 = ", v: read mout)             // [6,8,14,16]
+    Log.write(message: read "  tinygrad: [[6, 8], [14, 16]]")
+
+    // ===== avg_pool2d: x (4,4), k=2, stride 2 -> (2,2) =====
+    let ashp = List.new<Int>()
+    let aout = List.new<Float>()
+    avg_pool2d_2d(xdata: read x, h: 4, wd: 4, k: 2, out_shape: mut ashp, out: mut aout)
+    show_shape(label: read "avg_pool2d (4,4) k=2 shape = ", shape: read ashp)  // [2, 2]
+    show_vec(label: read "avg_pool2d (4,4) k=2 = ", v: read aout)             // [3.5,5.5,11.5,13.5]
+    Log.write(message: read "  tinygrad: [[3.5, 5.5], [11.5, 13.5]]")
+
+    // ===== multichannel conv2d: x (Cin=2,3,3) * w (Cout=2,Cin=2,2,2), stride 1 -> (2,2,2) =====
+    // x = arange(18), w = [i%3 for i in range(16)]
+    let xm = List.new<Float>()
+    let mut xi = 0
+    while xi < 18 {
+        let xv = Int.to_float(value: read xi)
+        pushf(l: mut xm, v: xv)
+        xi = xi + 1
+    }
+    let wm = List.new<Float>()
+    let mut wi = 0
+    while wi < 16 {
+        let m3 = wi - (wi / 3) * 3
+        let wv = Int.to_float(value: read m3)
+        pushf(l: mut wm, v: wv)
+        wi = wi + 1
+    }
+    let mcshp = List.new<Int>()
+    let mcout = List.new<Float>()
+    conv2d_mc(xdata: read xm, cin: 2, h: 3, wd: 3, wdata: read wm, cout: 2, kh: 2, kw: 2, out_shape: mut mcshp, out: mut mcout)
+    show_shape(label: read "conv2d mc (2,3,3)*(2,2,2,2) shape = ", shape: read mcshp)  // [2, 2, 2]
+    show_vec(label: read "conv2d mc = ", v: read mcout)                                // [49,56,70,77,45,53,69,77]
+    Log.write(message: read "  tinygrad: [[[49, 56], [70, 77]], [[45, 53], [69, 77]]]")
+    return Unit
+}

@@ -35,7 +35,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - 🟡 `helpers.py` (600) → `helpers.rss` — prod, ceildiv, round_up, all_same, dedup, argsort. **Remaining:** flatten, fully_flatten, get_contraction, merge_dicts, round-trip helpers, partition, getenv/Context, Timing/Profiling (host-only).
 - 🟡 `device.py` (377) → `device.rss`/`device_buffer.rss` — Device[name] dispatch + CPU-interpreter backend; **Buffer lifecycle (allocate/ensure/copyin/copyout) + Allocator in_use/peak accounting** validated. **Remaining:** Compiler/CompiledProgram interface, real device backends.
 - 🟡 `gradient.py` (135) → `gradient.rss`/`autodiff_dag.rss`/`gradient_relu.rss`/`autodiff_ops.rss` — reverse-mode (tree + DAG accumulation), vjp for add/mul/sub/relu/div/neg/exp/log. **Remaining:** vjp for the rest (recip/sqrt/sin/where/cmplt/max/pow), the actual `compute_gradient` graph-walk over real UOps + accumulate via toposort.
-- 🟡 `tensor.py` (1440) → `tensor.rss`/`tensor_movement.rss`/`tensor_ops.rss` — lazy wrapper; movement+reduce shape tracking; **numeric elementwise op surface with broadcasting** (add/sub/mul/div/maximum, neg/relu/reciprocal, sum/max axis) validated vs tinygrad. **Remaining:** creation ops (randn/arange/eye), matmul/conv2d, indexing/getitem, pad/cat/stack, softmax, `.backward()`/`.realize()` glue.
+- 🟡 `tensor.py` (1440) → `tensor.rss`/`tensor_movement.rss`/`tensor_ops.rss` — lazy wrapper; movement+reduce shape tracking; **numeric elementwise op surface with broadcasting** (add/sub/mul/div/maximum, neg/relu/reciprocal, sum/max axis) validated vs tinygrad. + `tensor_higher.rss`: **matmul/dot, transpose, getitem (index+slice), cat/stack, softmax** (fexp via range-reduced Taylor) validated vs tinygrad. **Remaining:** conv2d, creation ops (randn/arange/eye), `.backward()`/`.realize()` glue.
 
 ## uop/, ~3711 LOC
 - 🟡 `uop/ops.py` (1708) → `uop.rss`,`rewrite.rss`,`upat.rss`,`symbolic.rss`,`toposort.rss`,`ops_enum.rss` — UOp node + interning, PatternMatcher rewrite, generic UPat DSL, vmin/vmax, toposort, **complete 93-op Ops enum + GroupOp groups**. **Remaining:** the full UOp method/property surface, the big `symbolic`/`sym` PatternMatcher rule set, graph_rewrite engine details, sint helpers.
@@ -61,7 +61,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `engine/jit.py` (312) — TinyJit graph capture/replay (optimization; out of scope for correctness).
 
 ## schedule/, ~1100 in-scope
-- 🟡 `schedule/__init__.py` (147) + `memory.py` (64) → `schedule.rss`,`schedule_multi.rss`,`buffer_reuse.rss` — kernel-shape dispatch, reduce-split, liveness buffer reuse. **Remaining:** faithful `rangeify.py` (611, the real fusion/range engine), `indexing.py` (286, index/valid generation).
+- 🟡 `schedule/__init__.py` (147) + `memory.py` (64) + `rangeify.py` (611) → `schedule.rss`,`schedule_multi.rss`,`buffer_reuse.rss`,`rangeify.rss` — kernel-shape dispatch, reduce-split, liveness buffer reuse, **kernel-grouping/fusion pass** (elementwise fuse, reduce/store/shared boundaries; kernel counts match tinygrad). **Remaining:** real index/range arithmetic in `indexing.py` (286), COPY/upload kernels, cost model.
 - ⛔ `schedule/multi.py` (175), `allreduce.py` (62) — multi-GPU, out of scope.
 
 ## nn/, ~900 in-scope

@@ -1,0 +1,349 @@
+// Numeric port of tinygrad Tensor's higher-level (movement / composite) op surface, on a flat
+// List<Float> `data` + a `shape: List<Int>`, reusing the broadcasting/stride style from
+// tensor_ops.rss (right-aligned shapes, size-1 dims broadcast via stride 0).
+//
+// Faithful to /home/zoe/tinygrad/tinygrad/tensor.py:
+//   - matmul/dot (2D): (m,k)@(k,n)->(m,n)  (tensor.py `dot`/`matmul`)
+//   - transpose / .T (2D): data physically reordered (tensor.py `transpose`/`T`)
+//   - getitem: integer index on axis 0 -> row (rank drops); slice a:b on axis 0 (rank kept)
+//   - cat (concat) along axis 0; stack two vectors -> matrix (tensor.py `cat`/`stack`)
+//   - softmax over the last axis of a vector: exp(x-max)/sum(exp(x-max)) (tensor.py `softmax`)
+//
+// rss gaps (see BRIEFING.md): flat data is List<Float>, shapes are List<Int> (no Int->Float),
+// typed `iget` for Int field-list access, list returns via out-params, one statement per line,
+// `0.0 - x` for negate, `1.0 / x` for reciprocal. There is no exp intrinsic, so `fexp` is
+// implemented in pure Float (range-reduction by halving + Taylor series + repeated squaring).
+
+// ---------- typed accessors ----------
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+fn fmaxf(a: Float, b: Float) -> Float {
+    if a > b { return a }
+    return b
+}
+
+// ---------- exp via range reduction + Taylor + squaring (no exp intrinsic) ----------
+// e^x = (e^(x / 2^k))^(2^k).  Halve x k times so the argument is tiny, evaluate a short Taylor
+// series there (converges fast for small args), then square the result k times.
+fn taylor_exp(z: Float) -> Float {
+    // 1 + z + z^2/2! + ... + z^9/9!  (z is small, so this is very accurate)
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut n = 1.0
+    while n < 10.0 {
+        term = term * z / n
+        sum = sum + term
+        n = n + 1.0
+    }
+    return sum
+}
+fn fexp(x: Float) -> Float {
+    // k = 8 halvings: |x|<=~16 maps to |z|<=~0.0625, plenty for [-2,2] (and well beyond).
+    let mut z = x
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    z = z / 2.0
+    let mut r = taylor_exp(z: z)
+    r = r * r
+    r = r * r
+    r = r * r
+    r = r * r
+    r = r * r
+    r = r * r
+    r = r * r
+    r = r * r
+    return r
+}
+
+// ---------- matmul / dot for 2D: (m,k) @ (k,n) -> (m,n) ----------
+fn matmul2d(adata: read List<Float>, m: Int, k: Int,
+            bdata: read List<Float>, n: Int,
+            out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    List.push(list: mut out_shape, value: read m)
+    List.push(list: mut out_shape, value: read n)
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < n {
+            let mut acc = 0.0
+            let mut p = 0
+            while p < k {
+                let av = fget(l: read adata, i: i * k + p)
+                let bv = fget(l: read bdata, i: p * n + j)
+                acc = acc + av * bv
+                p = p + 1
+            }
+            List.push(list: mut out, value: read acc)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- transpose / .T for 2D: (r,c) -> (c,r), data physically reordered ----------
+fn transpose2d(data: read List<Float>, r: Int, c: Int,
+               out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    List.push(list: mut out_shape, value: read c)
+    List.push(list: mut out_shape, value: read r)
+    let mut j = 0
+    while j < c {
+        let mut i = 0
+        while i < r {
+            // out[j,i] = in[i,j]
+            List.push(list: mut out, value: read fget(l: read data, i: i * c + j))
+            i = i + 1
+        }
+        j = j + 1
+    }
+    return Unit
+}
+
+// ---------- getitem: integer index on axis 0 of a 2D (r,c) -> row vector (c,) ----------
+fn getitem_int0(data: read List<Float>, r: Int, c: Int, idx: Int,
+                out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    List.push(list: mut out_shape, value: read c)
+    let base = idx * c
+    let mut j = 0
+    while j < c {
+        List.push(list: mut out, value: read fget(l: read data, i: base + j))
+        j = j + 1
+    }
+    return Unit
+}
+
+// ---------- getitem: slice a:b on axis 0 of a 2D (r,c) -> (b-a, c), rank kept ----------
+fn getitem_slice0(data: read List<Float>, r: Int, c: Int, a: Int, b: Int,
+                  out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let nrows = b - a
+    List.push(list: mut out_shape, value: read nrows)
+    List.push(list: mut out_shape, value: read c)
+    let mut i = a
+    while i < b {
+        let mut j = 0
+        while j < c {
+            List.push(list: mut out, value: read fget(l: read data, i: i * c + j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- cat along axis 0 of two 2D tensors (ra,c) ++ (rb,c) -> (ra+rb, c) ----------
+fn cat0(adata: read List<Float>, ra: Int,
+        bdata: read List<Float>, rb: Int, c: Int,
+        out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let nrows = ra + rb
+    List.push(list: mut out_shape, value: read nrows)
+    List.push(list: mut out_shape, value: read c)
+    let na = ra * c
+    let mut i = 0
+    while i < na {
+        List.push(list: mut out, value: read fget(l: read adata, i: i))
+        i = i + 1
+    }
+    let nb = rb * c
+    let mut j = 0
+    while j < nb {
+        List.push(list: mut out, value: read fget(l: read bdata, i: j))
+        j = j + 1
+    }
+    return Unit
+}
+
+// ---------- stack two vectors (c,) -> matrix (2,c) along a new axis 0 ----------
+fn stack2(adata: read List<Float>, bdata: read List<Float>, c: Int,
+          out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    List.push(list: mut out_shape, value: read 2)
+    List.push(list: mut out_shape, value: read c)
+    let mut i = 0
+    while i < c {
+        List.push(list: mut out, value: read fget(l: read adata, i: i))
+        i = i + 1
+    }
+    let mut j = 0
+    while j < c {
+        List.push(list: mut out, value: read fget(l: read bdata, i: j))
+        j = j + 1
+    }
+    return Unit
+}
+
+// ---------- softmax over the last (only) axis of a vector ----------
+// exp(x - max) / sum(exp(x - max))  -- the numerically-stable form tinygrad uses.
+fn softmax_vec(data: read List<Float>, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read data)
+    // max
+    let mut mx = fget(l: read data, i: 0)
+    let mut i = 0
+    while i < n {
+        mx = fmaxf(a: mx, b: fget(l: read data, i: i))
+        i = i + 1
+    }
+    // exp(x - max) and running sum
+    let ex = List.new<Float>()
+    let mut s = 0.0
+    let mut j = 0
+    while j < n {
+        let e = fexp(x: fget(l: read data, i: j) - mx)
+        List.push(list: mut ex, value: read e)
+        s = s + e
+        j = j + 1
+    }
+    // normalise
+    let mut k = 0
+    while k < n {
+        let nv = fget(l: read ex, i: k) / s
+        List.push(list: mut out, value: read nv)
+        k = k + 1
+    }
+    return Unit
+}
+
+// ---------- printing ----------
+fn show_shape(label: read String, shape: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read shape, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    // ===== matmul / dot (2,3)@(3,2) -> (2,2) =====
+    // a = [[1,2,3],[4,5,6]], b = [[7,8],[9,10],[11,12]]
+    let a = List.new<Float>()
+    pushf(l: mut a, v: 1.0)
+    pushf(l: mut a, v: 2.0)
+    pushf(l: mut a, v: 3.0)
+    pushf(l: mut a, v: 4.0)
+    pushf(l: mut a, v: 5.0)
+    pushf(l: mut a, v: 6.0)
+    let b = List.new<Float>()
+    pushf(l: mut b, v: 7.0)
+    pushf(l: mut b, v: 8.0)
+    pushf(l: mut b, v: 9.0)
+    pushf(l: mut b, v: 10.0)
+    pushf(l: mut b, v: 11.0)
+    pushf(l: mut b, v: 12.0)
+    let mmshp = List.new<Int>()
+    let mm = List.new<Float>()
+    matmul2d(adata: read a, m: 2, k: 3, bdata: read b, n: 2, out_shape: mut mmshp, out: mut mm)
+    show_shape(label: read "matmul (2,3)@(3,2) shape = ", shape: read mmshp)   // [2, 2]
+    show_vec(label: read "matmul (2,3)@(3,2) = ", v: read mm)                  // [58,64,139,154]
+    Log.write(message: read "  tinygrad: [[58, 64], [139, 154]]")
+
+    // ===== transpose / .T of (2,3) -> (3,2) =====
+    let tshp = List.new<Int>()
+    let tt = List.new<Float>()
+    transpose2d(data: read a, r: 2, c: 3, out_shape: mut tshp, out: mut tt)
+    show_shape(label: read "transpose (2,3)->(3,2) shape = ", shape: read tshp)  // [3, 2]
+    show_vec(label: read "transpose (2,3) = ", v: read tt)                       // [1,4,2,5,3,6]
+    Log.write(message: read "  tinygrad: [[1, 4], [2, 5], [3, 6]]")
+
+    // ===== getitem: integer index t[1] on (2,3) -> row =====
+    let gshp = List.new<Int>()
+    let g = List.new<Float>()
+    getitem_int0(data: read a, r: 2, c: 3, idx: 1, out_shape: mut gshp, out: mut g)
+    show_shape(label: read "t[1] shape = ", shape: read gshp)                  // [3]
+    show_vec(label: read "t[1] = ", v: read g)                                 // [4,5,6]
+    Log.write(message: read "  tinygrad: [4, 5, 6]")
+
+    // ===== getitem: slice t[0:1] and t[1:2] on (2,3) =====
+    let s1shp = List.new<Int>()
+    let s1 = List.new<Float>()
+    getitem_slice0(data: read a, r: 2, c: 3, a: 0, b: 1, out_shape: mut s1shp, out: mut s1)
+    show_shape(label: read "t[0:1] shape = ", shape: read s1shp)               // [1, 3]
+    show_vec(label: read "t[0:1] = ", v: read s1)                              // [1,2,3]
+    Log.write(message: read "  tinygrad: [[1, 2, 3]]")
+
+    let s2shp = List.new<Int>()
+    let s2 = List.new<Float>()
+    getitem_slice0(data: read a, r: 2, c: 3, a: 1, b: 2, out_shape: mut s2shp, out: mut s2)
+    show_shape(label: read "t[1:2] shape = ", shape: read s2shp)               // [1, 3]
+    show_vec(label: read "t[1:2] = ", v: read s2)                              // [4,5,6]
+    Log.write(message: read "  tinygrad: [[4, 5, 6]]")
+
+    // ===== cat along axis 0: (1,3)=[1,2,3] ++ (1,3)=[4,5,6] -> (2,3) =====
+    let c1 = List.new<Float>()
+    pushf(l: mut c1, v: 1.0)
+    pushf(l: mut c1, v: 2.0)
+    pushf(l: mut c1, v: 3.0)
+    let c2 = List.new<Float>()
+    pushf(l: mut c2, v: 4.0)
+    pushf(l: mut c2, v: 5.0)
+    pushf(l: mut c2, v: 6.0)
+    let catshp = List.new<Int>()
+    let catout = List.new<Float>()
+    cat0(adata: read c1, ra: 1, bdata: read c2, rb: 1, c: 3, out_shape: mut catshp, out: mut catout)
+    show_shape(label: read "cat dim=0 shape = ", shape: read catshp)           // [2, 3]
+    show_vec(label: read "cat dim=0 = ", v: read catout)                       // [1,2,3,4,5,6]
+    Log.write(message: read "  tinygrad: [[1, 2, 3], [4, 5, 6]]")
+
+    // ===== stack two vectors [1,2,3] and [4,5,6] -> (2,3) =====
+    let v1 = List.new<Float>()
+    pushf(l: mut v1, v: 1.0)
+    pushf(l: mut v1, v: 2.0)
+    pushf(l: mut v1, v: 3.0)
+    let v2 = List.new<Float>()
+    pushf(l: mut v2, v: 4.0)
+    pushf(l: mut v2, v: 5.0)
+    pushf(l: mut v2, v: 6.0)
+    let stkshp = List.new<Int>()
+    let stk = List.new<Float>()
+    stack2(adata: read v1, bdata: read v2, c: 3, out_shape: mut stkshp, out: mut stk)
+    show_shape(label: read "stack dim=0 shape = ", shape: read stkshp)         // [2, 3]
+    show_vec(label: read "stack dim=0 = ", v: read stk)                        // [1,2,3,4,5,6]
+    Log.write(message: read "  tinygrad: [[1, 2, 3], [4, 5, 6]]")
+
+    // ===== fexp accuracy check vs math.exp on [-2,2] =====
+    show_vec(label: read "fexp(-2),(-1),(-0.5),(0),(0.5),(1),(2) approx is below", v: read v1)
+    let ex = List.new<Float>()
+    pushf(l: mut ex, v: fexp(x: -2.0))
+    pushf(l: mut ex, v: fexp(x: -1.0))
+    pushf(l: mut ex, v: fexp(x: -0.5))
+    pushf(l: mut ex, v: fexp(x: 0.0))
+    pushf(l: mut ex, v: fexp(x: 0.5))
+    pushf(l: mut ex, v: fexp(x: 1.0))
+    pushf(l: mut ex, v: fexp(x: 2.0))
+    show_vec(label: read "fexp = ", v: read ex)
+    Log.write(message: read "  math.exp: [0.1353352832366127, 0.36787944117144233, 0.6065306597126334, 1.0, 1.6487212707001282, 2.718281828459045, 7.38905609893065]")
+
+    // ===== softmax over last axis of vector [1,2,3] =====
+    let sm = List.new<Float>()
+    softmax_vec(data: read v1, out: mut sm)
+    show_vec(label: read "softmax([1,2,3]) = ", v: read sm)
+    Log.write(message: read "  tinygrad: [0.09003057330846786, 0.2447284758090973, 0.6652409434318542]")
+    return Unit
+}

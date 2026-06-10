@@ -1,0 +1,256 @@
+// Port of the CORE kernel-grouping decision of tinygrad/schedule/rangeify.py +
+// schedule/__init__.py: deciding which ops FUSE into one kernel vs. form a kernel boundary.
+//
+// In tinygrad, get_kernel_graph() rangeifies a UOp graph (movement/elementwise ops become
+// index/range arithmetic that fuses freely) and inserts a BUFFERIZE/STAGE -> STORE at points
+// that must be materialized: a REDUCE's result, an explicit CONTIGUOUS/realized output, and
+// shared subgraphs whose recompute cost is too high. split_kernels then cuts the graph at each
+// STORE, so each STORE (and the cone of fused elementwise/movement ops feeding it, up to the
+// next boundary) becomes exactly one kernel. create_schedule (schedule/__init__.py) toposorts
+// those kernels. The kernel COUNT = number of such boundaries.
+//
+// THE RULE WE PORT (a faithful simplification of rangeify's grouping):
+//   * elementwise / movement ops FUSE upward into the consumer's kernel (no boundary)
+//   * a REDUCE is a kernel boundary: it closes a kernel (its inputs + the reduce form one
+//     kernel) and its consumers start a NEW kernel
+//   * a STORE / explicit OUTPUT closes a kernel (it is a realized output boundary)
+//   * a node consumed by 2+ different boundaries is REALIZED (shared) -> its own boundary,
+//     so it is computed once instead of recomputed in each consumer kernel
+// We assign every node a kernel-id = the boundary node whose kernel it is computed inside,
+// compacted to 0..k-1. Each distinct boundary == one kernel.
+//
+// SIMPLIFICATIONS vs real rangeify (documented):
+//   - no real index/range arithmetic, dtypes, devices, views, or COPY/load kernels; we model
+//     the graph as a flat arena of (op, src0, src1) and only make the boundary decision.
+//   - cost model for removing a shared bufferize (remove_bufferize's accessed_buffers / reduce
+//     heuristics, PCONTIG) is reduced to the simple "shared by >=2 boundaries -> realize" rule,
+//     which is what produces tinygrad's kernel count on the validation graphs.
+//   - LOAD/CONST leaves are inputs (already-realized buffers), not kernels; they don't count.
+//   - we count COMPUTE kernels only (tinygrad also emits a COPY "kernel" to upload host data;
+//     count_compute in the cross-check counts CALL(SINK) only, matching this).
+//
+// Op codes as Int (BRIEFING: avoid generic enum-value params):
+//   0=LOAD(input buffer)  1=CONST  2=ADD  3=MUL  4=SUB  5=REDUCE  6=STORE(output)
+// Arena = parallel List<Int>: ops[i], s0[i], s1[i] (src index or -1). Topo order = index.
+
+// typed Int access out of a struct-field List<Int> (BRIEFING: List.get loses Int type)
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+
+fn is_leaf(op: Int) -> Bool { return op == 0 || op == 1 }
+fn is_boundary(op: Int) -> Bool { return op == 5 || op == 6 }
+
+// count how many DISTINCT consumers each node has (out-degree over real edges)
+fn count_consumers(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read 0)
+        i = i + 1
+    }
+    let mut j = 0
+    while j < n {
+        let a = iget(l: read s0, i: j)
+        if a >= 0 {
+            let ca = iget(l: read out, i: a) + 1
+            List.set(list: mut out, index: a, value: read ca)
+        }
+        let b = iget(l: read s1, i: j)
+        if b >= 0 {
+            let cb = iget(l: read out, i: b) + 1
+            List.set(list: mut out, index: b, value: read cb)
+        }
+        j = j + 1
+    }
+    return Unit
+}
+
+// a node is a kernel boundary (owns/closes a kernel) if it is a REDUCE or a STORE, OR it is a
+// non-leaf elementwise node that is shared by >=2 consumers (must be realized once).
+fn boundaries(ops: read List<Int>, ncons: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    let mut i = 0
+    while i < n {
+        let op = iget(l: read ops, i: i)
+        let mut b = 0
+        if is_boundary(op: op) { b = 1 }
+        if is_leaf(op: op) == false {
+            if is_boundary(op: op) == false {
+                if iget(l: read ncons, i: i) >= 2 { b = 1 }
+            }
+        }
+        List.push(list: mut out, value: read b)
+        i = i + 1
+    }
+    return Unit
+}
+
+// Assign each node the boundary (kernel) it is COMPUTED inside.
+// Walk in REVERSE topo order. A boundary node's kernel-owner is itself. A fused (non-boundary,
+// non-leaf) node inherits the owner of its consumer. We seed owners by pushing each node's owner
+// down to its sources: an elementwise source fuses into the same kernel as us; a source that is
+// itself a boundary (e.g. a REDUCE) stays its own kernel and we DON'T pull it in (that's the cut).
+fn assign_owner(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, bnd: read List<Int>, owner: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    // init: boundary -> itself, else -1 (unassigned)
+    let mut i = 0
+    while i < n {
+        if iget(l: read bnd, i: i) == 1 {
+            List.push(list: mut owner, value: read i)
+        } else {
+            List.push(list: mut owner, value: read -1)
+        }
+        i = i + 1
+    }
+    // reverse pass: propagate this node's kernel-owner to its non-boundary, non-leaf sources
+    let mut k = n - 1
+    while k >= 0 {
+        let myown = iget(l: read owner, i: k)
+        if myown >= 0 {
+            let a = iget(l: read s0, i: k)
+            if a >= 0 {
+                if iget(l: read bnd, i: a) == 0 {
+                    if is_leaf(op: iget(l: read ops, i: a)) == false {
+                        List.set(list: mut owner, index: a, value: read myown)
+                    }
+                }
+            }
+            let b = iget(l: read s1, i: k)
+            if b >= 0 {
+                if iget(l: read bnd, i: b) == 0 {
+                    if is_leaf(op: iget(l: read ops, i: b)) == false {
+                        List.set(list: mut owner, index: b, value: read myown)
+                    }
+                }
+            }
+        }
+        k = k - 1
+    }
+    return Unit
+}
+
+// compact distinct owner-ids of non-leaf nodes into kernel ids 0..k-1, in first-seen order.
+// leaves get kernel-id -1 (they are inputs, not kernels). returns kernel count via out-param kid.
+fn compact(ops: read List<Int>, owner: read List<Int>, kid: mut List<Int>) -> Int {
+    let n = List.len(list: read ops)
+    let map_from = List.new<Int>()
+    let map_to = List.new<Int>()
+    let mut next = 0
+    let mut i = 0
+    while i < n {
+        if is_leaf(op: iget(l: read ops, i: i)) {
+            List.push(list: mut kid, value: read -1)
+        } else {
+            let o = iget(l: read owner, i: i)
+            // look up o in map_from
+            let m = List.len(list: read map_from)
+            let mut found = -1
+            let mut j = 0
+            while j < m {
+                if iget(l: read map_from, i: j) == o { found = iget(l: read map_to, i: j) }
+                j = j + 1
+            }
+            if found < 0 {
+                found = next
+                List.push(list: mut map_from, value: read o)
+                List.push(list: mut map_to, value: read next)
+                next = next + 1
+            }
+            List.push(list: mut kid, value: read found)
+        }
+        i = i + 1
+    }
+    return next
+}
+
+// full pass: arena -> per-node kernel id + kernel count (count via return, ids via out-param)
+fn partition_kernels(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, kid: mut List<Int>) -> Int {
+    let ncons = List.new<Int>()
+    count_consumers(ops: read ops, s0: read s0, s1: read s1, out: mut ncons)
+    let bnd = List.new<Int>()
+    boundaries(ops: read ops, ncons: read ncons, out: mut bnd)
+    let owner = List.new<Int>()
+    assign_owner(ops: read ops, s0: read s0, s1: read s1, bnd: read bnd, owner: mut owner)
+    return compact(ops: read ops, owner: read owner, kid: mut kid)
+}
+
+fn push3(ops: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, op: Int, a: Int, b: Int) -> Unit {
+    List.push(list: mut ops, value: read op)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    return Unit
+}
+
+fn op_name(op: Int) -> fresh String {
+    if op == 0 { return "LOAD" }
+    if op == 1 { return "CONST" }
+    if op == 2 { return "ADD" }
+    if op == 3 { return "MUL" }
+    if op == 4 { return "SUB" }
+    if op == 5 { return "REDUCE" }
+    return "STORE"
+}
+
+fn report(label: read String, ops: read List<Int>, s0: read List<Int>, s1: read List<Int>) -> Unit {
+    let kid = List.new<Int>()
+    let k = partition_kernels(ops: read ops, s0: read s0, s1: read s1, kid: mut kid)
+    let mut hdr = String.concat(left: read label, right: read "  kernels=")
+    hdr = String.concat(left: read hdr, right: read Int.to_string(value: read k))
+    Log.write(message: read hdr)
+    let n = List.len(list: read ops)
+    let mut i = 0
+    while i < n {
+        let mut s = String.concat(left: read "    n", right: read Int.to_string(value: read i))
+        s = String.concat(left: read s, right: read " ")
+        s = String.concat(left: read s, right: read op_name(op: iget(l: read ops, i: i)))
+        s = String.concat(left: read s, right: read " -> kid=")
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read kid, i: i)))
+        Log.write(message: read s)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    // CASE 1: pure elementwise chain  Load -> Add -> Mul -> Store  => 1 kernel
+    //   n0 LOAD x ; n1 CONST 2 ; n2 ADD(n0,n1) ; n3 CONST 3 ; n4 MUL(n2,n3) ; n5 STORE(n4)
+    let o1 = List.new<Int>()
+    let a1 = List.new<Int>()
+    let b1 = List.new<Int>()
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 0, a: -1, b: -1)
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 1, a: -1, b: -1)
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 2, a: 0, b: 1)
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 1, a: -1, b: -1)
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 3, a: 2, b: 3)
+    push3(ops: mut o1, s0: mut a1, s1: mut b1, op: 6, a: 4, b: -1)
+    report(label: read "CASE1 elementwise chain (x+2)*3, store:", ops: read o1, s0: read a1, s1: read b1)
+
+    // CASE 2: elementwise -> reduce -> elementwise   y = x - sum(x)  => 2 kernels
+    //   n0 LOAD x ; n1 REDUCE(n0)=sum(x) ; n2 SUB(n0,n1) ; n3 STORE(n2)
+    // boundary at the REDUCE (kernel 0 = sum); SUB+STORE consume it (kernel 1).
+    let o2 = List.new<Int>()
+    let a2 = List.new<Int>()
+    let b2 = List.new<Int>()
+    push3(ops: mut o2, s0: mut a2, s1: mut b2, op: 0, a: -1, b: -1)
+    push3(ops: mut o2, s0: mut a2, s1: mut b2, op: 5, a: 0, b: -1)
+    push3(ops: mut o2, s0: mut a2, s1: mut b2, op: 4, a: 0, b: 1)
+    push3(ops: mut o2, s0: mut a2, s1: mut b2, op: 6, a: 2, b: -1)
+    report(label: read "CASE2 x - sum(x):", ops: read o2, s0: read a2, s1: read b2)
+
+    // CASE 3: two independent outputs sharing an input  a=x+1 ; b=x*2  => 2 kernels
+    //   n0 LOAD x ; n1 CONST 1 ; n2 ADD(n0,n1) ; n3 STORE(n2)
+    //   n4 CONST 2 ; n5 MUL(n0,n4) ; n6 STORE(n5)
+    // x (LOAD) is a shared INPUT buffer, not a kernel; the two STOREs are two kernels.
+    let o3 = List.new<Int>()
+    let a3 = List.new<Int>()
+    let b3 = List.new<Int>()
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 0, a: -1, b: -1)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 1, a: -1, b: -1)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 2, a: 0, b: 1)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 6, a: 2, b: -1)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 1, a: -1, b: -1)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 3, a: 0, b: 4)
+    push3(ops: mut o3, s0: mut a3, s1: mut b3, op: 6, a: 5, b: -1)
+    report(label: read "CASE3 two outputs sharing input (x+1)(x*2):", ops: read o3, s0: read a3, s1: read b3)
+
+    return Unit
+}

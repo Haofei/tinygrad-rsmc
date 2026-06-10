@@ -1,0 +1,113 @@
+// Port of the CORE of tinygrad/uop/spec.py + validate.py: structural validation of a UOp graph
+// against per-op specs. Checks (recursively): each op has the correct arity (number of srcs),
+// ALU ops have all-matching operand dtypes, and WHERE's condition is bool. tinygrad expresses
+// these as UPat rules + lambdas; here we check arity + the ALU/WHERE dtype constraints directly.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Cmplt Where }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    dtype: String
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(dt: read String, v: Int) -> fresh UOp { return UOp(op: Const, dtype: dt, src: List.new<UOp>(), arg: v) }
+fn uvar(dt: read String, id: Int) -> fresh UOp { return UOp(op: Var, dtype: dt, src: List.new<UOp>(), arg: id) }
+fn uadd(dt: read String, a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, dtype: dt, src: take s, arg: 0)
+}
+
+// expected arity per op (spec.py UPat src tuples)
+fn arity(op: read Ops) -> Int {
+    let mut n = 0
+    match op {
+        Const => { n = 0 }
+        Var => { n = 0 }
+        Add => { n = 2 }
+        Mul => { n = 2 }
+        Cmplt => { n = 2 }
+        Where => { n = 3 }
+        _ => { n = -1 }
+    }
+    return n
+}
+fn is_alu(op: read Ops) -> Bool {
+    match op {
+        Add => { return true }
+        Mul => { return true }
+        Cmplt => { return true }
+        _ => { return false }
+    }
+}
+
+// recursive structural validation; returns true iff the whole graph is well-formed
+fn validate(u: read UOp) -> Bool {
+    let n = List.len(list: read u.src)
+    if n != arity(op: read u.op) { return false }
+    // recurse children
+    let mut i = 0
+    while i < n {
+        let c = List.get(list: read u.src, index: i)
+        if validate(u: read c) == false { return false }
+        i = i + 1
+    }
+    // ALU: all operand dtypes equal the node dtype (spec.py: all x.dtype.base == y.dtype.base).
+    // Cmplt is bool-typed but compares same-dtype operands -> check operands match each other.
+    if is_alu(op: read u.op) {
+        let a = List.get(list: read u.src, index: 0)
+        let b = List.get(list: read u.src, index: 1)
+        if a.dtype != b.dtype { return false }
+        if u.op == Add { if u.dtype != a.dtype { return false } }
+        if u.op == Mul { if u.dtype != a.dtype { return false } }
+    }
+    // WHERE: src0 (condition) must be bool, src1/src2 match node dtype
+    if u.op == Where {
+        let cond = List.get(list: read u.src, index: 0)
+        if cond.dtype != "bool" { return false }
+        let t = List.get(list: read u.src, index: 1)
+        let f = List.get(list: read u.src, index: 2)
+        if t.dtype != u.dtype { return false }
+        if f.dtype != u.dtype { return false }
+    }
+    return true
+}
+
+fn show(label: read String, b: Bool) -> Unit {
+    if b { Log.write(message: read String.concat(left: read label, right: read "valid")) }
+    if b == false { Log.write(message: read String.concat(left: read label, right: read "INVALID")) }
+    return Unit
+}
+
+fn main() -> Unit {
+    // well-formed: (x:int + 2:int) : int
+    let good = uadd(dt: read "int", a: read uvar(dt: read "int", id: 0), b: read uconst(dt: read "int", v: 2))
+    show(label: read "(x+2):int -> ", b: validate(u: read good))                                   // valid
+
+    // dtype mismatch: int + float
+    let bad_dt = uadd(dt: read "int", a: read uvar(dt: read "int", id: 0), b: read uconst(dt: read "float", v: 2))
+    show(label: read "(int + float) -> ", b: validate(u: read bad_dt))                             // INVALID
+
+    // wrong arity: Add with one child
+    local one = List.new<UOp>()
+    List.push(list: mut one, value: read uvar(dt: read "int", id: 0))
+    let bad_arity = UOp(op: Add, dtype: "int", src: take one, arg: 0)
+    show(label: read "Add(1 child) -> ", b: validate(u: read bad_arity))                            // INVALID
+
+    // valid WHERE: cond:bool ? x:int : 0:int
+    let w = UOp(op: Where, dtype: "int", src: where_src(), arg: 0)
+    show(label: read "where(bool,int,int) -> ", b: validate(u: read w))                             // valid
+    return Unit
+}
+
+fn where_src() -> fresh List<UOp> {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read uvar(dt: read "bool", id: 9))
+    List.push(list: mut s, value: read uvar(dt: read "int", id: 0))
+    List.push(list: mut s, value: read uconst(dt: read "int", v: 0))
+    return s
+}

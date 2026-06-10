@@ -1,0 +1,439 @@
+// Port of a FULLER subset of tinygrad's symbolic simplification (tinygrad/uop/symbolic.py:
+// `symbolic_simple` + `symbolic` PatternMatchers, plus a couple codegen/simplify.py-relevant
+// folds). EXTENDS the bottom-up recursive `simplify` of symbolic_rules.rss with MORE of
+// tinygrad's real rules, each cross-checked numerically against real tinygrad (.simplify()).
+//
+// IMPORTANT modelling note (faithful to tinygrad): tinygrad has NO subtraction or negation op.
+//   -x       is represented as  Mul(x, Const(-1))
+//   x - x    is represented as  Add(x, Mul(x, Const(-1)))
+// So x-x->0 and --x->x are NOT special-cased; they fall out of the generic combine-terms and
+// two-stage-ALU rules below, exactly like tinygrad. (Verified: real tinygrad keeps x*-1 as a MUL
+// and only collapses it through these algebraic rules.)
+//
+// Rules ported (each present in symbolic.py / matches real .simplify()):
+//   const fold  Add/Mul of two Const                         (fold_const_alu / exec_alu)
+//   const fold  CmpLt of two Const -> bool Const             (GroupOp.Binary const fold)
+//   const fold  Max of two Const -> Const                    (GroupOp.Binary const fold)
+//   const fold  FloorDiv/FloorMod of two Const               (fold_const_alu)
+//   x+0,0+x,x*1,1*x -> x ; x*0,0*x -> 0                       (symbolic_simple self folding)
+//   x+x -> x*2  (same Var)                                    ((x+x) -> x*2)
+//   (x*c0)+(x*c1) -> x*(c0+c1)                                (combine terms)
+//   x + x*c -> x*(c+1)   (covers x+(-x) -> x*0 -> 0)          ((x+x*c)-> x*(c+1))
+//   (x+a)+b -> x+(a+b) ; (x*a)*b -> x*(a*b)  for consts a,b   (two stage ALU folding, Associative)
+//        --x  = (x*-1)*-1 -> x*((-1)*(-1)) -> x*1 -> x        (falls out of the mul-assoc rule)
+//   x<x -> False                                              (zero folding: x < x -> False)
+//   WHERE(true,a,b)->a ; WHERE(false,a,b)->b ; WHERE(c,a,a)->a (simple where folding)
+//   MAX(x,x) -> x                                             (GroupOp.Idempotent)
+//   AND: x&true->x, x&false->false ; OR: x|false->x, x|true->true  (bool & / | const)
+//   x//1 -> x ; x%1 -> 0                                      (divandmod: x//1->x, x%1->0... )
+//
+// rss-specific (per BRIEFING.md): one constructor per op (no generic `op: Ops` param), dispatch
+// via `u.op == Op` chains; nodes built from `read` children; fresh-return restriction respected
+// (rewrites return a fresh `simplify(...)` / constructor call, never a read-aliased local).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul CmpLt Where Max And Or FloorDiv FloorMod }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+// ---- per-op inline constructors (no generic op param) ----
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn ucmplt(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: CmpLt, src: take s, arg: 0)
+}
+fn umax(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Max, src: take s, arg: 0)
+}
+fn uand(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: And, src: take s, arg: 0)
+}
+fn uor(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Or, src: take s, arg: 0)
+}
+fn ufloordiv(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorDiv, src: take s, arg: 0)
+}
+fn ufloormod(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorMod, src: take s, arg: 0)
+}
+
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn is_var(u: read UOp) -> Bool { return u.op == Var }
+fn same_var(a: read UOp, b: read UOp) -> Bool {
+    if a.op == Var {
+        if b.op == Var { return a.arg == b.arg }
+    }
+    return false
+}
+
+// floor division (Python //): rss `/` truncates toward zero. (only used for const FloorDiv/Mod fold)
+fn ifloordiv(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a - (q * b)
+    let mut neg = false
+    if a < 0 {
+        if b > 0 { neg = true }
+    }
+    if a > 0 {
+        if b < 0 { neg = true }
+    }
+    if r != 0 {
+        if neg { return q - 1 }
+    }
+    return q
+}
+fn ifloormod(a: Int, b: Int) -> Int { return a - (ifloordiv(a: a, b: b) * b) }
+
+// clone a (read) node into a fresh node (for surviving operands of identity rules)
+fn clone1(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return uadd(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == Mul { return umul(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == CmpLt { return ucmplt(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == Max { return umax(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == And { return uand(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == Or { return uor(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == FloorDiv { return ufloordiv(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    return ufloormod(a: read clone1(u: read c0), b: read clone1(u: read c1))
+}
+
+// simplified children accessors
+fn child0(u: read UOp) -> fresh UOp { return simplify(u: read List.get(list: read u.src, index: 0)) }
+fn child1(u: read UOp) -> fresh UOp { return simplify(u: read List.get(list: read u.src, index: 1)) }
+
+// is this node `(x * const)`? -> used for (x*a)*b assoc fold and combine-terms
+fn is_mul_const(u: read UOp) -> Bool {
+    if u.op == Mul {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+fn is_add_const(u: read UOp) -> Bool {
+    if u.op == Add {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+// is `a` a `(x*const)` whose x is the SAME var as `other`? (for combine terms x + x*c)
+fn mulconst_same_base(a: read UOp, other: read UOp) -> Bool {
+    if is_mul_const(u: read a) {
+        let x = List.get(list: read a.src, index: 0)
+        return same_var(a: read x, b: read other)
+    }
+    return false
+}
+// is `a` a `(v*const)` and `b` a `(v*const)` with the same v? (for (x*c0)+(x*c1))
+fn both_mulconst_same(a: read UOp, b: read UOp) -> Bool {
+    if is_mul_const(u: read a) {
+        if is_mul_const(u: read b) {
+            let xa = List.get(list: read a.src, index: 0)
+            let xb = List.get(list: read b.src, index: 0)
+            return same_var(a: read xa, b: read xb)
+        }
+    }
+    return false
+}
+
+// ---- bottom-up recursive simplify: children first, then node rules (terminating) ----
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+
+    let a = child0(u: read u)
+    let b = child1(u: read u)
+
+    if u.op == Mul {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }   // c*c -> c
+            if a.arg == 0 { return uconst(v: 0) }                        // 0*x -> 0
+            if a.arg == 1 { return clone1(u: read b) }                   // 1*x -> x
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return uconst(v: 0) }                        // x*0 -> 0
+            if b.arg == 1 { return clone1(u: read a) }                   // x*1 -> x
+            // (x*a)*b -> x*(a*b)  (covers --x = (x*-1)*-1 -> x*1 -> x)
+            if is_mul_const(u: read a) {
+                let ix = List.get(list: read a.src, index: 0)
+                let ic = List.get(list: read a.src, index: 1)
+                return simplify(u: read umul(a: read ix, b: read uconst(v: ic.arg * b.arg)))
+            }
+        }
+        return umul(a: read a, b: read b)
+    }
+
+    if u.op == Add {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg + b.arg) }   // c+c -> c
+            if a.arg == 0 { return clone1(u: read b) }                   // 0+x -> x
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return clone1(u: read a) }                   // x+0 -> x
+            // (x+a)+b -> x+(a+b)
+            if is_add_const(u: read a) {
+                let ix = List.get(list: read a.src, index: 0)
+                let ic = List.get(list: read a.src, index: 1)
+                return simplify(u: read uadd(a: read ix, b: read uconst(v: ic.arg + b.arg)))
+            }
+        }
+        // (x*c0)+(x*c1) -> x*(c0+c1)   (must run before x+x*c)
+        if both_mulconst_same(a: read a, b: read b) {
+            let x = List.get(list: read a.src, index: 0)
+            let c0 = List.get(list: read a.src, index: 1)
+            let c1 = List.get(list: read b.src, index: 1)
+            return simplify(u: read umul(a: read x, b: read uconst(v: c0.arg + c1.arg)))
+        }
+        // x + x*c -> x*(c+1)   (covers x + (-x) = x + x*-1 -> x*0 -> 0)
+        if mulconst_same_base(a: read b, other: read a) {
+            let c = List.get(list: read b.src, index: 1)
+            return simplify(u: read umul(a: read a, b: read uconst(v: c.arg + 1)))
+        }
+        if mulconst_same_base(a: read a, other: read b) {
+            let c = List.get(list: read a.src, index: 1)
+            return simplify(u: read umul(a: read b, b: read uconst(v: c.arg + 1)))
+        }
+        // x + x -> x*2
+        if same_var(a: read a, b: read b) { return umul(a: read a, b: read uconst(v: 2)) }
+        return uadd(a: read a, b: read b)
+    }
+
+    if u.op == CmpLt {
+        if is_const(u: read a) {
+            if is_const(u: read b) {                                     // c < c -> bool const
+                if a.arg < b.arg { return uconst(v: 1) }
+                return uconst(v: 0)
+            }
+        }
+        if same_var(a: read a, b: read b) { return uconst(v: 0) }        // x < x -> False
+        return ucmplt(a: read a, b: read b)
+    }
+
+    if u.op == Max {
+        if is_const(u: read a) {
+            if is_const(u: read b) {                                     // max(c,c) -> c
+                if a.arg < b.arg { return uconst(v: b.arg) }
+                return uconst(v: a.arg)
+            }
+        }
+        if same_var(a: read a, b: read b) { return clone1(u: read a) }   // max(x,x) -> x
+        return umax(a: read a, b: read b)
+    }
+
+    if u.op == Where {
+        // children: cond, t, f  (3 src). simplify all three.
+        let cond = simplify(u: read List.get(list: read u.src, index: 0))
+        let t = simplify(u: read List.get(list: read u.src, index: 1))
+        let f = simplify(u: read List.get(list: read u.src, index: 2))
+        if cond.op == Const {
+            if cond.arg == 0 { return clone1(u: read f) }               // where(false,t,f) -> f
+            return clone1(u: read t)                                     // where(true,t,f) -> t
+        }
+        if t == f { return clone1(u: read t) }                          // where(c,a,a) -> a
+        local s = List.new<UOp>()
+        List.push(list: mut s, value: read cond)
+        List.push(list: mut s, value: read t)
+        List.push(list: mut s, value: read f)
+        return UOp(op: Where, src: take s, arg: 0)
+    }
+
+    if u.op == And {
+        if is_const(u: read b) {
+            if b.arg == 0 { return uconst(v: 0) }                        // x & false -> false
+            return clone1(u: read a)                                     // x & true  -> x
+        }
+        if is_const(u: read a) {
+            if a.arg == 0 { return uconst(v: 0) }                        // false & x -> false
+            return clone1(u: read b)                                     // true  & x -> x
+        }
+        return uand(a: read a, b: read b)
+    }
+
+    if u.op == Or {
+        if is_const(u: read b) {
+            if b.arg == 0 { return clone1(u: read a) }                   // x | false -> x
+            return uconst(v: 1)                                          // x | true  -> true
+        }
+        if is_const(u: read a) {
+            if a.arg == 0 { return clone1(u: read b) }                   // false | x -> x
+            return uconst(v: 1)                                          // true  | x -> true
+        }
+        return uor(a: read a, b: read b)
+    }
+
+    if u.op == FloorDiv {
+        if is_const(u: read b) {
+            if b.arg == 1 { return clone1(u: read a) }                   // x // 1 -> x
+            if is_const(u: read a) { return uconst(v: ifloordiv(a: a.arg, b: b.arg)) }  // c // c
+        }
+        return ufloordiv(a: read a, b: read b)
+    }
+
+    if u.op == FloorMod {
+        if is_const(u: read b) {
+            if b.arg == 1 { return uconst(v: 0) }                        // x % 1 -> 0
+            if is_const(u: read a) { return uconst(v: ifloormod(a: a.arg, b: b.arg)) }  // c % c
+        }
+        return ufloormod(a: read a, b: read b)
+    }
+
+    return clone1(u: read u)
+}
+
+// ---- pretty printing ----
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    if u.op == Mul { return "Mul" }
+    if u.op == CmpLt { return "CmpLt" }
+    if u.op == Where { return "Where" }
+    if u.op == Max { return "Max" }
+    if u.op == And { return "And" }
+    if u.op == Or { return "Or" }
+    if u.op == FloorDiv { return "FloorDiv" }
+    return "FloorMod"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+fn describe_tree(label: read String, u: read UOp) -> Unit {
+    describe(label: read label, u: read u)
+    if u.op == Const { return Unit }
+    if u.op == Var { return Unit }
+    let l = List.get(list: read u.src, index: 0)
+    let r = List.get(list: read u.src, index: 1)
+    describe(label: read "    left  = ", u: read l)
+    describe(label: read "    right = ", u: read r)
+    return Unit
+}
+
+fn main() -> Unit {
+    // x is Var 7, y is Var 8 throughout
+    Log.write(message: read "== const folding (== tinygrad) ==")
+    describe(label: read "simplify(2+3)   = ", u: read simplify(u: read uadd(a: read uconst(v: 2), b: read uconst(v: 3))))      // Const 5
+    describe(label: read "simplify(6*7)   = ", u: read simplify(u: read umul(a: read uconst(v: 6), b: read uconst(v: 7))))      // Const 42
+    describe(label: read "simplify(17//5) = ", u: read simplify(u: read ufloordiv(a: read uconst(v: 17), b: read uconst(v: 5)))) // Const 3
+    describe(label: read "simplify(17%5)  = ", u: read simplify(u: read ufloormod(a: read uconst(v: 17), b: read uconst(v: 5)))) // Const 2
+
+    Log.write(message: read "== comparison folding (== tinygrad) ==")
+    describe(label: read "simplify(2<3)   = ", u: read simplify(u: read ucmplt(a: read uconst(v: 2), b: read uconst(v: 3))))    // Const 1 (True)
+    describe(label: read "simplify(5<3)   = ", u: read simplify(u: read ucmplt(a: read uconst(v: 5), b: read uconst(v: 3))))    // Const 0 (False)
+    describe(label: read "simplify(x<x)   = ", u: read simplify(u: read ucmplt(a: read uvar(id: 7), b: read uvar(id: 7))))      // Const 0 (False)
+
+    Log.write(message: read "== MAX folding (== tinygrad) ==")
+    describe(label: read "simplify(max(2,3)) = ", u: read simplify(u: read umax(a: read uconst(v: 2), b: read uconst(v: 3))))   // Const 3
+    describe(label: read "simplify(max(x,x)) = ", u: read simplify(u: read umax(a: read uvar(id: 7), b: read uvar(id: 7))))     // Var 7
+
+    Log.write(message: read "== AND / OR with bool const (== tinygrad) ==")
+    // bx is Var 5 (a bool var). true = Const 1, false = Const 0
+    describe(label: read "simplify(x & true)  = ", u: read simplify(u: read uand(a: read uvar(id: 5), b: read uconst(v: 1))))   // Var 5
+    describe(label: read "simplify(x & false) = ", u: read simplify(u: read uand(a: read uvar(id: 5), b: read uconst(v: 0))))   // Const 0
+    describe(label: read "simplify(x | false) = ", u: read simplify(u: read uor(a: read uvar(id: 5), b: read uconst(v: 0))))    // Var 5
+    describe(label: read "simplify(x | true)  = ", u: read simplify(u: read uor(a: read uvar(id: 5), b: read uconst(v: 1))))    // Const 1
+
+    Log.write(message: read "== WHERE folding (== tinygrad) ==")
+    // where(true, a, b) -> a ; where(false, a, b) -> b ; where(c, a, a) -> a
+    local w1 = List.new<UOp>()
+    List.push(list: mut w1, value: read uconst(v: 1))
+    List.push(list: mut w1, value: read uvar(id: 1))
+    List.push(list: mut w1, value: read uvar(id: 2))
+    describe(label: read "simplify(where(true,a,b))  = ", u: read simplify(u: read UOp(op: Where, src: take w1, arg: 0)))       // Var 1
+    local w2 = List.new<UOp>()
+    List.push(list: mut w2, value: read uconst(v: 0))
+    List.push(list: mut w2, value: read uvar(id: 1))
+    List.push(list: mut w2, value: read uvar(id: 2))
+    describe(label: read "simplify(where(false,a,b)) = ", u: read simplify(u: read UOp(op: Where, src: take w2, arg: 0)))       // Var 2
+    local w3 = List.new<UOp>()
+    List.push(list: mut w3, value: read ucmplt(a: read uvar(id: 7), b: read uvar(id: 8)))
+    List.push(list: mut w3, value: read uvar(id: 1))
+    List.push(list: mut w3, value: read uvar(id: 1))
+    describe(label: read "simplify(where(c,a,a))     = ", u: read simplify(u: read UOp(op: Where, src: take w3, arg: 0)))       // Var 1
+    // where(5<3, a, b) -> b  (cond const-folds to false)
+    local w4 = List.new<UOp>()
+    List.push(list: mut w4, value: read ucmplt(a: read uconst(v: 5), b: read uconst(v: 3)))
+    List.push(list: mut w4, value: read uvar(id: 1))
+    List.push(list: mut w4, value: read uvar(id: 2))
+    describe(label: read "simplify(where(5<3,a,b))   = ", u: read simplify(u: read UOp(op: Where, src: take w4, arg: 0)))       // Var 2
+
+    Log.write(message: read "== identity / zero folding (== tinygrad) ==")
+    describe(label: read "simplify(x+0) = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read uconst(v: 0))))         // Var 7
+    describe(label: read "simplify(0+x) = ", u: read simplify(u: read uadd(a: read uconst(v: 0), b: read uvar(id: 7))))         // Var 7
+    describe(label: read "simplify(x*1) = ", u: read simplify(u: read umul(a: read uvar(id: 7), b: read uconst(v: 1))))         // Var 7
+    describe(label: read "simplify(x*0) = ", u: read simplify(u: read umul(a: read uvar(id: 7), b: read uconst(v: 0))))         // Const 0
+    describe(label: read "simplify(x//1)= ", u: read simplify(u: read ufloordiv(a: read uvar(id: 7), b: read uconst(v: 1))))    // Var 7
+    describe(label: read "simplify(x%1) = ", u: read simplify(u: read ufloormod(a: read uvar(id: 7), b: read uconst(v: 1))))    // Const 0
+
+    Log.write(message: read "== neg/sub via Mul(x,-1)  (== tinygrad) ==")
+    // x + (-x)  = Add(x, Mul(x,-1)) -> x*(-1+1) -> x*0 -> Const 0
+    let negx = umul(a: read uvar(id: 7), b: read uconst(v: -1))
+    describe(label: read "simplify(x + (-x)) = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read negx)))            // Const 0
+    // x - x = same shape
+    describe(label: read "simplify(x - x)    = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read umul(a: read uvar(id: 7), b: read uconst(v: -1)))))  // Const 0
+    // --x = (x*-1)*-1 -> x*1 -> x
+    describe(label: read "simplify(--x)      = ", u: read simplify(u: read umul(a: read umul(a: read uvar(id: 7), b: read uconst(v: -1)), b: read uconst(v: -1)))) // Var 7
+
+    Log.write(message: read "== combine terms (== tinygrad) ==")
+    // x+x -> x*2
+    describe_tree(label: read "simplify(x+x)        = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read uvar(id: 7))))
+    // (x*2)+(x*3) -> x*5
+    let e_comb = uadd(a: read umul(a: read uvar(id: 7), b: read uconst(v: 2)), b: read umul(a: read uvar(id: 7), b: read uconst(v: 3)))
+    describe_tree(label: read "simplify((x*2)+(x*3))= ", u: read simplify(u: read e_comb))
+    // x + x*3 -> x*4
+    let e_xpxc = uadd(a: read uvar(id: 7), b: read umul(a: read uvar(id: 7), b: read uconst(v: 3)))
+    describe_tree(label: read "simplify(x + x*3)    = ", u: read simplify(u: read e_xpxc))
+
+    Log.write(message: read "== two-stage ALU assoc (== tinygrad) ==")
+    // (x+4)+5 -> x+9
+    let e_aa = uadd(a: read uadd(a: read uvar(id: 7), b: read uconst(v: 4)), b: read uconst(v: 5))
+    describe_tree(label: read "simplify((x+4)+5)    = ", u: read simplify(u: read e_aa))
+    // (x*2)*3 -> x*6
+    let e_mm = umul(a: read umul(a: read uvar(id: 7), b: read uconst(v: 2)), b: read uconst(v: 3))
+    describe_tree(label: read "simplify((x*2)*3)    = ", u: read simplify(u: read e_mm))
+
+    return Unit
+}

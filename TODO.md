@@ -25,9 +25,9 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - [x] rss: `Int.to_float` conversion — DONE (rss d9387f8): reg_vm + .rssi sig + runtime ABI; full cargo test green
 - [ ] rss: `let mut x = <read-param>` clone-on-bind (codegen E0308)
 - [x] rss: managed-field clone — DONE (rss 7358f50): Clone protocol + Clone.clone<T>/String.clone; full suite green; unblocked generic vec() + PtrDType
-- [ ] rss: `==` on a `read` enum param (auto-deref)
+- [x] rss: `==` on a `read` enum param — DONE (rss 5dd4063)
 - [ ] rss: `List.get` element-type inference on struct-field lists
-- [ ] rss: sum-type value params (pass an enum variant by value to a param)
+- [x] rss: payload-less sum value params — DONE (rss 5dd4063)
 
 ---
 ## Core (top-level), ~2930 LOC

@@ -1,0 +1,78 @@
+// Port of tinygrad/uop/render.py CORE: render a (symbolic) UOp graph to a human-readable infix
+// string -- the `render()`/`__repr__` path tinygrad uses for symbolic shapes/indices. Const ->
+// its value, Var -> name, binary ops -> parenthesized infix. Matches tinygrad's rendered form.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Sub Mul Div Mod }
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn ubin_add(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn ubin_mul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn ubin_sub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
+fn ubin_mod(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mod, src: take s, arg: 0)
+}
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+
+fn symbol(op: read Ops) -> fresh String {
+    match op {
+        Add => { return cat(a: read "", b: read "+") }
+        Sub => { return cat(a: read "", b: read "-") }
+        Mul => { return cat(a: read "", b: read "*") }
+        Div => { return cat(a: read "", b: read "//") }
+        Mod => { return cat(a: read "", b: read "%") }
+        _ => { return cat(a: read "", b: read "?") }
+    }
+}
+
+// render a UOp to an infix string: Const value, Var as v<id>, binary -> (l op r)
+fn render(u: read UOp) -> fresh String {
+    if u.op == Const { return cat(a: read "", b: read Int.to_string(value: read u.arg)) }
+    if u.op == Var { return cat(a: read "v", b: read Int.to_string(value: read u.arg)) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let l = render(u: read c0)
+    let r = render(u: read c1)
+    let sym = symbol(op: read u.op)
+    let inner = cat(a: read l, b: read cat(a: read sym, b: read r))
+    return cat(a: read "(", b: read cat(a: read inner, b: read ")"))
+}
+
+fn main() -> Unit {
+    // (v0 + 2) * 3
+    let e1 = ubin_mul(a: read ubin_add(a: read uvar(id: 0), b: read uconst(v: 2)), b: read uconst(v: 3))
+    Log.write(message: read cat(a: read "render((x+2)*3) = ", b: read render(u: read e1)))     // ((v0+2)*3)
+    // (v0 * 4 + v1) % 8
+    let idx = ubin_mod(a: read ubin_add(a: read ubin_mul(a: read uvar(id: 0), b: read uconst(v: 4)), b: read uvar(id: 1)), b: read uconst(v: 8))
+    Log.write(message: read cat(a: read "render((x*4+y)%8) = ", b: read render(u: read idx)))  // (((v0*4)+v1)%8)
+    // v0 - (v1 * 2)
+    let e3 = ubin_sub(a: read uvar(id: 0), b: read ubin_mul(a: read uvar(id: 1), b: read uconst(v: 2)))
+    Log.write(message: read cat(a: read "render(x-(y*2)) = ", b: read render(u: read e3)))     // (v0-(v1*2))
+    return Unit
+}

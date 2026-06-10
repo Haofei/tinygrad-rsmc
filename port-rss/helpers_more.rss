@@ -1,0 +1,296 @@
+// Faithful port of the REMAINING pure helpers from tinygrad/helpers.py.
+// (prod/ceildiv/round_up/all_same/dedup/argsort already live in helpers.rss.)
+//
+// Covered here:
+//   - flatten(list-of-lists)            helpers.py:48
+//   - get_contraction(old, new)         helpers.py:125-129
+//   - partition(itr, fxn)               helpers.py:87-90 (Int predicate: is-even)
+//   - make_tuple(x:int, cnt)            helpers.py:47 (int branch only)
+//
+// rss notes / idioms used (see BRIEFING.md):
+//   * One statement per line; named args; explicit param effects.
+//   * Managed code cannot `fresh`-return a collection it built -> list results use `out: mut`.
+//   * `List.get` on a struct-field List<Int> loses Int type in ==/arith -> route via `iget`.
+//   * Lists-of-lists are not directly Int-expressible, so we model the input as a flat List<Int>
+//     plus a parallel List<Int> of segment lengths (this is exactly the data flatten consumes).
+//   * `/` truncates toward zero; we only multiply/compare here so no floordiv needed.
+//
+// SKIPPED:
+//   * argfix(*x): NOTE -- not Int-expressible. Its whole job is dispatching on whether the first
+//     vararg is a tuple/list vs scalar (Python type introspection over heterogeneous *args).
+//     There is no Int-level behavior to validate, so it is intentionally omitted.
+
+// typed Int accessor (BRIEFING: List.get can lose Int type)
+fn iget(l: read List<Int>, i: Int) -> Int {
+    return List.get(list: read l, index: i)
+}
+
+// flatten(l) = [item for sublist in l for item in sublist]   (helpers.py:48)
+// Input modeled as `flat` (all items concatenated) + `lens` (length of each sublist).
+// Result is simply the items in order -> copy flat into out, honoring the segment lengths.
+fn flatten(flat: read List<Int>, lens: read List<Int>, out: mut List<Int>) -> Unit {
+    let nseg = List.len(list: read lens)
+    let mut pos = 0
+    let mut s = 0
+    while s < nseg {
+        let seglen = iget(l: read lens, i: s)
+        let mut j = 0
+        while j < seglen {
+            let v = iget(l: read flat, i: pos)
+            List.push(list: mut out, value: read v)
+            pos = pos + 1
+            j = j + 1
+        }
+        s = s + 1
+    }
+    return Unit
+}
+
+// prefix product (itertools.accumulate(shape, operator.mul))
+fn accumulate_mul(shape: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read shape)
+    let mut acc = 1
+    let mut i = 0
+    while i < n {
+        let v = iget(l: read shape, i: i)
+        acc = acc * v
+        List.push(list: mut out, value: read acc)
+        i = i + 1
+    }
+    return Unit
+}
+
+// list.index(value)+1, or 0 when value==1; returns -1 if not found (the ValueError branch).
+fn index_plus_one(l: read List<Int>, value: Int) -> Int {
+    if value == 1 { return 0 }
+    let n = List.len(list: read l)
+    let mut i = 0
+    while i < n {
+        let e = iget(l: read l, i: i)
+        if e == value { return i + 1 }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// get_contraction(old_shape, new_shape)   (helpers.py:125-129)
+//   acc_old = accumulate(old, *); acc_new = accumulate(new, *)
+//   split   = [0 if acc==1 else acc_old.index(acc)+1 for acc in acc_new]   (ValueError -> None)
+//   ret     = [range(st,ed) for st,ed in zip([0]+split[:-1], split[:-1]+[len(old)])]
+// Result is a list of axis groups. We encode it flat: `groups` holds all axes concatenated and
+// `group_lens` holds the size of each group. `ok` out-param is false when the contraction is
+// invalid (Python returns None).
+fn get_contraction(old_shape: read List<Int>, new_shape: read List<Int>,
+                   groups: mut List<Int>, group_lens: mut List<Int>, ok: mut List<Int>) -> Unit {
+    let acc_old = List.new<Int>()
+    accumulate_mul(shape: read old_shape, out: mut acc_old)
+    let acc_new = List.new<Int>()
+    accumulate_mul(shape: read new_shape, out: mut acc_new)
+    let old_len = List.len(list: read old_shape)
+
+    // build split[]; bail to ok=0 on any not-found (ValueError -> None)
+    let split = List.new<Int>()
+    let nnew = List.len(list: read acc_new)
+    let mut i = 0
+    let mut failed = false
+    while i < nnew {
+        let acc = iget(l: read acc_new, i: i)
+        let idx = index_plus_one(l: read acc_old, value: acc)
+        if idx == (0 - 1) {
+            failed = true
+        }
+        List.push(list: mut split, value: read idx)
+        i = i + 1
+    }
+    if failed {
+        List.push(list: mut ok, value: read 0)
+        return Unit
+    }
+    List.push(list: mut ok, value: read 1)
+
+    // starts = [0] + split[:-1] ; ends = split[:-1] + [old_len]
+    // i.e. for k-th group: st = (k==0 ? 0 : split[k-1]) ; ed = (k==last ? old_len : split[k])
+    let nsplit = List.len(list: read split)
+    let mut k = 0
+    while k < nsplit {
+        let st = 0
+        let mut start = st
+        if k > 0 {
+            start = iget(l: read split, i: k - 1)
+        }
+        let mut end = old_len
+        if k < (nsplit - 1) {
+            end = iget(l: read split, i: k)
+        }
+        // emit range(start, end)
+        let mut count = 0
+        let mut a = start
+        while a < end {
+            List.push(list: mut groups, value: read a)
+            count = count + 1
+            a = a + 1
+        }
+        List.push(list: mut group_lens, value: read count)
+        k = k + 1
+    }
+    return Unit
+}
+
+// partition(itr, fxn) -> (yes, no)   (helpers.py:87-90). Predicate: is-even.
+fn is_even(v: Int) -> Bool {
+    return (v % 2) == 0
+}
+fn partition_even(l: read List<Int>, yes: mut List<Int>, no: mut List<Int>) -> Unit {
+    let n = List.len(list: read l)
+    let mut i = 0
+    while i < n {
+        let v = iget(l: read l, i: i)
+        if is_even(v: v) {
+            List.push(list: mut yes, value: read v)
+        }
+        if is_even(v: v) == false {
+            List.push(list: mut no, value: read v)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// make_tuple(x:int, cnt) = (x,)*cnt   (helpers.py:47, int branch)
+fn make_tuple_int(x: Int, cnt: Int, out: mut List<Int>) -> Unit {
+    let mut i = 0
+    while i < cnt {
+        List.push(list: mut out, value: read x)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---- output helpers ----
+fn show_list(label: read String, l: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let mut i = 0
+    let n = List.len(list: read l)
+    while i < n {
+        let v = iget(l: read l, i: i)
+        s = String.concat(left: read s, right: read Int.to_string(value: read v))
+        s = String.concat(left: read s, right: read " ")
+        i = i + 1
+    }
+    Log.write(message: read String.concat(left: read s, right: read "]"))
+    return Unit
+}
+
+// print a flat groups encoding as nested lists: [[..] [..]]
+fn show_groups(label: read String, groups: read List<Int>, group_lens: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let ng = List.len(list: read group_lens)
+    let mut pos = 0
+    let mut g = 0
+    while g < ng {
+        s = String.concat(left: read s, right: read "[")
+        let glen = iget(l: read group_lens, i: g)
+        let mut j = 0
+        while j < glen {
+            let v = iget(l: read groups, i: pos)
+            s = String.concat(left: read s, right: read Int.to_string(value: read v))
+            s = String.concat(left: read s, right: read " ")
+            pos = pos + 1
+            j = j + 1
+        }
+        s = String.concat(left: read s, right: read "] ")
+        g = g + 1
+    }
+    Log.write(message: read String.concat(left: read s, right: read "]"))
+    return Unit
+}
+
+fn main() -> Unit {
+    // ---- flatten([[1,2],[3],[4,5,6]]) -> [1 2 3 4 5 6] ----
+    let flat = List.new<Int>()
+    List.push(list: mut flat, value: read 1)
+    List.push(list: mut flat, value: read 2)
+    List.push(list: mut flat, value: read 3)
+    List.push(list: mut flat, value: read 4)
+    List.push(list: mut flat, value: read 5)
+    List.push(list: mut flat, value: read 6)
+    let lens = List.new<Int>()
+    List.push(list: mut lens, value: read 2)
+    List.push(list: mut lens, value: read 1)
+    List.push(list: mut lens, value: read 3)
+    let fout = List.new<Int>()
+    flatten(flat: read flat, lens: read lens, out: mut fout)
+    show_list(label: read "flatten[[1,2],[3],[4,5,6]] = ", l: read fout)   // [1 2 3 4 5 6 ]
+
+    // ---- get_contraction((2,3,4),(6,4)) -> [[0,1],[2]] ----
+    let old1 = List.new<Int>()
+    List.push(list: mut old1, value: read 2)
+    List.push(list: mut old1, value: read 3)
+    List.push(list: mut old1, value: read 4)
+    let new1 = List.new<Int>()
+    List.push(list: mut new1, value: read 6)
+    List.push(list: mut new1, value: read 4)
+    let g1 = List.new<Int>()
+    let gl1 = List.new<Int>()
+    let ok1 = List.new<Int>()
+    get_contraction(old_shape: read old1, new_shape: read new1, groups: mut g1, group_lens: mut gl1, ok: mut ok1)
+    show_groups(label: read "get_contraction((2,3,4),(6,4)) = ", groups: read g1, group_lens: read gl1) // [[0 1 ] [2 ] ]
+
+    // ---- get_contraction((2,3,4),(24,)) -> [[0,1,2]] ----
+    let new2 = List.new<Int>()
+    List.push(list: mut new2, value: read 24)
+    let g2 = List.new<Int>()
+    let gl2 = List.new<Int>()
+    let ok2 = List.new<Int>()
+    get_contraction(old_shape: read old1, new_shape: read new2, groups: mut g2, group_lens: mut gl2, ok: mut ok2)
+    show_groups(label: read "get_contraction((2,3,4),(24,)) = ", groups: read g2, group_lens: read gl2) // [[0 1 2 ] ]
+
+    // ---- get_contraction((2,3,4),(2,12)) -> [[0],[1,2]] ----
+    let new3 = List.new<Int>()
+    List.push(list: mut new3, value: read 2)
+    List.push(list: mut new3, value: read 12)
+    let g3 = List.new<Int>()
+    let gl3 = List.new<Int>()
+    let ok3 = List.new<Int>()
+    get_contraction(old_shape: read old1, new_shape: read new3, groups: mut g3, group_lens: mut gl3, ok: mut ok3)
+    show_groups(label: read "get_contraction((2,3,4),(2,12)) = ", groups: read g3, group_lens: read gl3) // [[0 ] [1 2 ] ]
+
+    // ---- get_contraction((2,3),(4,)) -> None (ok=0) ----
+    let old4 = List.new<Int>()
+    List.push(list: mut old4, value: read 2)
+    List.push(list: mut old4, value: read 3)
+    let new4 = List.new<Int>()
+    List.push(list: mut new4, value: read 4)
+    let g4 = List.new<Int>()
+    let gl4 = List.new<Int>()
+    let ok4 = List.new<Int>()
+    get_contraction(old_shape: read old4, new_shape: read new4, groups: mut g4, group_lens: mut gl4, ok: mut ok4)
+    let okv = iget(l: read ok4, i: 0)
+    if okv == 0 {
+        Log.write(message: read "get_contraction((2,3),(4,)) = None")     // None
+    }
+    if okv == 1 {
+        Log.write(message: read "get_contraction((2,3),(4,)) = <unexpected>")
+    }
+
+    // ---- partition([1..6], is_even) -> ([2,4,6],[1,3,5]) ----
+    let pin = List.new<Int>()
+    List.push(list: mut pin, value: read 1)
+    List.push(list: mut pin, value: read 2)
+    List.push(list: mut pin, value: read 3)
+    List.push(list: mut pin, value: read 4)
+    List.push(list: mut pin, value: read 5)
+    List.push(list: mut pin, value: read 6)
+    let yes = List.new<Int>()
+    let no = List.new<Int>()
+    partition_even(l: read pin, yes: mut yes, no: mut no)
+    show_list(label: read "partition_even yes = ", l: read yes)           // [2 4 6 ]
+    show_list(label: read "partition_even no  = ", l: read no)            // [1 3 5 ]
+
+    // ---- make_tuple(5,3) -> (5,5,5) ----
+    let mt = List.new<Int>()
+    make_tuple_int(x: 5, cnt: 3, out: mut mt)
+    show_list(label: read "make_tuple(5,3) = ", l: read mt)              // [5 5 5 ]
+
+    return Unit
+}

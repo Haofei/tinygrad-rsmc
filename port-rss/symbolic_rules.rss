@@ -1,0 +1,283 @@
+// Port of MORE of tinygrad's symbolic algebra simplification (tinygrad/uop/symbolic.py:
+// the `symbolic`/`sym` PatternMatcher rules). This EXTENDS the style of rewrite.rss (bottom-up
+// recursive simplify over a real recursive UOp) with additional integer-arithmetic rules.
+//
+// Rules ported (all present in symbolic.py), validated below against a concrete graph and
+// cross-checked numerically against real tinygrad (.simplify()):
+//   const folding: Add/Mul/Sub of two Const -> Const            (fold_const_alu / exec_alu)
+//   x+0->x, 0+x->x, x*1->x, 1*x->x, x*0->0, 0*x->0, x-0->x       (symbolic_simple self folding)
+//   x-x -> 0                                                     (x-x via add/neg, vmin==vmax fold)
+//   x+x -> x*2  (Mul(x, Const 2))                                ((UPat.var("x")+UPat.var("x")) -> x*2)
+//   (x+a)+b -> x+(a+b) for consts a,b                            (two stage ALU folding, Associative)
+//   (x*a)*b -> x*(a*b) for consts a,b                            (two stage ALU folding, Associative)
+//   c*(x+y) -> c*x+c*y ONLY if it reduces consts                 (y*(x+c) -> y*x + y*c, weakint)
+//
+// rss-specific notes (per BRIEFING.md):
+//  - one constructor per op (no generic `op: Ops` param); dispatch with `u.op == Op` chains.
+//  - nodes built from `read` children via uadd/umul/usub helpers (owned-collection codegen).
+//  - fresh-return restriction: when a rule rewrites, we return `simplify(read child)` (a fresh
+//    call) rather than a `read`-aliased local. The already-simplified children `a`/`b` are also
+//    re-simplified through their original src node when reused so the result stays a clean fresh.
+//  - `/` truncates toward zero; only integer add/mul/sub consts are folded here, no div, so this
+//    matches tinygrad's int semantics exactly.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sub }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+// ---- per-op inline constructors ----
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+fn usub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
+
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn is_var(u: read UOp) -> Bool { return u.op == Var }
+
+// same Var id? (x-x, etc.)  Var nodes carry their id in arg.
+fn same_var(a: read UOp, b: read UOp) -> Bool {
+    if a.op == Var {
+        if b.op == Var { return a.arg == b.arg }
+    }
+    return false
+}
+
+// child accessors (typed; avoids List<UOp>.get type quirks at call sites)
+fn child0(u: read UOp) -> fresh UOp { return simplify(u: read List.get(list: read u.src, index: 0)) }
+fn child1(u: read UOp) -> fresh UOp { return simplify(u: read List.get(list: read u.src, index: 1)) }
+
+// is this node `(x * const)`? (used for (x*a)*b associative const folding)
+fn is_mul_const(u: read UOp) -> Bool {
+    if u.op == Mul {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+// is this node `(x + const)`? (used for (x+a)+b associative const folding)
+fn is_add_const(u: read UOp) -> Bool {
+    if u.op == Add {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+// can c*(sum) be distributed reducing a const? (c const, sum is Add with a const addend)
+fn can_distribute(c: read UOp, sum: read UOp) -> Bool {
+    if c.op == Const {
+        if sum.op == Add {
+            let sl = List.get(list: read sum.src, index: 0)
+            let sr = List.get(list: read sum.src, index: 1)
+            if sl.op == Const { return true }
+            if sr.op == Const { return true }
+        }
+    }
+    return false
+}
+
+// ---- bottom-up recursive simplify, children first then node rules (terminating) ----
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+
+    // simplify children first
+    let a = child0(u: read u)
+    let b = child1(u: read u)
+
+    if u.op == Mul {
+        // const folding: Const * Const -> Const
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }
+            if a.arg == 0 { return uconst(v: 0) }          // 0*x -> 0
+            if a.arg == 1 { return umul_passthrough_right(b: read b) } // 1*x -> x
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return uconst(v: 0) }          // x*0 -> 0
+            if b.arg == 1 { return umul_passthrough_left(a: read a) }  // x*1 -> x
+            // (x*a)*b -> x*(a*b)  for consts a,b : a here is the simplified left child
+            if is_mul_const(u: read a) {
+                let ia = List.get(list: read a.src, index: 0)   // inner x
+                let ic = List.get(list: read a.src, index: 1)   // inner const a
+                return umul(a: read ia, b: read uconst(v: ic.arg * b.arg))
+            }
+        }
+        // c*(x+y) -> c*x + c*y ONLY if it reduces consts (i.e. x or y is a const so c*that folds)
+        if can_distribute(c: read a, sum: read b) { return try_distribute(c: read a, sum: read b) }
+        if can_distribute(c: read b, sum: read a) { return try_distribute(c: read b, sum: read a) }
+        return umul(a: read a, b: read b)
+    }
+
+    if u.op == Add {
+        // const folding: Const + Const -> Const
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg + b.arg) }
+            if a.arg == 0 { return umul_passthrough_right(b: read b) }  // 0+x -> x
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return umul_passthrough_left(a: read a) }   // x+0 -> x
+            // (x+a)+b -> x+(a+b) for consts a,b
+            if is_add_const(u: read a) {
+                let ia = List.get(list: read a.src, index: 0)   // inner x
+                let ic = List.get(list: read a.src, index: 1)   // inner const a
+                return uadd(a: read ia, b: read uconst(v: ic.arg + b.arg))
+            }
+        }
+        // x+x -> x*2  (same Var id)
+        if same_var(a: read a, b: read b) { return umul(a: read a, b: read uconst(v: 2)) }
+        return uadd(a: read a, b: read b)
+    }
+
+    if u.op == Sub {
+        // const folding: Const - Const -> Const
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg - b.arg) }
+        }
+        // x-0 -> x
+        if is_const(u: read b) {
+            if b.arg == 0 { return umul_passthrough_left(a: read a) }
+        }
+        // x-x -> 0  (same Var id)
+        if same_var(a: read a, b: read b) { return uconst(v: 0) }
+        return usub(a: read a, b: read b)
+    }
+
+    return uadd(a: read a, b: read b)
+}
+
+// fresh passthroughs: rebuild the surviving operand as a fresh node (faithful, terminating;
+// avoids returning a read-aliased local).
+fn umul_passthrough_left(a: read UOp) -> fresh UOp {
+    if a.op == Const { return uconst(v: a.arg) }
+    if a.op == Var { return uvar(id: a.arg) }
+    return simplify(u: read a)
+}
+fn umul_passthrough_right(b: read UOp) -> fresh UOp {
+    if b.op == Const { return uconst(v: b.arg) }
+    if b.op == Var { return uvar(id: b.arg) }
+    return simplify(u: read b)
+}
+
+// distribute c*(sum) -> c*sl + c*sr ONLY if sum is an Add and one side is a const (so a const
+// folds away). Returns the distributed Add, or a Const sentinel (op != Add) if not applicable.
+fn try_distribute(c: read UOp, sum: read UOp) -> fresh UOp {
+    if c.op == Const {
+        if sum.op == Add {
+            let sl = List.get(list: read sum.src, index: 0)
+            let sr = List.get(list: read sum.src, index: 1)
+            // only if it reduces consts: one of the addends is a const
+            if sl.op == Const {
+                let nl = uconst(v: c.arg * sl.arg)
+                let nr = simplify(u: read umul(a: read c, b: read sr))
+                return uadd(a: read nl, b: read nr)
+            }
+            if sr.op == Const {
+                let nl = simplify(u: read umul(a: read c, b: read sl))
+                let nr = uconst(v: c.arg * sr.arg)
+                return uadd(a: read nl, b: read nr)
+            }
+        }
+    }
+    return uconst(v: 0)   // sentinel: op == Const, not Add
+}
+
+// ---- pretty printing ----
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    if u.op == Sub { return "Sub" }
+    return "Mul"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+// describe root + its two children (for binary results)
+fn describe_tree(label: read String, u: read UOp) -> Unit {
+    describe(label: read label, u: read u)
+    if u.op == Const { return Unit }
+    if u.op == Var { return Unit }
+    let l = List.get(list: read u.src, index: 0)
+    let r = List.get(list: read u.src, index: 1)
+    describe(label: read "    left  = ", u: read l)
+    describe(label: read "    right = ", u: read r)
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "== const folding ==")
+    // 2+3 -> Const 5 ; 6*7 -> Const 42 ; 10-4 -> Const 6
+    describe(label: read "simplify(2+3) = ", u: read simplify(u: read uadd(a: read uconst(v: 2), b: read uconst(v: 3))))
+    describe(label: read "simplify(6*7) = ", u: read simplify(u: read umul(a: read uconst(v: 6), b: read uconst(v: 7))))
+    describe(label: read "simplify(10-4) = ", u: read simplify(u: read usub(a: read uconst(v: 10), b: read uconst(v: 4))))
+
+    Log.write(message: read "== identity / zero folding ==")
+    // x is Var 7 throughout
+    describe(label: read "simplify(x+0) = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read uconst(v: 0))))
+    describe(label: read "simplify(0+x) = ", u: read simplify(u: read uadd(a: read uconst(v: 0), b: read uvar(id: 7))))
+    describe(label: read "simplify(x*1) = ", u: read simplify(u: read umul(a: read uvar(id: 7), b: read uconst(v: 1))))
+    describe(label: read "simplify(1*x) = ", u: read simplify(u: read umul(a: read uconst(v: 1), b: read uvar(id: 7))))
+    describe(label: read "simplify(x*0) = ", u: read simplify(u: read umul(a: read uvar(id: 7), b: read uconst(v: 0))))
+    describe(label: read "simplify(0*x) = ", u: read simplify(u: read umul(a: read uconst(v: 0), b: read uvar(id: 7))))
+    describe(label: read "simplify(x-0) = ", u: read simplify(u: read usub(a: read uvar(id: 7), b: read uconst(v: 0))))
+
+    Log.write(message: read "== x-x -> 0 ==")
+    describe(label: read "simplify(x-x) = ", u: read simplify(u: read usub(a: read uvar(id: 7), b: read uvar(id: 7))))
+
+    Log.write(message: read "== x+x -> x*2 ==")
+    describe_tree(label: read "simplify(x+x) = ", u: read simplify(u: read uadd(a: read uvar(id: 7), b: read uvar(id: 7))))
+
+    Log.write(message: read "== (x+a)+b -> x+(a+b) ==")
+    // (x+4)+5 -> Add(Var, Const 9)
+    let e_assoc_add = uadd(a: read uadd(a: read uvar(id: 7), b: read uconst(v: 4)), b: read uconst(v: 5))
+    describe_tree(label: read "simplify((x+4)+5) = ", u: read simplify(u: read e_assoc_add))
+    // (2+3)+x : children-first folds 2+3 -> 5, root Add(Const 5, Var) -> value 5
+    let e_front = uadd(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uvar(id: 7))
+    describe_tree(label: read "simplify((2+3)+x) = ", u: read simplify(u: read e_front))
+
+    Log.write(message: read "== (x*a)*b -> x*(a*b) ==")
+    // (x*2)*3 -> Mul(Var, Const 6)
+    let e_assoc_mul = umul(a: read umul(a: read uvar(id: 7), b: read uconst(v: 2)), b: read uconst(v: 3))
+    describe_tree(label: read "simplify((x*2)*3) = ", u: read simplify(u: read e_assoc_mul))
+
+    Log.write(message: read "== c*(x+const) -> c*x + c*const  (reduces consts) ==")
+    // 2*(x+3) -> Add( Mul(Var,Const 2), Const 6 )
+    let e_dist = umul(a: read uconst(v: 2), b: read uadd(a: read uvar(id: 7), b: read uconst(v: 3)))
+    describe_tree(label: read "simplify(2*(x+3)) = ", u: read simplify(u: read e_dist))
+    let r_dist = simplify(u: read e_dist)
+    let dl = List.get(list: read r_dist.src, index: 0)
+    describe_tree(label: read "  left subtree   = ", u: read dl)
+
+    Log.write(message: read "== c*(x+y) NOT distributed (no const to fold) ==")
+    // 2*(x+y) stays Mul(Const 2, Add(Var,Var))
+    let e_nodist = umul(a: read uconst(v: 2), b: read uadd(a: read uvar(id: 8), b: read uvar(id: 9)))
+    describe_tree(label: read "simplify(2*(x+y)) = ", u: read simplify(u: read e_nodist))
+
+    return Unit
+}

@@ -46,12 +46,24 @@ fn d_fp8e4m3fnuz()-> fresh DType { return DType(priority: 9,  bitsize: 8, name: 
 fn d_fp8e5m2fnuz()-> fresh DType { return DType(priority: 10, bitsize: 8, name: "float8_e5m2fnuz", fmt: None, count: 1) }
 
 // vec(sz): vectorized dtype (dtype.py DType.vec) -- same scalar fields, count=sz, so
-// itemsize = scalar_bytes * sz. Provided as literal-based per-scalar constructors: rss can't
-// clone a String field out of a read DType (the documented clone-gap), so a generic
-// vec(base: read DType) cannot rebuild the name; these build from the literals directly.
-fn d_float32_vec(sz: Int) -> fresh DType { return DType(priority: 13, bitsize: 32, name: "float", fmt: Some("f"), count: sz) }
-fn d_int32_vec(sz: Int)   -> fresh DType { return DType(priority: 5,  bitsize: 32, name: "int",   fmt: Some("i"), count: sz) }
-fn d_bool_vec(sz: Int)    -> fresh DType { return DType(priority: 0,  bitsize: 1,  name: "bool",  fmt: Some("?"), count: sz) }
+// itemsize = scalar_bytes * sz. Generic now that rss has Clone: clone the base (Clone.clone<T>)
+// then rebuild with count=sz (the clone gives owned name/fmt to move into the new DType).
+fn d_vec(base: read DType, sz: Int) -> fresh DType {
+    let c = Clone.clone<DType>(self: read base)
+    return DType(priority: c.priority, bitsize: c.bitsize, name: c.name, fmt: c.fmt, count: sz)
+}
+
+// PtrDType (dtype.py): pointer to `base` with `size` elements; `local` = scratch mem. Now
+// portable since Clone lets us store a cloned dynamic base. Pointer itemsize = host ptr (8).
+struct PtrDType derives(Clone) {
+    base: DType
+    size: Int
+    local: Bool
+}
+fn d_ptr(base: read DType, size: Int, local: Bool) -> fresh PtrDType {
+    return PtrDType(base: Clone.clone<DType>(self: read base), size: size, local: local)
+}
+fn PtrDType.itemsize(self: read PtrDType) -> Int { return 8 }
 
 // inverse of the dtypes namespace: C name -> DType
 fn dtype_by_name(n: read String) -> fresh DType {
@@ -349,12 +361,17 @@ fn main() -> Unit {
     showname(label: read "lud(int32,int64) = ",   d: read least_upper_dtype(a: read d_int32(),   b: read d_int64()))    // long
     showname(label: read "lud(bool,int8) = ",     d: read least_upper_dtype(a: read d_bool(),    b: read d_int8()))     // signed char
     // vec dtypes: float32.vec(4) itemsize 16 (4*4); bool.vec(4) itemsize 4 (1*4); count tracked
-    let f32x4 = d_float32_vec(sz: 4)
+    let f32x4 = d_vec(base: read d_float32(), sz: 4)
     report(label: read "float32.vec(4).itemsize = ", v: DType.itemsize(self: read f32x4))   // 16
     report(label: read "float32.vec(4).count = ",    v: f32x4.count)                          // 4
-    let blx4 = d_bool_vec(sz: 4)
+    let blx4 = d_vec(base: read d_bool(), sz: 4)
     report(label: read "bool.vec(4).itemsize = ",    v: DType.itemsize(self: read blx4))      // 4
-    let i32x8 = d_int32_vec(sz: 8)
+    let i32x8 = d_vec(base: read d_int32(), sz: 8)
     report(label: read "int32.vec(8).itemsize = ",   v: DType.itemsize(self: read i32x8))     // 32
+    // PtrDType: itemsize is host pointer size (8); base preserved
+    let pf = d_ptr(base: read d_float32(), size: 16, local: false)
+    report(label: read "ptr(float32).itemsize = ",   v: PtrDType.itemsize(self: read pf))      // 8
+    report(label: read "ptr(float32).size = ",       v: pf.size)                                // 16
+    Log.write(message: read String.concat(left: read "ptr(float32).base.name = ", right: read pf.base.name))  // float
     return Unit
 }

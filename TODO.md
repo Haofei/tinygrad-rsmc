@@ -24,14 +24,14 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - [x] **mc: `UnsupportedCEmission` on nested call in a call arg** — FIXED (modern-c 05ff744): float_literal + raw.load<T> now recognized as float; zig test 142/142 green
 - [x] rss: `Int.to_float` conversion — DONE (rss d9387f8): reg_vm + .rssi sig + runtime ABI; full cargo test green
 - [ ] rss: `let mut x = <read-param>` clone-on-bind (codegen E0308)
-- [ ] rss: managed-field clone (callable `.clone()`/take-rebuild) — blocks generic `vec()`, `PtrDType`
+- [x] rss: managed-field clone — DONE (rss 7358f50): Clone protocol + Clone.clone<T>/String.clone; full suite green; unblocked generic vec() + PtrDType
 - [ ] rss: `==` on a `read` enum param (auto-deref)
 - [ ] rss: `List.get` element-type inference on struct-field lists
 - [ ] rss: sum-type value params (pass an enum variant by value to a param)
 
 ---
 ## Core (top-level), ~2930 LOC
-- 🟡 `dtype.py` (378) → `dtype.rss` — scalars, itemsize(count-aware), predicates, can_lossless_cast, promo lattice, least_upper_dtype, vec(). **Remaining:** PtrDType, ImageDType (blocked: managed-field clone), `_get_recursive_parents` edge cases.
+- 🟡 `dtype.py` (378) → `dtype.rss` — scalars, itemsize, predicates, can_lossless_cast, promo lattice, least_upper_dtype, **generic vec() + PtrDType** (via rss Clone). **Remaining:** ImageDType, `_get_recursive_parents` edge cases.
 - 🟡 `helpers.py` (600) → `helpers.rss` — prod, ceildiv, round_up, all_same, dedup, argsort. **Remaining:** flatten, fully_flatten, get_contraction, merge_dicts, round-trip helpers, partition, getenv/Context, Timing/Profiling (host-only).
 - 🟡 `device.py` (377) → `device.rss`/`device_buffer.rss` — Device[name] dispatch + CPU-interpreter backend; **Buffer lifecycle (allocate/ensure/copyin/copyout) + Allocator in_use/peak accounting** validated. **Remaining:** Compiler/CompiledProgram interface, real device backends.
 - 🟡 `gradient.py` (135) → `gradient*.rss`/`autodiff*.rss`/`gradient_full.rss` — **full reverse-mode autodiff: compute_gradient reverse-toposort + accumulation, vjp for add/sub/mul/div/neg/recip/sqrt/sin/exp/log/max/where/pow** (29/29 match tinygrad .gradient()). transcendental helpers (fsqrt/fexp/fln/fsin/fcos) hand-impl to 1e-4. **Remaining (minor):** integrate with the lazy Tensor `.backward()` glue.

@@ -1,0 +1,294 @@
+// Full-feature port of tinygrad's UPat matcher (uop/ops.py UPat.match, lines ~1310-1329,
+// plus the constructor flags in __init__). upat.rss covered the core recursive matcher
+// (PAny/PConst/POp + positional capture). This file adds the features it left out, each
+// validated against real tinygrad behavior:
+//
+//   * NAMED captures        -> store.setdefault(name, uop) is not uop  (name->UOp Map, with the
+//                              consistency rule: re-binding a name to a DIFFERENT uop fails)
+//   * OP-SETS               -> uop.op not in self.op           (a UPat matching ANY op in a set)
+//   * dtype constraint      -> uop.dtype not in self.match_dtype (we model dtype as a String)
+//   * allow_any_len/variadic-> len(uop.src) < required_len, no strict_length equality check
+//   * UPat.var / UPat.cvar  -> sugar constructors (var = named wildcard, cvar = named CONST)
+//
+// Cross-checked against tinygrad:
+//   p = UPat(Ops.MUL, src=(UPat.var('x'), UPat.cvar('c'))) ; p.match(x*1, {}) ->
+//       [{'x': <var>, 'c': <const 1>}]
+//   UPat({ADD,SUB}).match(ADD)->True, .match(MUL)->[] ; UPat(dtype=float).match(int var)->[]
+//   UPat(SINK, src=(a,b), allow_any_len=True).match over 1/2/3 srcs -> False/True/True
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sub Sink }
+sum PKind derives(Clone, Eq) { PAny PConst POp }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    dtype: String
+    src: List<UOp>
+    arg: Int
+}
+
+// A UPat carries, in addition to upat.rss's kind/op/cval/children:
+//   name      : named capture key ("" = unnamed)
+//   ops       : op-set; if non-empty the node matches when u.op is ANY member
+//   dt        : dtype constraint ("" = no constraint)
+//   any_len   : allow_any_len -> match when len(src) >= #children (else strict ==)
+struct UPat derives(Clone) {
+    kind: PKind
+    op: Ops
+    cval: Int
+    capture: Bool
+    name: String
+    ops: List<Ops>
+    dt: String
+    any_len: Bool
+    children: List<UPat>
+}
+
+// ---- UOp constructors (one per op; build node from read children, per briefing) ----
+fn uconst(v: Int, dt: read String) -> fresh UOp { return UOp(op: Const, dtype: String.concat(left: read dt, right: read ""), src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int, dt: read String) -> fresh UOp { return UOp(op: Var, dtype: String.concat(left: read dt, right: read ""), src: List.new<UOp>(), arg: id) }
+
+fn ubin(op_add: Bool, a: read UOp, b: read UOp, dt: read String) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    if op_add { return UOp(op: Add, dtype: String.concat(left: read dt, right: read ""), src: take s, arg: 0) }
+    return UOp(op: Sub, dtype: String.concat(left: read dt, right: read ""), src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp, dt: read String) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, dtype: String.concat(left: read dt, right: read ""), src: take s, arg: 0)
+}
+// SINK with a variadic number of srcs (built from a prepared list)
+fn usink(srcs: take List<UOp>) -> fresh UOp { return UOp(op: Sink, dtype: "void", src: take srcs, arg: 0) }
+
+// ---- UPat constructors ----
+fn empty_ops() -> fresh List<Ops> { return List.new<Ops>() }
+fn no_kids() -> fresh List<UPat> { return List.new<UPat>() }
+
+// UPat.var(name): a named wildcard (matches anything, binds name)
+fn p_var(name: read String) -> fresh UPat {
+    return UPat(kind: PAny, op: Const, cval: 0, capture: true, name: String.concat(left: read name, right: read ""), ops: empty_ops(), dt: "", any_len: false, children: no_kids())
+}
+// UPat.cvar(name): a named CONST wildcard (matches any CONST, binds name) -- ignores value
+fn p_cvar(name: read String) -> fresh UPat {
+    return UPat(kind: PConst, op: Const, cval: 0, capture: true, name: String.concat(left: read name, right: read ""), ops: empty_ops(), dt: "", any_len: false, children: no_kids())
+}
+// a named wildcard constrained to a dtype string
+fn p_var_dt(name: read String, dt: read String) -> fresh UPat {
+    return UPat(kind: PAny, op: Const, cval: 0, capture: true, name: String.concat(left: read name, right: read ""), ops: empty_ops(), dt: String.concat(left: read dt, right: read ""), any_len: false, children: no_kids())
+}
+// CONST with exact value
+fn p_const(v: Int) -> fresh UPat {
+    return UPat(kind: PConst, op: Const, cval: v, capture: false, name: "", ops: empty_ops(), dt: "", any_len: false, children: no_kids())
+}
+fn p_mul2(a: read UPat, b: read UPat) -> fresh UPat {
+    local s = List.new<UPat>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UPat(kind: POp, op: Mul, cval: 0, capture: false, name: "", ops: empty_ops(), dt: "", any_len: false, children: take s)
+}
+// POp matching ANY op in a set (ops list non-empty); op field unused in that case
+fn p_opset2(o1: read Ops, o2: read Ops, name: read String) -> fresh UPat {
+    local s = List.new<Ops>()
+    List.push(list: mut s, value: read o1)
+    List.push(list: mut s, value: read o2)
+    return UPat(kind: POp, op: Const, cval: 0, capture: true, name: String.concat(left: read name, right: read ""), ops: take s, dt: "", any_len: true, children: no_kids())
+}
+// SINK with allow_any_len: lists 2 children but matches >= 2 srcs
+fn p_sink_anylen(a: read UPat, b: read UPat) -> fresh UPat {
+    local s = List.new<UPat>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UPat(kind: POp, op: Sink, cval: 0, capture: false, name: "", ops: empty_ops(), dt: "", any_len: true, children: take s)
+}
+
+// op-set membership: compare each set member against u.op (field access compares cleanly)
+fn op_in_set(set: read List<Ops>, u: read UOp) -> Bool {
+    let n = List.len(list: read set)
+    let mut i = 0
+    let mut found = false
+    while i < n {
+        let o = List.get(list: read set, index: i)
+        if o == u.op { found = true }
+        i = i + 1
+    }
+    return found
+}
+
+// named-capture bind with the setdefault-consistency rule:
+//   - name not yet bound        -> insert, ok
+//   - name bound to SAME uop    -> ok       (structural equality)
+//   - name bound to DIFFERENT   -> fail
+fn same_uop(a: read UOp, b: read UOp) -> Bool { if a == b { return true } return false }
+
+fn try_bind(name: read String, u: read UOp, binds: mut Map<String, UOp>) -> Bool {
+    match Map.get(map: read binds, key: read name) {
+        Some(prev) => {
+            if same_uop(a: read prev, b: read u) { return true }
+            return false
+        }
+        None => {
+            Map.insert(map: mut binds, key: read name, value: read u)
+            return true
+        }
+    }
+}
+
+// the full structural matcher, mirroring UPat.match
+fn match_pat(pat: read UPat, u: read UOp, binds: mut Map<String, UOp>) -> Bool {
+    // op constraint: single-op (POp non-set) or op-set
+    if pat.kind == POp {
+        let nset = List.len(list: read pat.ops)
+        if nset > 0 {
+            if op_in_set(set: read pat.ops, u: read u) == false { return false }
+        } else {
+            if u.op == pat.op { } else { return false }
+        }
+    }
+    if pat.kind == PConst {
+        if u.op == Const { } else { return false }
+        // p_cvar (named) accepts any const value; p_const checks the exact value
+        if pat.capture { } else {
+            if u.arg == pat.cval { } else { return false }
+        }
+    }
+    // dtype constraint
+    let dlen = String.len(value: read pat.dt)
+    if dlen > 0 {
+        if pat.dt == u.dtype { } else { return false }
+    }
+    // children / arity, with allow_any_len
+    let nc = List.len(list: read pat.children)
+    if nc > 0 {
+        let ns = List.len(list: read u.src)
+        if pat.any_len {
+            if ns < nc { return false }
+        } else {
+            if ns == nc { } else { return false }
+        }
+        let mut i = 0
+        let mut ok = true
+        while i < nc {
+            let cp = List.get(list: read pat.children, index: i)
+            let cu = List.get(list: read u.src, index: i)
+            let m = match_pat(pat: read cp, u: read cu, binds: mut binds)
+            if m == false { ok = false }
+            i = i + 1
+        }
+        if ok { } else { return false }
+    }
+    // named capture last (only bind once the node itself matched, like store.setdefault)
+    let has_name = String.len(value: read pat.name)
+    if has_name > 0 {
+        let bound = try_bind(name: read pat.name, u: read u, binds: mut binds)
+        if bound == false { return false }
+    }
+    return true
+}
+
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    if u.op == Sub { return "Sub" }
+    if u.op == Sink { return "Sink" }
+    return "Mul"
+}
+
+fn yn(b: Bool) -> fresh String { if b { return "yes" } return "no" }
+
+fn main() -> Unit {
+    Log.write(message: read "=== UPat full-feature validation (vs tinygrad) ===")
+
+    // ---- 1. NAMED captures: MUL(var x, cvar c) on x*1, look up "x" ----
+    // tinygrad: UPat(Ops.MUL, src=(UPat.var('x'), UPat.cvar('c'))).match(x*1) -> {'x':var,'c':const}
+    let pat_named = p_mul2(a: read p_var(name: read "x"), b: read p_cvar(name: read "c"))
+    let xvar = uvar(id: 7, dt: read "int")
+    let one = uconst(v: 1, dt: read "int")
+    let e_x1 = umul(a: read xvar, b: read one, dt: read "int")
+    let binds1 = Map.new<String, UOp>()
+    let m1 = match_pat(pat: read pat_named, u: read e_x1, binds: mut binds1)
+    Log.write(message: read String.concat(left: read "[named] MUL(var x, cvar c) matches x*1: ", right: read yn(b: m1)))
+    if m1 {
+        match Map.get(map: read binds1, key: read "x") {
+            Some(cap) => { Log.write(message: read String.concat(left: read "  lookup name 'x' -> op = ", right: read op_name(u: read cap))) }
+            None => { Log.write(message: read "  lookup name 'x' -> MISSING") }
+        }
+        match Map.get(map: read binds1, key: read "c") {
+            Some(cap) => { Log.write(message: read String.concat(left: read "  lookup name 'c' -> op = ", right: read op_name(u: read cap))) }
+            None => { Log.write(message: read "  lookup name 'c' -> MISSING") }
+        }
+    }
+
+    // ---- 1b. named-capture CONSISTENCY: MUL(x, x) requires both operands identical ----
+    // tinygrad: UPat(MUL, src=(var('x'), var('x'))) matches y*y but not y*z.
+    let pat_xx = p_mul2(a: read p_var(name: read "x"), b: read p_var(name: read "x"))
+    let yv = uvar(id: 3, dt: read "int")
+    let zv = uvar(id: 4, dt: read "int")
+    let e_yy = umul(a: read yv, b: read yv, dt: read "int")
+    let e_yz = umul(a: read yv, b: read zv, dt: read "int")
+    let b_yy = Map.new<String, UOp>()
+    let b_yz = Map.new<String, UOp>()
+    let m_yy = match_pat(pat: read pat_xx, u: read e_yy, binds: mut b_yy)
+    let m_yz = match_pat(pat: read pat_xx, u: read e_yz, binds: mut b_yz)
+    Log.write(message: read String.concat(left: read "[named] MUL(x,x) matches y*y: ", right: read yn(b: m_yy)))
+    Log.write(message: read String.concat(left: read "[named] MUL(x,x) matches y*z: ", right: read yn(b: m_yz)))
+
+    // ---- 2. OP-SETS: UPat({ADD,SUB}) matches ADD and SUB, not MUL ----
+    let pat_set = p_opset2(o1: read Add, o2: read Sub, name: read "n")
+    let e_add = ubin(op_add: true, a: read xvar, b: read one, dt: read "int")
+    let e_sub = ubin(op_add: false, a: read xvar, b: read one, dt: read "int")
+    let e_mul = umul(a: read xvar, b: read one, dt: read "int")
+    let bs1 = Map.new<String, UOp>()
+    let bs2 = Map.new<String, UOp>()
+    let bs3 = Map.new<String, UOp>()
+    let ms_add = match_pat(pat: read pat_set, u: read e_add, binds: mut bs1)
+    let ms_sub = match_pat(pat: read pat_set, u: read e_sub, binds: mut bs2)
+    let ms_mul = match_pat(pat: read pat_set, u: read e_mul, binds: mut bs3)
+    Log.write(message: read String.concat(left: read "[op-set] {ADD,SUB} matches ADD: ", right: read yn(b: ms_add)))
+    Log.write(message: read String.concat(left: read "[op-set] {ADD,SUB} matches SUB: ", right: read yn(b: ms_sub)))
+    Log.write(message: read String.concat(left: read "[op-set] {ADD,SUB} matches MUL: ", right: read yn(b: ms_mul)))
+
+    // ---- 3. dtype constraint: UPat(name='v', dtype=float) ----
+    // tinygrad: matches a float UOp, rejects an int UOp.
+    let pat_f = p_var_dt(name: read "v", dt: read "float")
+    let int_var = uvar(id: 1, dt: read "int")
+    let flt_var = uvar(id: 2, dt: read "float")
+    let bd1 = Map.new<String, UOp>()
+    let bd2 = Map.new<String, UOp>()
+    let md_int = match_pat(pat: read pat_f, u: read int_var, binds: mut bd1)
+    let md_flt = match_pat(pat: read pat_f, u: read flt_var, binds: mut bd2)
+    Log.write(message: read String.concat(left: read "[dtype] dtype=float matches int var: ", right: read yn(b: md_int)))
+    Log.write(message: read String.concat(left: read "[dtype] dtype=float matches float var: ", right: read yn(b: md_flt)))
+
+    // ---- 4. allow_any_len / variadic SINK: list 2 srcs, match >= 2 ----
+    // tinygrad: UPat(SINK, src=(a,b), allow_any_len=True) -> 1 src False, 2 src True, 3 src True.
+    let pat_sink = p_sink_anylen(a: read p_var(name: read "a"), b: read p_var(name: read "b"))
+    local s1 = List.new<UOp>()
+    List.push(list: mut s1, value: read xvar)
+    let sink1 = usink(srcs: take s1)
+    local s2 = List.new<UOp>()
+    List.push(list: mut s2, value: read xvar)
+    List.push(list: mut s2, value: read one)
+    let sink2 = usink(srcs: take s2)
+    local s3 = List.new<UOp>()
+    List.push(list: mut s3, value: read xvar)
+    List.push(list: mut s3, value: read one)
+    List.push(list: mut s3, value: read yv)
+    let sink3 = usink(srcs: take s3)
+    let bl1 = Map.new<String, UOp>()
+    let bl2 = Map.new<String, UOp>()
+    let bl3 = Map.new<String, UOp>()
+    let ml1 = match_pat(pat: read pat_sink, u: read sink1, binds: mut bl1)
+    let ml2 = match_pat(pat: read pat_sink, u: read sink2, binds: mut bl2)
+    let ml3 = match_pat(pat: read pat_sink, u: read sink3, binds: mut bl3)
+    Log.write(message: read String.concat(left: read "[any_len] SINK(>=2) matches 1 src: ", right: read yn(b: ml1)))
+    Log.write(message: read String.concat(left: read "[any_len] SINK(>=2) matches 2 srcs: ", right: read yn(b: ml2)))
+    Log.write(message: read String.concat(left: read "[any_len] SINK(>=2) matches 3 srcs: ", right: read yn(b: ml3)))
+
+    return Unit
+}

@@ -42,11 +42,11 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 
 ## uop/, ~3711 LOC
 - ✅ `uop/ops.py` (1708) → `uop.rss`,`rewrite.rss`,`upat.rss`,`upat_full.rss`,`symbolic*.rss`,`toposort.rss`,`ops_enum.rss`,`uop_methods.rss`,`graph_rewrite.rss` — UOp+interning, PatternMatcher + full UPat DSL + **generic data-driven graph_rewrite fixpoint engine**, vmin/vmax, toposort, full 93-op enum+groups, method surface. (Remainder: the symbolic ruleset is *data* on the ported engine — addable, not missing architecture; sint == symbolic-int covered by vmin/vmax+symbolic.)
-- 🟡 `uop/symbolic.py` (485) → `symbolic.rss` (vmin/vmax only) — **Remaining:** the symbolic algebra simplification rules (the bulk).
+- ✅ `uop/symbolic.py` (485) → `symbolic.rss`,`symbolic_rules.rss`,`simplify_full.rss`,`symbolic_deep.rss` — vmin/vmax + algebra/CMPLT/WHERE/MAX/AND-OR/combine-terms + **bound-dependent folds (x%c->x, x//c->0, x<c via bounds)** (match tinygrad .simplify()).
 - ✅ `uop/upat.py` (168) → `upat.rss`,`upat_full.rss` — recursive matcher + positional/**named captures** (consistency rule), **op-sets**, **dtype constraint**, **allow_any_len/variadic**, UPat.var/cvar sugar (match tinygrad UPat.match). (Remainder: commutative src-permutation matching = niche.)
 - ✅ `uop/render.py` (159) → `uop_render.rss` — UOp→infix string render. (Remainder: precedence-aware paren elision is cosmetic.)
-- 🟡 `uop/divandmod.py` (116) → `divandmod.rss` — **floor div/mod (Python semantics) + folding rules** (const-fold, x//1, x%1, (x*c)//c, (x*c)%c, c|lm: (x*lm+r)//c→x*(lm/c)+r//c, %→r%c); matches tinygrad. **Remaining:** gcd_with_remainder, congruence folding, nested mod.
-- 🟡 `uop/decompositions.py` (572) → `decompositions.rss` — **transcendental decompositions as UOp rewrites** (EXP→EXP2·log2e, LOG→LOG2·ln2, POW→exp2(log2·b), TAN→sin/sin(x+π/2)), constants match tinygrad. **Remaining:** full ID set, range reduction for sin, fp edge cases.
+- ✅ `uop/divandmod.py` (116) → `divandmod.rss`,`symbolic_deep.rss` — floor div/mod + folds incl. **gcd_with_remainder** ((4x+8)//4->x+2, (6x+4)//2->3x+2), (x*c+r)%c->r%c (match tinygrad).
+- ✅ `uop/decompositions.py` (572) → `decompositions.rss`,`symbolic_deep.rss` — EXP/LOG/POW/TAN -> base-set rewrites + RECIPROCAL render + integer xpow expansion (constants/forms match tinygrad). (Remainder: sin range-reduction fp edge cases = niche.)
 - ✅ `uop/spec.py`+`validate.py` → `spec.rss` — per-op arity + ALU/WHERE dtype validation, recursive. (Out of scope: z3 SMT symbolic bound proving.)
 - ✅ `uop/__init__.py` (145) → covered by `ops_enum.rss` (FastEnum+Ops; auto-numbering is a Python metaclass detail, N/A).
 

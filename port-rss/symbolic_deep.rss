@@ -1,0 +1,433 @@
+// Port of the BOUND-DEPENDENT symbolic folds of tinygrad that the earlier ports left out
+// (they require integer RANGE bounds vmin/vmax). Sources:
+//   tinygrad/uop/symbolic.py     : CMPLT bound folds (x<c -> True/False via vmin/vmax)
+//   tinygrad/uop/divandmod.py    : fold_divmod_general -> cancel_divmod (x%c->x, x//c->0 when
+//                                  0<=vmin(x) and vmax(x)<c), (x*c)%c->0, (x*c+r)%c->r%c,
+//                                  and gcd_with_remainder (factor common gcd from (a*x+b)//c /%c).
+//   tinygrad/uop/decompositions.py: RECIPROCAL(x) -> 1/x rendering, and xpow integer-power
+//                                  expansion (b**n -> b*b*...*b for small non-negative int n).
+//
+// We model a UOp with a Var carrying its own [lo,hi] bounds in two extra fields (vlo/vhi),
+// recompute vmin/vmax by interval arithmetic (reusing the algorithm of symbolic.rss), and
+// implement each bound-dependent rewrite, validated numerically vs real tinygrad below.
+//
+// rss-specific (per BRIEFING.md): one constructor per op, dispatch via `u.op == Op` chains,
+// nodes built from `read` children, fresh-return discipline (rewrites return a fresh
+// constructor/clone call, never a read-aliased local). `/` truncates toward zero, so floordiv
+// is implemented explicitly (ifloordiv). gcd is computed via Euclid (igcd).
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) {
+    Const
+    Var
+    Add
+    Mul
+    FloorDiv
+    FloorMod
+    CmpLt
+    Reciprocal
+    Pow
+}
+
+// A Var carries its own integer range in vlo/vhi (used only when op == Var).
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+    vlo: Int
+    vhi: Int
+}
+
+// ---- per-op inline constructors ----
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v, vlo: 0, vhi: 0) }
+fn uvar(id: Int, lo: Int, hi: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id, vlo: lo, vhi: hi) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn ufloordiv(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorDiv, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn ufloormod(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: FloorMod, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn ucmplt(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: CmpLt, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn ureciprocal(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Reciprocal, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+fn upow(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Pow, src: take s, arg: 0, vlo: 0, vhi: 0)
+}
+
+// ---- integer helpers ----
+fn min2(a: Int, b: Int) -> Int { if a < b { return a } return b }
+fn max2(a: Int, b: Int) -> Int { if a > b { return a } return b }
+fn min4(a: Int, b: Int, c: Int, d: Int) -> Int { return min2(a: min2(a: a, b: b), b: min2(a: c, b: d)) }
+fn max4(a: Int, b: Int, c: Int, d: Int) -> Int { return max2(a: max2(a: a, b: b), b: max2(a: c, b: d)) }
+
+// floor division (Python //): rss `/` truncates toward zero; adjust down when signs differ and remainder != 0
+fn ifloordiv(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a - (q * b)
+    let mut neg = false
+    if a < 0 {
+        if b > 0 { neg = true }
+    }
+    if a > 0 {
+        if b < 0 { neg = true }
+    }
+    if r != 0 {
+        if neg { return q - 1 }
+    }
+    return q
+}
+fn ifloormod(a: Int, b: Int) -> Int { return a - (ifloordiv(a: a, b: b) * b) }
+
+fn iabs(a: Int) -> Int { if a < 0 { return 0 - a } return a }
+// gcd via Euclid (always returns non-negative)
+fn igcd(a: Int, b: Int) -> Int {
+    let mut x = iabs(a: a)
+    let mut y = iabs(a: b)
+    let mut go = true
+    if y == 0 { go = false }
+    if go {
+        let mut t = 0
+        while y != 0 {
+            t = ifloormod(a: x, b: y)
+            x = y
+            y = t
+        }
+    }
+    return x
+}
+
+// ---- interval arithmetic vmin/vmax (reuse of symbolic.rss algorithm) ----
+fn vmin(u: read UOp) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return u.vlo }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmin(u: read c0) + vmin(u: read c1) }
+    if u.op == Mul {
+        let amin = vmin(u: read c0)
+        let amax = vmax(u: read c0)
+        let bmin = vmin(u: read c1)
+        let bmax = vmax(u: read c1)
+        return min4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+    }
+    return 0
+}
+fn vmax(u: read UOp) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return u.vhi }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmax(u: read c0) + vmax(u: read c1) }
+    if u.op == Mul {
+        let amin = vmin(u: read c0)
+        let amax = vmax(u: read c0)
+        let bmin = vmin(u: read c1)
+        let bmax = vmax(u: read c1)
+        return max4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+    }
+    return 0
+}
+
+// ---- shape predicates ----
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn is_mul_const(u: read UOp) -> Bool {
+    if u.op == Mul {
+        let r = List.get(list: read u.src, index: 1)
+        return r.op == Const
+    }
+    return false
+}
+
+// clone a (read) node into a fresh node (preserves Var bounds)
+fn clone1(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg, lo: u.vlo, hi: u.vhi) }
+    if u.op == Reciprocal {
+        let c = List.get(list: read u.src, index: 0)
+        return ureciprocal(a: read clone1(u: read c))
+    }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return uadd(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == Mul { return umul(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == FloorDiv { return ufloordiv(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == FloorMod { return ufloormod(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    if u.op == CmpLt { return ucmplt(a: read clone1(u: read c0), b: read clone1(u: read c1)) }
+    return upow(a: read clone1(u: read c0), b: read clone1(u: read c1))
+}
+
+// ---- bound-dependent FLOORDIV / FLOORMOD folds  (a is the numerator, c the const denom) ----
+// cancel_divmod + constant-denominator rules + gcd_with_remainder, requiring c > 0.
+fn simp_div(a: read UOp, c: Int) -> fresh UOp {
+    if c == 1 { return clone1(u: read a) }
+
+    // cancel_divmod: 0 <= vmin(a) and vmax(a) < c  =>  a // c -> 0
+    if vmin(u: read a) >= 0 {
+        if vmax(u: read a) < c { return uconst(v: 0) }
+    }
+
+    // const fold
+    if is_const(u: read a) { return uconst(v: ifloordiv(a: a.arg, b: c)) }
+
+    // (x*c)//c -> x ; (x*c)//d, c%d==0 -> x*(c/d)
+    if is_mul_const(u: read a) {
+        let x = List.get(list: read a.src, index: 0)
+        let m = List.get(list: read a.src, index: 1)
+        if m.arg == c { return clone1(u: read x) }
+        if ifloormod(a: m.arg, b: c) == 0 { return umul(a: read x, b: read uconst(v: ifloordiv(a: m.arg, b: c))) }
+    }
+
+    // (a*x + b) forms
+    if a.op == Add {
+        let l = List.get(list: read a.src, index: 0)
+        let r = List.get(list: read a.src, index: 1)
+        if is_mul_const(u: read l) {
+            let lx = List.get(list: read l.src, index: 0)
+            let lm = List.get(list: read l.src, index: 1)
+            if is_const(u: read r) {
+                // exact case: c | lm  =>  (x*lm + r)//c = x*(lm/c) + r//c
+                if ifloormod(a: lm.arg, b: c) == 0 {
+                    let q = ifloordiv(a: lm.arg, b: c)
+                    let rq = ifloordiv(a: r.arg, b: c)
+                    return mkterm(lx: read lx, m: q, off: rq)
+                }
+                // gcd_with_remainder: g = gcd(lm, r, c) > 1
+                return gcd_div(lx: read lx, lm: lm.arg, b: r.arg, c: c)
+            }
+        }
+    }
+    return ufloordiv(a: read a, b: read uconst(v: c))
+}
+
+fn simp_mod(a: read UOp, c: Int) -> fresh UOp {
+    if c == 1 { return uconst(v: 0) }
+
+    // cancel_divmod: 0 <= vmin(a) and vmax(a) < c  =>  a % c -> a
+    if vmin(u: read a) >= 0 {
+        if vmax(u: read a) < c { return clone1(u: read a) }
+    }
+
+    // const fold
+    if is_const(u: read a) { return uconst(v: ifloormod(a: a.arg, b: c)) }
+
+    // (x*c)%c -> 0  (any c | m)
+    if is_mul_const(u: read a) {
+        let m = List.get(list: read a.src, index: 1)
+        if ifloormod(a: m.arg, b: c) == 0 { return uconst(v: 0) }
+    }
+
+    if a.op == Add {
+        let l = List.get(list: read a.src, index: 0)
+        let r = List.get(list: read a.src, index: 1)
+        if is_mul_const(u: read l) {
+            let lx = List.get(list: read l.src, index: 0)
+            let lm = List.get(list: read l.src, index: 1)
+            if is_const(u: read r) {
+                // (x*c + r)%c -> r%c  (exact: c | lm)
+                if ifloormod(a: lm.arg, b: c) == 0 { return uconst(v: ifloormod(a: r.arg, b: c)) }
+                // gcd_with_remainder
+                return gcd_mod(lx: read lx, lm: lm.arg, b: r.arg, c: c)
+            }
+        }
+    }
+    return ufloormod(a: read a, b: read uconst(v: c))
+}
+
+// gcd_with_remainder for FLOORDIV of (lm*x + b) // c.
+// g = gcd(lm,b,c); new_x = (lm/g)*x + (b//g)%(c//g); if new_x.vmin>=0:
+//   result = new_x // (c/g) + b//c
+fn mkterm(lx: read UOp, m: Int, off: Int) -> fresh UOp {
+    // build (lx*m + off), dropping *1 and +0 identities so results match tinygrad's canonical form
+    if m == 1 {
+        if off == 0 { return clone1(u: read lx) }
+        return uadd(a: read clone1(u: read lx), b: read uconst(v: off))
+    }
+    if off == 0 { return umul(a: read lx, b: read uconst(v: m)) }
+    return uadd(a: read umul(a: read lx, b: read uconst(v: m)), b: read uconst(v: off))
+}
+fn gcd_div(lx: read UOp, lm: Int, b: Int, c: Int) -> fresh UOp {
+    let g = igcd(a: igcd(a: lm, b: b), b: c)
+    if g > 1 {
+        let cg = ifloordiv(a: c, b: g)
+        let lmg = ifloordiv(a: lm, b: g)
+        let off = ifloormod(a: ifloordiv(a: b, b: g), b: cg)
+        let newx = mkterm(lx: read lx, m: lmg, off: off)
+        if vmin(u: read newx) >= 0 {
+            let inner = simp_div(a: read newx, c: cg)
+            let bc = ifloordiv(a: b, b: c)
+            if bc == 0 { return clone1(u: read inner) }
+            return uadd(a: read inner, b: read uconst(v: bc))
+        }
+    }
+    let num = uadd(a: read umul(a: read lx, b: read uconst(v: lm)), b: read uconst(v: b))
+    return ufloordiv(a: read num, b: read uconst(v: c))
+}
+
+// gcd_with_remainder for FLOORMOD of (lm*x + b) % c.
+// g = gcd(lm,b,c); new_x = (lm/g)*x + (b//g)%(c//g); if new_x.vmin>=0:
+//   result = (new_x % (c/g)) * g + b%g
+fn gcd_mod(lx: read UOp, lm: Int, b: Int, c: Int) -> fresh UOp {
+    let g = igcd(a: igcd(a: lm, b: b), b: c)
+    if g > 1 {
+        let cg = ifloordiv(a: c, b: g)
+        let lmg = ifloordiv(a: lm, b: g)
+        let off = ifloormod(a: ifloordiv(a: b, b: g), b: cg)
+        let newx = mkterm(lx: read lx, m: lmg, off: off)
+        if vmin(u: read newx) >= 0 {
+            let inner = simp_mod(a: read newx, c: cg)
+            let bg = ifloormod(a: b, b: g)
+            if bg == 0 {
+                if g == 1 { return clone1(u: read inner) }
+                return umul(a: read inner, b: read uconst(v: g))
+            }
+            return uadd(a: read umul(a: read inner, b: read uconst(v: g)), b: read uconst(v: bg))
+        }
+    }
+    let num = uadd(a: read umul(a: read lx, b: read uconst(v: lm)), b: read uconst(v: b))
+    return ufloormod(a: read num, b: read uconst(v: c))
+}
+
+// ---- CMPLT bound folds:  x < c -> True (Const 1) if vmax(x) < c ; -> False (Const 0) if vmin(x) >= c
+fn simp_cmplt_const(x: read UOp, c: Int) -> fresh UOp {
+    if vmax(u: read x) < c { return uconst(v: 1) }
+    if vmin(u: read x) >= c { return uconst(v: 0) }
+    return ucmplt(a: read x, b: read uconst(v: c))
+}
+
+// ---- decompositions extra ----
+// RECIPROCAL(x) -> 1/x ; render as "(1 / <x>)".  Also expose the structural node.
+fn render(u: read UOp) -> fresh String {
+    if u.op == Const { return Int.to_string(value: read u.arg) }
+    if u.op == Var {
+        return String.concat(left: read "v", right: read Int.to_string(value: read u.arg))
+    }
+    if u.op == Reciprocal {
+        let c = List.get(list: read u.src, index: 0)
+        return String.concat(left: read "(1 / ", right: read String.concat(left: read render(u: read c), right: read ")"))
+    }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return binop(l: read c0, op: read " + ", r: read c1) }
+    if u.op == Mul { return binop(l: read c0, op: read " * ", r: read c1) }
+    if u.op == FloorDiv { return binop(l: read c0, op: read " // ", r: read c1) }
+    if u.op == FloorMod { return binop(l: read c0, op: read " % ", r: read c1) }
+    if u.op == CmpLt { return binop(l: read c0, op: read " < ", r: read c1) }
+    return binop(l: read c0, op: read " ** ", r: read c1)
+}
+fn binop(l: read UOp, op: read String, r: read UOp) -> fresh String {
+    let s1 = String.concat(left: read "(", right: read render(u: read l))
+    let s2 = String.concat(left: read s1, right: read op)
+    let s3 = String.concat(left: read s2, right: read render(u: read r))
+    return String.concat(left: read s3, right: read ")")
+}
+
+// xpow integer-power expansion: base ** n  (n a non-negative int Const)  ->  base*base*...*base
+//   n==0 -> Const 1 ;  n==1 -> base ;  otherwise left-folded product.  Tractable integer case;
+//   matches the semantics of tinygrad's xpow on integer exponents (the general float path is
+//   exp2(log2(base)*exp), modelled structurally in decompositions.rss).
+fn xpow_int(base: read UOp, n: Int) -> fresh UOp {
+    if n == 0 { return uconst(v: 1) }
+    if n == 1 { return clone1(u: read base) }
+    return umul(a: read xpow_int(base: read base, n: n - 1), b: read base)
+}
+
+// ---- pretty printing ----
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    if u.op == Mul { return "Mul" }
+    if u.op == FloorDiv { return "FloorDiv" }
+    if u.op == FloorMod { return "FloorMod" }
+    if u.op == CmpLt { return "CmpLt" }
+    if u.op == Reciprocal { return "Reciprocal" }
+    return "Pow"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ") = ")
+    s = String.concat(left: read s, right: read render(u: read u))
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "== cancel_divmod: x in [0,5] ==")
+    // x % 8 -> x   (vmax 5 < 8)   ; tinygrad: DEFINE_VAR('x',0,5)
+    describe(label: read "x%8 (x in [0,5]) = ", u: read simp_mod(a: read uvar(id: 0, lo: 0, hi: 5), c: 8))   // Var(0)
+    // x // 8 -> 0  ; tinygrad: Const 0
+    describe(label: read "x//8 (x in [0,5]) = ", u: read simp_div(a: read uvar(id: 0, lo: 0, hi: 5), c: 8))  // Const 0
+
+    Log.write(message: read "== cancel_divmod does NOT fire: x in [0,10] ==")
+    // x % 8 stays FloorMod ; tinygrad: FLOORMOD(x,8)
+    describe(label: read "x%8 (x in [0,10]) = ", u: read simp_mod(a: read uvar(id: 0, lo: 0, hi: 10), c: 8)) // FloorMod
+
+    Log.write(message: read "== (x*c)%c -> 0 ; (x*c+r)%c -> r%c   (re-verified with bound machinery) ==")
+    // x in [0,100], x*8 % 8 -> 0
+    let xm8 = umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 8))
+    describe(label: read "(x*8)%8 = ", u: read simp_mod(a: read xm8, c: 8))                                   // Const 0
+    // (x*8 + 3) % 8 -> 3
+    let xm8p3 = uadd(a: read umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 8)), b: read uconst(v: 3))
+    describe(label: read "(x*8+3)%8 = ", u: read simp_mod(a: read xm8p3, c: 8))                               // Const 3
+
+    Log.write(message: read "== gcd_with_remainder  (x in [0,100]) ==")
+    // (4x+8)//4 -> x+2
+    let e1 = uadd(a: read umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 4)), b: read uconst(v: 8))
+    describe(label: read "(4x+8)//4 = ", u: read simp_div(a: read e1, c: 4))                                  // Add(Var,2)
+    // (4x+8)%4 -> 0
+    let e2 = uadd(a: read umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 4)), b: read uconst(v: 8))
+    describe(label: read "(4x+8)%4 = ", u: read simp_mod(a: read e2, c: 4))                                   // Const 0
+    // (6x+4)//2 -> 3x+2
+    let e3 = uadd(a: read umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 6)), b: read uconst(v: 4))
+    describe(label: read "(6x+4)//2 = ", u: read simp_div(a: read e3, c: 2))                                  // Add(Mul(Var,3),2)
+    // (6x+4)%2 -> 0
+    let e4 = uadd(a: read umul(a: read uvar(id: 0, lo: 0, hi: 100), b: read uconst(v: 6)), b: read uconst(v: 4))
+    describe(label: read "(6x+4)%2 = ", u: read simp_mod(a: read e4, c: 2))                                   // Const 0
+
+    Log.write(message: read "== CMPLT bound folds: x in [0,5] ==")
+    // x < 8 -> True (Const 1)  ; x < 0 -> False (Const 0)
+    describe(label: read "x<8 (x in [0,5]) = ", u: read simp_cmplt_const(x: read uvar(id: 0, lo: 0, hi: 5), c: 8))  // Const 1
+    describe(label: read "x<0 (x in [0,5]) = ", u: read simp_cmplt_const(x: read uvar(id: 0, lo: 0, hi: 5), c: 0))  // Const 0
+
+    Log.write(message: read "== decompositions extra ==")
+    // RECIPROCAL(x) -> 1/x rendering
+    describe(label: read "reciprocal(x) = ", u: read ureciprocal(a: read uvar(id: 0, lo: 0, hi: 5)))          // (1 / v0)
+    // xpow integer expansion: x**3 -> x*x*x
+    describe(label: read "x**3 (expanded) = ", u: read xpow_int(base: read uvar(id: 0, lo: 0, hi: 5), n: 3))  // ((v0*v0)*v0)
+    describe(label: read "x**0 (expanded) = ", u: read xpow_int(base: read uvar(id: 0, lo: 0, hi: 5), n: 0))  // 1
+    describe(label: read "x**1 (expanded) = ", u: read xpow_int(base: read uvar(id: 0, lo: 0, hi: 5), n: 1))  // v0
+
+    return Unit
+}

@@ -1,0 +1,330 @@
+// Port of tinygrad's GENERIC graph_rewrite fixpoint engine (tinygrad/uop/ops.py:
+//   PatternMatcher.rewrite + RewriteContext.unified_rewrite + graph_rewrite()).
+//
+// Where rewrite.rss / symbolic_rules.rss HARDCODED the symbolic rules into simplify()
+// as if-chains, this file makes the rules DATA: a PatternMatcher is a `List<RwRule>`, each
+// Rule = (UPat pattern, action-code). The driver `graph_rewrite(root, rules)` is GENERIC --
+// it knows nothing about Mul/Add specifics; it just:
+//   1. bottom-up: rewrite children first (recursion + a memo so each shared node is built once),
+//   2. for the rebuilt node, try each rule in order: on the FIRST match, apply the rule's
+//      action to produce a replacement, then RE-RUN the rules on that replacement,
+//   3. repeat until no rule fires (a local FIXPOINT), exactly like unified_rewrite's
+//      `while test_n is not None: new_n, test_n = test_n, bpm_rewrite(test_n)` loop.
+//
+// This is the real PatternMatcher architecture (rules-as-data + a generic fixpoint driver),
+// not a hardcoded if-chain. The UPat matcher/captures are reused from upat.rss.
+//
+// rss notes (per BRIEFING.md):
+//  - one constructor per op (no generic `op: Ops` value param); rebuild nodes from `read`
+//    children via uadd/umul (owned-collection-from-read-children codegen).
+//  - no closures/lambdas, so a rule's rewrite is an ACTION enum (ActRet0 = "return capture i",
+//    ActConstFold, ActMakeConst0). The driver dispatches on it -- this mirrors how tinygrad's
+//    rule is a (UPat, Callable) pair; here the Callable is a small finite action set.
+//  - fresh-return restriction: actions build a brand-new fresh node (uconst / rebuilt capture),
+//    never return a read-aliased local.
+//  - memo is a Map<UOp,UOp> (UOp derives Eq,Hash). On a hit we rebuild a fresh copy from the
+//    cached node's fields so we never return a value aliased behind the shared map.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+sum PKind derives(Clone, Eq) { PAny PConst POp }
+// action codes = the "rewrite function" of a rule, as data
+sum Act derives(Clone, Eq) { ActRet0 ActRet1 ActConstFoldAdd ActConstFoldMul ActMakeConst0 }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+struct UPat derives(Clone) {
+    kind: PKind
+    op: Ops          // for POp
+    cval: Int        // for PConst
+    capture: Bool
+    children: List<UPat>
+}
+struct RwRule derives(Clone) {
+    pat: UPat
+    act: Act
+}
+
+// ---- UOp constructors (one per op; built from read children) ----
+fn uconst(v: Int) -> fresh UOp { return UOp(op: Const, src: List.new<UOp>(), arg: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn uadd(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, src: take s, arg: 0)
+}
+fn umul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, src: take s, arg: 0)
+}
+// rebuild a fresh copy of any node from its op/arg (terminal nodes are leaves here)
+fn rebuild(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Mul { return umul(a: read c0, b: read c1) }
+    return uadd(a: read c0, b: read c1)
+}
+
+// ---- UPat constructors ----
+fn p_any_cap() -> fresh UPat { return UPat(kind: PAny, op: Const, cval: 0, capture: true, children: List.new<UPat>()) }
+fn p_const(v: Int) -> fresh UPat { return UPat(kind: PConst, op: Const, cval: v, capture: false, children: List.new<UPat>()) }
+// a pattern that matches ANY Const and captures it: kind=POp op=Const arity 0, capture=true
+fn p_any_const_cap() -> fresh UPat { return UPat(kind: POp, op: Const, cval: 0, capture: true, children: List.new<UPat>()) }
+fn p_mul2(a: read UPat, b: read UPat) -> fresh UPat {
+    local s = List.new<UPat>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UPat(kind: POp, op: Mul, cval: 0, capture: false, children: take s)
+}
+fn p_add2(a: read UPat, b: read UPat) -> fresh UPat {
+    local s = List.new<UPat>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UPat(kind: POp, op: Add, cval: 0, capture: false, children: take s)
+}
+
+// ---- generic structural matcher (from upat.rss), pushes captures into binds ----
+fn match_pat(pat: read UPat, u: read UOp, binds: mut List<UOp>) -> Bool {
+    if pat.kind == PAny {
+        if pat.capture { List.push(list: mut binds, value: read u) }
+        return true
+    }
+    if pat.kind == PConst {
+        if u.op == Const {
+            if u.arg == pat.cval {
+                if pat.capture { List.push(list: mut binds, value: read u) }
+                return true
+            }
+        }
+        return false
+    }
+    // POp: op + arity + all children must match (POp with 0 children + op=Const = "any const")
+    if u.op == pat.op {
+        let nc = List.len(list: read pat.children)
+        if List.len(list: read u.src) == nc {
+            let mut i = 0
+            let mut ok = true
+            while i < nc {
+                let cp = List.get(list: read pat.children, index: i)
+                let cu = List.get(list: read u.src, index: i)
+                let m = match_pat(pat: read cp, u: read cu, binds: mut binds)
+                if m == false { ok = false }
+                i = i + 1
+            }
+            if ok {
+                if pat.capture { List.push(list: mut binds, value: read u) }
+                return true
+            }
+            return false
+        }
+    }
+    return false
+}
+
+// ---- rule constructors (one per Act; pattern is a fresh sub-expression, like UOp builders) ----
+fn rule_mul_ret0(a: read UPat, b: read UPat) -> fresh RwRule { return RwRule(pat: p_mul2(a: read a, b: read b), act: ActRet0) }
+fn rule_mul_c0(a: read UPat, b: read UPat) -> fresh RwRule { return RwRule(pat: p_mul2(a: read a, b: read b), act: ActMakeConst0) }
+fn rule_mul_fold(a: read UPat, b: read UPat) -> fresh RwRule { return RwRule(pat: p_mul2(a: read a, b: read b), act: ActConstFoldMul) }
+fn rule_add_ret0(a: read UPat, b: read UPat) -> fresh RwRule { return RwRule(pat: p_add2(a: read a, b: read b), act: ActRet0) }
+fn rule_add_fold(a: read UPat, b: read UPat) -> fresh RwRule { return RwRule(pat: p_add2(a: read a, b: read b), act: ActConstFoldAdd) }
+
+// apply a rule's ACTION given the captured binds -> fresh replacement node
+fn apply_act(act: read Act, binds: read List<UOp>) -> fresh UOp {
+    match act {
+        ActRet0 => {
+            return rebuild(u: read List.get(list: read binds, index: 0))
+        }
+        ActRet1 => {
+            return rebuild(u: read List.get(list: read binds, index: 1))
+        }
+        ActMakeConst0 => {
+            return uconst(v: 0)
+        }
+        ActConstFoldAdd => {
+            let a = List.get(list: read binds, index: 0)
+            let b = List.get(list: read binds, index: 1)
+            return uconst(v: a.arg + b.arg)
+        }
+        ActConstFoldMul => {
+            let a = List.get(list: read binds, index: 0)
+            let b = List.get(list: read binds, index: 1)
+            return uconst(v: a.arg * b.arg)
+        }
+    }
+}
+
+// try every rule in order on `u`; on the FIRST match, return its rewritten node and set
+// fired=true (via out-list trick). Returns a fresh node either way (rebuild of u if no match).
+fn try_rules(u: read UOp, rules: read List<RwRule>, fired: mut List<Int>) -> fresh UOp {
+    let nr = List.len(list: read rules)
+    let mut i = 0
+    let mut hit = -1
+    local cap = List.new<UOp>()
+    while i < nr {
+        if hit < 0 {
+            let r = List.get(list: read rules, index: i)
+            local binds = List.new<UOp>()
+            let m = match_pat(pat: read r.pat, u: read u, binds: mut binds)
+            if m {
+                hit = i
+                let n = List.len(list: read binds)
+                let mut j = 0
+                while j < n {
+                    List.push(list: mut cap, value: read List.get(list: read binds, index: j))
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    if hit < 0 {
+        return rebuild(u: read u)
+    }
+    let r = List.get(list: read rules, index: hit)
+    List.push(list: mut fired, value: read 1)
+    return apply_act(act: read r.act, binds: read cap)
+}
+
+// apply rules to a fixpoint on a SINGLE node (children already rewritten):
+//   while a rule fires, replace node and re-run rules. mirrors unified_rewrite's
+//   `while test_n is not None: new_n, test_n = test_n, bpm_rewrite(test_n)`.
+fn fixpoint_node(u: read UOp, rules: read List<RwRule>) -> fresh UOp {
+    local fired = List.new<Int>()
+    let nxt = try_rules(u: read u, rules: read rules, fired: mut fired)
+    if List.len(list: read fired) == 0 {
+        return rebuild(u: read u)
+    }
+    return fixpoint_node(u: read nxt, rules: read rules)
+}
+
+// ---- GENERIC bottom-up driver with a memo (each shared node built once) ----
+// memo maps an input node -> its rewritten result; on a hit we rebuild a fresh copy.
+fn graph_rewrite(root: read UOp, rules: read List<RwRule>, memo: mut Map<UOp, UOp>) -> fresh UOp {
+    match Map.get<UOp, UOp>(map: read memo, key: read root) {
+        Some(cached) => {
+            return rebuild(u: read cached)
+        }
+        None => {
+            return gr_compute(root: read root, rules: read rules, memo: mut memo)
+        }
+    }
+}
+fn gr_compute(root: read UOp, rules: read List<RwRule>, memo: mut Map<UOp, UOp>) -> fresh UOp {
+    // leaves: no children to rewrite, just run the node fixpoint (rebuild for Const/Var)
+    if root.op == Const {
+        let res = uconst(v: root.arg)
+        Map.insert<UOp, UOp>(map: mut memo, key: read root, value: read res)
+        return uconst(v: root.arg)
+    }
+    if root.op == Var {
+        let res = uvar(id: root.arg)
+        Map.insert<UOp, UOp>(map: mut memo, key: read root, value: read res)
+        return uvar(id: root.arg)
+    }
+    // bottom-up: rewrite children first (recursion through the memo)
+    let c0 = List.get(list: read root.src, index: 0)
+    let c1 = List.get(list: read root.src, index: 1)
+    let a = graph_rewrite(root: read c0, rules: read rules, memo: mut memo)
+    let b = graph_rewrite(root: read c1, rules: read rules, memo: mut memo)
+    // rebuild node with rewritten srcs, then run the node to a fixpoint
+    let rebuilt = mk_same_op(op_src: read root, a: read a, b: read b)
+    let res = fixpoint_node(u: read rebuilt, rules: read rules)
+    Map.insert<UOp, UOp>(map: mut memo, key: read root, value: read res)
+    return rebuild(u: read res)
+}
+// rebuild a binary node of root's op with new children
+fn mk_same_op(op_src: read UOp, a: read UOp, b: read UOp) -> fresh UOp {
+    if op_src.op == Mul { return umul(a: read a, b: read b) }
+    return uadd(a: read a, b: read b)
+}
+
+// ---- the symbolic rule set, AS DATA ----
+fn symbolic_rules() -> fresh List<RwRule> {
+    local rules = List.new<RwRule>()
+    // x*1 -> x        : MUL(any:cap, CONST 1) -> capture 0
+    let r1 = rule_mul_ret0(a: read p_any_cap(), b: read p_const(v: 1))
+    List.push(list: mut rules, value: read r1)
+    // 1*x -> x        : MUL(CONST 1, any:cap) -> capture 0
+    let r2 = rule_mul_ret0(a: read p_const(v: 1), b: read p_any_cap())
+    List.push(list: mut rules, value: read r2)
+    // x*0 -> 0        : MUL(any, CONST 0) -> Const 0
+    let r3 = rule_mul_c0(a: read p_any_cap(), b: read p_const(v: 0))
+    List.push(list: mut rules, value: read r3)
+    // 0*x -> 0        : MUL(CONST 0, any) -> Const 0
+    let r4 = rule_mul_c0(a: read p_const(v: 0), b: read p_any_cap())
+    List.push(list: mut rules, value: read r4)
+    // x+0 -> x        : ADD(any:cap, CONST 0) -> capture 0
+    let r5 = rule_add_ret0(a: read p_any_cap(), b: read p_const(v: 0))
+    List.push(list: mut rules, value: read r5)
+    // 0+x -> x        : ADD(CONST 0, any:cap) -> capture 0
+    let r6 = rule_add_ret0(a: read p_const(v: 0), b: read p_any_cap())
+    List.push(list: mut rules, value: read r6)
+    // const-fold MUL  : MUL(anyConst:cap, anyConst:cap) -> Const(a*b)
+    let r7 = rule_mul_fold(a: read p_any_const_cap(), b: read p_any_const_cap())
+    List.push(list: mut rules, value: read r7)
+    // const-fold ADD  : ADD(anyConst:cap, anyConst:cap) -> Const(a+b)
+    let r8 = rule_add_fold(a: read p_any_const_cap(), b: read p_any_const_cap())
+    List.push(list: mut rules, value: read r8)
+    return take rules
+}
+
+// ---- pretty printing ----
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "Const" }
+    if u.op == Var { return "Var" }
+    if u.op == Add { return "Add" }
+    return "Mul"
+}
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn run_case(label: read String, e: read UOp, rules: read List<RwRule>) -> fresh UOp {
+    local memo = Map<UOp, UOp>.new()
+    let r = graph_rewrite(root: read e, rules: read rules, memo: mut memo)
+    describe(label: read label, u: read r)
+    return rebuild(u: read r)
+}
+
+fn main() -> Unit {
+    let rules = symbolic_rules()
+
+    // (2 + 3) * 4  -> Const(20)   [const-fold ADD then const-fold MUL, bottom-up]
+    let e1 = umul(a: read uadd(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    run_case(label: read "graph_rewrite((2+3)*4) = ", e: read e1, rules: read rules)
+
+    // x * 1  -> x  (Var 7)
+    let e2 = umul(a: read uvar(id: 7), b: read uconst(v: 1))
+    run_case(label: read "graph_rewrite(x*1) = ", e: read e2, rules: read rules)
+
+    // x * 0  -> Const(0)
+    let e4 = umul(a: read uvar(id: 7), b: read uconst(v: 0))
+    run_case(label: read "graph_rewrite(x*0) = ", e: read e4, rules: read rules)
+
+    // (x*1) + (2+3) -> Add(Var 7, Const 5):  *1 folds away, (2+3) folds to 5
+    let lhs = umul(a: read uvar(id: 7), b: read uconst(v: 1))
+    let rhs = uadd(a: read uconst(v: 2), b: read uconst(v: 3))
+    let e5 = uadd(a: read lhs, b: read rhs)
+    local memo = Map<UOp, UOp>.new()
+    let r5 = graph_rewrite(root: read e5, rules: read rules, memo: mut memo)
+    describe(label: read "graph_rewrite((x*1)+(2+3)) root = ", u: read r5)
+    let r5l = List.get(list: read r5.src, index: 0)
+    let r5r = List.get(list: read r5.src, index: 1)
+    describe(label: read "  left  = ", u: read r5l)   // Var(7)
+    describe(label: read "  right = ", u: read r5r)   // Const(5)
+    return Unit
+}

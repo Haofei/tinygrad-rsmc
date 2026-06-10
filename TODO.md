@@ -48,7 +48,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⬜ `uop/__init__.py` (145).
 
 ## codegen/, ~1000 LOC in-scope (opt-search excluded)
-- 🟡 lowering to kernels → `render*.rss` (elementwise/reduce/matmul + relu/div/neg/max/exp/log/tanh emitters), `buffer_reuse.rss` (liveness memory planner). **Remaining:** faithful `codegen/__init__.py` (236) pipeline, `simplify.py` (157), `late/linearizer.py` (96), `late/devectorizer.py` (390), `late/expander.py` (160), `late/regalloc.py` (137), `gpudims.py` (111, GPU-only — partial scope).
+- 🟡 lowering to kernels → `render*.rss` (elementwise/reduce/matmul + relu/div/neg/max/exp/log/tanh emitters), `buffer_reuse.rss` (liveness memory planner), **`linearizer.rss`** (toposort + priority-heap ordering -> SSA instruction stream, RANGE/ENDRANGE placement; matches tinygrad ordering). **Remaining:** `simplify.py` (157), `late/devectorizer.py` (390), `late/expander.py` (160), `late/regalloc.py` (137), gpudims (GPU-only).
 - ⛔ `codegen/opt/*` (search/heuristic/tc/postrange ~875) — autotuning search; out of scope for a correctness port.
 
 ## renderer/, in-scope = cstyle only

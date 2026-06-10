@@ -1,0 +1,336 @@
+// Port of tinygrad's codegen linearization pipeline (codegen/late/linearizer.py: linearize(),
+// and the do_linearize spine in codegen/__init__.py). Turns a kernel UOp DAG into a flat,
+// dependency-ordered instruction list ready for rendering. Faithfully reproduces:
+//   1. toposort the kernel graph (sources before their uses)            -- like toposort.rss
+//   2. assign each UOp a priority (LOAD early=-1, STORE late=1, RANGE=5, END=-5, else 0),
+//      then number nodes in the "ideal" priority order (tinygrad's nkey)
+//   3. a priority-heap toposort that emits in as-close-to-ideal order as deps allow, so loop
+//      bodies stay contiguous (tinygrad's out_degree + heap loop)
+//   4. assign SSA ids in the final emission order; every src id < the using instruction's id
+//   5. RANGE markers land before loop-dependent ops, END(RANGE) after the STORE.
+//
+// Implemented over a flat arena (parallel List<Int>): op-code, src0, src1, arg. rss constraints
+// (per BRIEFING): Int op-codes in the arena (no sum-type value params), a typed iget helper for
+// List<Int> field reads, out-params for list returns, one statement per line.
+//
+// SIMPLIFICATIONS vs tinygrad: priorities are (priority, idx) not (run_count, priority, extra)
+// -- run_count/tuplize tie-breaking and PARAM/DEFINE_* slot ordering are omitted; binary ALU only
+// (src0/src1); a single RANGE level (no nesting/CFGContext edge insertion between siblings). The
+// heap is a simple linear-scan min-pick over a ready set (same result as heapq for these sizes).
+
+features: local
+
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn iset(l: mut List<Int>, i: Int, v: Int) -> Unit {
+    List.set(list: mut l, index: i, value: read v)
+    return Unit
+}
+
+// op codes: 0=LOAD 1=CONST 2=ADD 3=MUL 4=STORE 5=RANGE 6=ENDRANGE 7=DEFINE_ACC 8=ASSIGN
+fn LOAD() -> Int { return 0 }
+fn CONST() -> Int { return 1 }
+fn ADD() -> Int { return 2 }
+fn MUL() -> Int { return 3 }
+fn STORE() -> Int { return 4 }
+fn RANGE() -> Int { return 5 }
+fn ENDRANGE() -> Int { return 6 }
+fn DEFINE_ACC() -> Int { return 7 }
+fn ASSIGN() -> Int { return 8 }
+
+fn op_name(op: Int) -> fresh String {
+    if op == LOAD() { return "LOAD" }
+    if op == CONST() { return "CONST" }
+    if op == ADD() { return "ADD" }
+    if op == MUL() { return "MUL" }
+    if op == STORE() { return "STORE" }
+    if op == RANGE() { return "RANGE" }
+    if op == ENDRANGE() { return "ENDRANGE" }
+    if op == DEFINE_ACC() { return "DEFINE_ACC" }
+    return "ASSIGN"
+}
+
+// tinygrad's per-op priority: smaller is closer to the top (emitted earlier).
+fn priority_of(op: Int) -> Int {
+    if op == LOAD() { return -1 }
+    if op == STORE() { return 1 }
+    if op == RANGE() { return 5 }
+    if op == ENDRANGE() { return -5 }
+    return 0
+}
+
+// append a node to the arena; returns its arena index
+fn emit(ops: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, arg: mut List<Int>, op: Int, a: Int, b: Int, g: Int) -> Int {
+    let idx = List.len(list: read ops)
+    List.push(list: mut ops, value: read op)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    List.push(list: mut arg, value: read g)
+    return idx
+}
+
+// ---- step 1: toposort the arena (post-order DFS, sources before uses, dedup via seen flags) ----
+fn dfs(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, u: Int, seen: mut List<Int>, order: mut List<Int>) -> Unit {
+    if iget(l: read seen, i: u) == 1 { return Unit }
+    iset(l: mut seen, i: u, v: 1)
+    let a = iget(l: read s0, i: u)
+    if a >= 0 { dfs(ops: read ops, s0: read s0, s1: read s1, u: a, seen: mut seen, order: mut order) }
+    let b = iget(l: read s1, i: u)
+    if b >= 0 { dfs(ops: read ops, s0: read s0, s1: read s1, u: b, seen: mut seen, order: mut order) }
+    List.push(list: mut order, value: read u)
+    return Unit
+}
+
+fn toposort(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, root: Int, order: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    let seen = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        List.push(list: mut seen, value: read 0)
+        i = i + 1
+    }
+    dfs(ops: read ops, s0: read s0, s1: read s1, u: root, seen: mut seen, order: mut order)
+    return Unit
+}
+
+// ---- step 2: number nodes in "ideal" order = sort topo list by (priority, topo-index) ----
+// nkey[arena_idx] = ideal rank. Selection sort over the topo order (stable enough; ties by idx).
+fn compute_nkey(ops: read List<Int>, topo: read List<Int>, nkey: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut nkey, value: read 0)
+        i = i + 1
+    }
+    let m = List.len(list: read topo)
+    // build a working list of arena indices to sort
+    let work = List.new<Int>()
+    let mut t = 0
+    while t < m {
+        List.push(list: mut work, value: read iget(l: read topo, i: t))
+        t = t + 1
+    }
+    // selection sort by (priority, arena_idx)
+    let mut rank = 0
+    while rank < m {
+        let mut best = rank
+        let mut j = rank + 1
+        while j < m {
+            let cj = iget(l: read work, i: j)
+            let cbest = iget(l: read work, i: best)
+            let pj = priority_of(op: iget(l: read ops, i: cj))
+            let pbest = priority_of(op: iget(l: read ops, i: cbest))
+            let mut better = 0
+            if pj < pbest { better = 1 }
+            if pj == pbest { if cj < cbest { better = 1 } }
+            if better == 1 { best = j }
+            j = j + 1
+        }
+        let tmp = iget(l: read work, i: rank)
+        let wbest = iget(l: read work, i: best)
+        iset(l: mut work, i: rank, v: wbest)
+        iset(l: mut work, i: best, v: tmp)
+        let chosen = iget(l: read work, i: rank)
+        iset(l: mut nkey, i: chosen, v: rank)
+        rank = rank + 1
+    }
+    return Unit
+}
+
+// ---- step 3: priority-heap toposort. tinygrad starts from the sink and pops the highest nkey
+// (closest to bottom), decrementing out_degree; a node becomes ready when out_degree hits 0.
+// Result is reversed so sources come first. We pick from the ready set the node with the LARGEST
+// nkey (== heappop of -nkey), reproducing the contiguous-loop ordering. ----
+fn heap_toposort(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, topo: read List<Int>, nkey: read List<Int>, root: Int, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read ops)
+    // out_degree[v] = number of consumers among reachable nodes
+    let outdeg = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        List.push(list: mut outdeg, value: read 0)
+        i = i + 1
+    }
+    let m = List.len(list: read topo)
+    let mut t = 0
+    while t < m {
+        let u = iget(l: read topo, i: t)
+        let a = iget(l: read s0, i: u)
+        if a >= 0 {
+            let da = iget(l: read outdeg, i: a) + 1
+            iset(l: mut outdeg, i: a, v: da)
+        }
+        let b = iget(l: read s1, i: u)
+        if b >= 0 {
+            let db = iget(l: read outdeg, i: b) + 1
+            iset(l: mut outdeg, i: b, v: db)
+        }
+        t = t + 1
+    }
+    // ready set seeded with the sink (out_degree 0)
+    let ready = List.new<Int>()
+    List.push(list: mut ready, value: read root)
+    let rev = List.new<Int>()
+    while List.len(list: read ready) > 0 {
+        // pick ready node with the largest nkey (heappop of -nkey)
+        let rn = List.len(list: read ready)
+        let mut best = 0
+        let mut k = 1
+        while k < rn {
+            let ck = iget(l: read ready, i: k)
+            let cbest = iget(l: read ready, i: best)
+            if iget(l: read nkey, i: ck) > iget(l: read nkey, i: cbest) { best = k }
+            k = k + 1
+        }
+        let u = iget(l: read ready, i: best)
+        // remove best from ready (swap with last, pop)
+        let rlast = iget(l: read ready, i: rn - 1)
+        iset(l: mut ready, i: best, v: rlast)
+        List.pop(list: mut ready)
+        List.push(list: mut rev, value: read u)
+        let a = iget(l: read s0, i: u)
+        if a >= 0 {
+            let da = iget(l: read outdeg, i: a) - 1
+            iset(l: mut outdeg, i: a, v: da)
+            if da == 0 { List.push(list: mut ready, value: read a) }
+        }
+        let b = iget(l: read s1, i: u)
+        if b >= 0 {
+            let db = iget(l: read outdeg, i: b) - 1
+            iset(l: mut outdeg, i: b, v: db)
+            if db == 0 { List.push(list: mut ready, value: read b) }
+        }
+    }
+    // reverse rev into out (sources first)
+    let mut r = List.len(list: read rev) - 1
+    while r >= 0 {
+        List.push(list: mut out, value: read iget(l: read rev, i: r))
+        r = r + 1 - 2
+    }
+    return Unit
+}
+
+// map an arena index -> its SSA id (position in the final linear order)
+fn ssa_of(lin: read List<Int>, arena_idx: Int) -> Int {
+    let n = List.len(list: read lin)
+    let mut i = 0
+    while i < n {
+        if iget(l: read lin, i: i) == arena_idx { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ---- step 5: print the linearized instruction stream as `vN = OP vA, vB` ----
+fn print_stream(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, arg: read List<Int>, lin: read List<Int>) -> Unit {
+    let n = List.len(list: read lin)
+    let mut i = 0
+    while i < n {
+        let u = iget(l: read lin, i: i)
+        let op = iget(l: read ops, i: u)
+        let mut s = String.concat(left: read "  v", right: read Int.to_string(value: read i))
+        s = String.concat(left: read s, right: read " = ")
+        s = String.concat(left: read s, right: read op_name(op: op))
+        if op == CONST() {
+            s = String.concat(left: read s, right: read " ")
+            s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read arg, i: u)))
+        }
+        if op == DEFINE_ACC() {
+            s = String.concat(left: read s, right: read " ")
+            s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read arg, i: u)))
+        }
+        let a = iget(l: read s0, i: u)
+        if a >= 0 {
+            s = String.concat(left: read s, right: read " v")
+            s = String.concat(left: read s, right: read Int.to_string(value: read ssa_of(lin: read lin, arena_idx: a)))
+        }
+        let b = iget(l: read s1, i: u)
+        if b >= 0 {
+            s = String.concat(left: read s, right: read ", v")
+            s = String.concat(left: read s, right: read Int.to_string(value: read ssa_of(lin: read lin, arena_idx: b)))
+        }
+        Log.write(message: read s)
+        i = i + 1
+    }
+    return Unit
+}
+
+// dependency-order check: every src's SSA id must be < the using instruction's own SSA id.
+// returns 1 if fully ordered, 0 otherwise.
+fn check_order(s0: read List<Int>, s1: read List<Int>, lin: read List<Int>) -> Int {
+    let n = List.len(list: read lin)
+    let mut ok = 1
+    let mut i = 0
+    while i < n {
+        let u = iget(l: read lin, i: i)
+        let a = iget(l: read s0, i: u)
+        if a >= 0 { if ssa_of(lin: read lin, arena_idx: a) >= i { ok = 0 } }
+        let b = iget(l: read s1, i: u)
+        if b >= 0 { if ssa_of(lin: read lin, arena_idx: b) >= i { ok = 0 } }
+        i = i + 1
+    }
+    return ok
+}
+
+fn last_is_store(ops: read List<Int>, lin: read List<Int>) -> Int {
+    let n = List.len(list: read lin)
+    let u = iget(l: read lin, i: n - 1)
+    if iget(l: read ops, i: u) == STORE() { return 1 }
+    return 0
+}
+
+fn yn(b: Int) -> fresh String {
+    if b == 1 { return "yes" }
+    return "no"
+}
+
+// run the full linearize pipeline on an arena and report
+fn linearize_and_report(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, arg: read List<Int>, root: Int) -> Unit {
+    let topo = List.new<Int>()
+    toposort(ops: read ops, s0: read s0, s1: read s1, root: root, order: mut topo)
+    let nkey = List.new<Int>()
+    compute_nkey(ops: read ops, topo: read topo, nkey: mut nkey)
+    let lin = List.new<Int>()
+    heap_toposort(ops: read ops, s0: read s0, s1: read s1, topo: read topo, nkey: read nkey, root: root, out: mut lin)
+    print_stream(ops: read ops, s0: read s0, s1: read s1, arg: read arg, lin: read lin)
+    let ok = check_order(s0: read s0, s1: read s1, lin: read lin)
+    Log.write(message: read String.concat(left: read "  in dependency order: ", right: read yn(b: ok)))
+    Log.write(message: read String.concat(left: read "  STORE is last: ", right: read yn(b: last_is_store(ops: read ops, lin: read lin))))
+    return Unit
+}
+
+fn main() -> Unit {
+    // ===== kernel A: elementwise  out[i] = (x[i] + 2) * 3 =====
+    // UOps: LOAD, CONST 2, ADD(LOAD,CONST2), CONST 3, MUL(ADD,CONST3), STORE(MUL)
+    Log.write(message: read "kernel A: out[i] = (x[i] + 2) * 3")
+    let opsA = List.new<Int>()
+    let a0 = List.new<Int>()
+    let a1 = List.new<Int>()
+    let argA = List.new<Int>()
+    let ld = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: LOAD(), a: -1, b: -1, g: 0)
+    let c2 = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: CONST(), a: -1, b: -1, g: 2)
+    let ad = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: ADD(), a: ld, b: c2, g: 0)
+    let c3 = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: CONST(), a: -1, b: -1, g: 3)
+    let ml = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: MUL(), a: ad, b: c3, g: 0)
+    let stA = emit(ops: mut opsA, s0: mut a0, s1: mut a1, arg: mut argA, op: STORE(), a: ml, b: -1, g: 0)
+    linearize_and_report(ops: read opsA, s0: read a0, s1: read a1, arg: read argA, root: stA)
+
+    // ===== kernel B: reduce  out = sum(x[i])  with an acc loop =====
+    // UOps: RANGE(loop), DEFINE_ACC, LOAD(x[ridx]), ASSIGN(acc = acc + load) folded as
+    // ADD(acc, load) then ASSIGN, ENDRANGE(range), STORE(acc).
+    // Demonstrates RANGE placed before loop-dependent ops and ENDRANGE after the loop body /
+    // before the final STORE. Dependency chain forces RANGE early and ENDRANGE late.
+    Log.write(message: read "")
+    Log.write(message: read "kernel B: out = sum(x[i])  (acc reduce loop)")
+    let opsB = List.new<Int>()
+    let b0 = List.new<Int>()
+    let b1 = List.new<Int>()
+    let argB = List.new<Int>()
+    let rng = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: RANGE(), a: -1, b: -1, g: 0)
+    let acc = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: DEFINE_ACC(), a: -1, b: -1, g: 0)
+    let ldx = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: LOAD(), a: rng, b: -1, g: 0)
+    let sm = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: ADD(), a: acc, b: ldx, g: 0)
+    let asg = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: ASSIGN(), a: acc, b: sm, g: 0)
+    let endr = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: ENDRANGE(), a: rng, b: asg, g: 0)
+    let stB = emit(ops: mut opsB, s0: mut b0, s1: mut b1, arg: mut argB, op: STORE(), a: asg, b: endr, g: 0)
+    linearize_and_report(ops: read opsB, s0: read b0, s1: read b1, arg: read argB, root: stB)
+    return Unit
+}

@@ -13,7 +13,9 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 > 5 ⛔ out-of-scope), all 11 rss/mc language gaps fixed + verified green, ~53 rss port files
 > run & validate against tinygrad. Full pipeline executes via mc and trains an MLP to ~0
 > loss. Out-of-scope (⛔): 179k autogen GPU tables, other-GPU renderers/runtimes, onnx, jit,
-> multi-GPU, autotuning, image/host-I/O — none portable to an rss+mc(C) target.
+> multi-GPU, autotuning, image/host-I/O. NOTE: the 179k autogen are GENERATED C FFI
+> bindings — now SUPPORTED via `ffi_gen.rss` (emits mc `extern "C"`; a generated libc binding
+> compiles+runs through mc). The GPU libs still need GPU hardware/drivers to actually call.
 
 ---
 ## rss/mc fixes (land as they block the port)

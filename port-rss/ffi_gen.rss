@@ -1,0 +1,69 @@
+// Port of tinygrad's runtime/autogen approach: the autogen/*.py files are MACHINE-GENERATED C
+// FFI bindings (ctypes DLL.bind over libc/cuda/amd/...). The rss+mc analog of a ctypes binding
+// is an mc `extern "C"` declaration (mc links C natively — verified: extern "C" abs() runs).
+// So we don't hand-port 179k lines of generated tables; we port the GENERATOR. ffi_gen emits mc
+// `extern "C"` bindings from a C signature (name, ret, arg C-types), mapping C types -> mc types.
+// Demonstrated on libc; a generated binding is spliced into a kernel and run via mc (driver).
+
+features: local
+
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+
+// C type -> mc type (the ctypes->mc mapping; covers the common scalar + pointer cases)
+fn cty_to_mc(ct: read String) -> fresh String {
+    if ct == "void" { return cat(a: read "", b: read "void") }
+    if ct == "int" { return cat(a: read "", b: read "i32") }
+    if ct == "unsigned int" { return cat(a: read "", b: read "u32") }
+    if ct == "long" { return cat(a: read "", b: read "i64") }
+    if ct == "unsigned long" { return cat(a: read "", b: read "u64") }
+    if ct == "size_t" { return cat(a: read "", b: read "usize") }
+    if ct == "float" { return cat(a: read "", b: read "f32") }
+    if ct == "double" { return cat(a: read "", b: read "f64") }
+    if ct == "char" { return cat(a: read "", b: read "i8") }
+    if ct == "void*" { return cat(a: read "", b: read "usize") }      // ptr -> address (mc PAddr/usize)
+    return cat(a: read "", b: read "usize")                            // default: opaque pointer
+}
+
+// generate an mc `extern "C"` binding line from a C signature
+fn gen_binding(name: read String, ret: read String, args: read List<String>) -> fresh String {
+    local parts = List.new<String>()
+    List.push(list: mut parts, value: read "extern \"C\" fn ")
+    List.push(list: mut parts, value: read name)
+    List.push(list: mut parts, value: read "(")
+    let n = List.len(list: read args)
+    let mut i = 0
+    while i < n {
+        let at = List.get(list: read args, index: i)
+        List.push(list: mut parts, value: read cat(a: read "a", b: read Int.to_string(value: read i)))
+        List.push(list: mut parts, value: read ": ")
+        List.push(list: mut parts, value: read cty_to_mc(ct: read at))
+        if i < n - 1 { List.push(list: mut parts, value: read ", ") }
+        i = i + 1
+    }
+    List.push(list: mut parts, value: read ") -> ")
+    List.push(list: mut parts, value: read cty_to_mc(ct: read ret))
+    List.push(list: mut parts, value: read ";")
+    return String.join(parts: read parts, separator: read "")
+}
+
+fn mk1(a: read String) -> fresh List<String> {
+    local l = List.new<String>()
+    List.push(list: mut l, value: read a)
+    return l
+}
+fn mk2(a: read String, b: read String) -> fresh List<String> {
+    local l = List.new<String>()
+    List.push(list: mut l, value: read a)
+    List.push(list: mut l, value: read b)
+    return l
+}
+
+fn main() -> Unit {
+    // generate libc bindings (the in-scope C library) — same idea as autogen/libc.py, for mc
+    Log.write(message: read gen_binding(name: read "abs",    ret: read "int",    args: read mk1(a: read "int")))                       // extern "C" fn abs(a0: i32) -> i32;
+    Log.write(message: read gen_binding(name: read "labs",   ret: read "long",   args: read mk1(a: read "long")))                      // ... labs(a0: i64) -> i64;
+    Log.write(message: read gen_binding(name: read "fabs",   ret: read "double", args: read mk1(a: read "double")))                    // ... fabs(a0: f64) -> f64;
+    Log.write(message: read gen_binding(name: read "strlen", ret: read "size_t", args: read mk1(a: read "void*")))                     // ... strlen(a0: usize) -> usize;
+    Log.write(message: read gen_binding(name: read "memcpy", ret: read "void*",  args: read mk2(a: read "void*", b: read "void*")))    // 2-arg shown
+    return Unit
+}

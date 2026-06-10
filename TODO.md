@@ -9,6 +9,12 @@ Status key: ✅ complete · 🟡 partial (core ported, methods/behaviour remain)
 Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first**, then continue.
 "Done" = every in-scope file is ✅ (and the rss/mc fixes it required are landed).
 
+> **STATUS: NOT COMPLETE — ~40% of the in-scope target.** 32 rss port files exist and
+> run/validate against tinygrad, but **no large file is ✅ fully complete** (cores done, full
+> method/rule sets remain). Tally: 0 ✅ · 18 🟡 partial · 8 ⬜ not started · ⛔ as marked.
+> rss/mc fixes: 4 landed (3 rss + 1 mc, verified green) · 6 pending. The items below are the
+> remaining work; the port is **not finished**.
+
 ---
 ## rss/mc fixes (land as they block the port)
 - [x] rss Hashable/Eq for user types (Map/Set keys)
@@ -69,8 +75,19 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - [x] full lazy pipeline Tensor→UOp→simplify→render→native ((x+2)*3, sum, matmul)
 - [x] SGD training to convergence (`train.rss`)
 
-## Honest completion accounting
-Every in-scope subsystem has a **validated core (🟡)**; **none of the large files (tensor.py,
-uop/ops.py, codegen, schedule/rangeify) is ✅ complete** — the full method/rule sets remain.
-Rough completion of the ~10.5k in-scope target: **~25–30%**. "Port done" = all 🟡/⬜ above
-turned ✅, with the listed rss/mc fixes landed.
+## Honest completion accounting (latest)
+**NOT finished.** 32 rss files in `port-rss/` run and validate against tinygrad, covering a
+working core of every in-scope subsystem — but **no large file is ✅ fully complete** (tensor.py
+higher ops, uop/ops.py full rule set, codegen pipeline, schedule/rangeify all remain partial).
+Rough completion of the ~10.5k in-scope target: **~40%**.
+
+Biggest remaining chunks (in rough priority):
+1. `schedule/rangeify.py` (611) — the real fusion/range engine ⬜
+2. `tensor.py` higher ops — matmul/conv/indexing/creation/`.backward()`+`.realize()` glue 🟡
+3. `codegen/` pipeline — linearizer/devectorizer/expander/simplify 🟡
+4. `uop/ops.py` full method surface + the rest of `symbolic.py` 🟡
+5. `uop/{spec,validate,divandmod,render}` ⬜, `nn/state.py` ⬜, `schedule/indexing.py` ⬜
+6. engine realize end-to-end (#12) ⬜
+7. pending rss fixes: Int→Float, managed-field clone, let-mut clone, read-enum `==`, field-list get inference, sum-type value params
+
+"Port done" = all 🟡/⬜ above turned ✅ with the listed rss/mc fixes landed.

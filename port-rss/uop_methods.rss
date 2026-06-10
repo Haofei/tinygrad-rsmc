@@ -1,0 +1,374 @@
+// Port of the UOp method/property surface of tinygrad/uop/ops.py (the UOp class) over the
+// recursive UOp{op,dtype,src,arg} model used by uop.rss/rewrite.rss/toposort.rss/symbolic.rss.
+// This is the ergonomic helper surface used everywhere in tinygrad:
+//
+//   builder sugar : alu(op,*src) style (uop_add/uop_mul/uop_max), const_like(u,v) (CONST w/ u's
+//                   dtype), broadcast(u,count) (STACK of count copies), replace_* (copy w/ one
+//                   field changed) -> ops.py UOp.replace/alu/const_like/broadcast.
+//   constructors  : u_const(dtype,v), ufix(u,x) (wrap a python int as a CONST w/ u's dtype)
+//                   -> ops.py UOp.const / UOp.ufix.
+//   properties    : vmin/vmax (interval bounds, reuses symbolic.rss rules; ops.py _min_max),
+//                   dtype (field), arity / src-count, key/structural equality (Eq derived,
+//                   matching ops.py UOp.key sha-over-(op,dtype,arg)+src.key).
+//   substitute    : substitute(u, old, new) -> copy of the graph with every structural
+//                   occurrence of `old` replaced by `new`, recursively (ops.py UOp.substitute
+//                   via bottom_up graph_rewrite + _substitute).
+//   toposort      : toposort(root) -> sources-before-node linearization w/ shared nodes once
+//                   (ops.py UOp.toposort); sparents = the set of unique nodes (count).
+//
+// Validations (computed against real tinygrad, cross-checked in the report):
+//   substitute Var0->Const(5) in (Var0+Var0)*3  ==> (5+5)*3, simplify -> 30.
+//   const_like / ufix / broadcast / replace shapes; vmin/vmax bounds; key equality; toposort
+//   ordering + unique-node count (sparents).
+//
+// rss features used (per briefing note): Clone.clone<UOp> for copying, `==` on read-enum field
+// access, building nodes from `read` children. One statement per line; typed iget for List<Int>.
+
+features: local
+
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Max Stack }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    dtype: String
+    src: List<UOp>
+    arg: Int
+}
+
+// *** constructors / builder sugar (ops.py UOp.const / .alu / .const_like / .ufix) ***
+
+// UOp.const(dtype, v): a CONST leaf carrying value v with the given dtype.
+fn u_const(dtype: read String, v: Int) -> fresh UOp {
+    let d = String.concat(left: read dtype, right: read "")
+    return UOp(op: Const, dtype: d, src: List.new<UOp>(), arg: v)
+}
+// shorthand float const (the common case in the other port files)
+fn uconst(v: Int) -> fresh UOp { return u_const(dtype: read "float", v: v) }
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, dtype: "float", src: List.new<UOp>(), arg: id) }
+
+// alu builders (ops.py UOp.alu): out node over src children, carrying the binary op.
+fn uop_add(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Add, dtype: "float", src: take s, arg: 0)
+}
+fn uop_mul(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Mul, dtype: "float", src: take s, arg: 0)
+}
+fn uop_max(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Max, dtype: "float", src: take s, arg: 0)
+}
+
+// const_like(u, v): UOp.const(u.dtype.base, v) -- a CONST sharing u's dtype.
+fn const_like(u: read UOp, v: Int) -> fresh UOp { return u_const(dtype: read u.dtype, v: v) }
+
+// ufix(u, x): wrap a python int x as a CONST with u's dtype (UOps pass through; here x is Int).
+fn ufix(u: read UOp, x: Int) -> fresh UOp { return const_like(u: read u, v: x) }
+
+// broadcast(u, count): STACK of `count` copies of u (UOp.broadcast). count==1 -> u itself.
+fn broadcast(u: read UOp, count: Int) -> fresh UOp {
+    if count == 1 { return Clone.clone<UOp>(self: read u) }
+    local s = List.new<UOp>()
+    let mut i = 0
+    while i < count {
+        List.push(list: mut s, value: read u)
+        i = i + 1
+    }
+    let dt = String.concat(left: read u.dtype, right: read "")
+    return UOp(op: Stack, dtype: dt, src: take s, arg: 0)
+}
+
+// *** replace: copy with exactly one field changed (ops.py UOp.replace(**kwargs)) ***
+
+// replace_arg(u, a): same op/dtype/src, new arg.
+fn replace_arg(u: read UOp, a: Int) -> fresh UOp {
+    local c = Clone.clone<UOp>(self: read u)
+    return UOp(op: take c.op, dtype: take c.dtype, src: take c.src, arg: a)
+}
+// replace_dtype(u, dt): same op/src/arg, new dtype.
+fn replace_dtype(u: read UOp, dt: read String) -> fresh UOp {
+    let a = u.arg
+    local c = Clone.clone<UOp>(self: read u)
+    let d = String.concat(left: read dt, right: read "")
+    return UOp(op: take c.op, dtype: d, src: take c.src, arg: a)
+}
+
+// *** properties ***
+
+fn dtype_of(u: read UOp) -> fresh String { return String.concat(left: read u.dtype, right: read "") }
+
+// arity / src count (len(u.src)).
+fn arity(u: read UOp) -> Int { return List.len(list: read u.src) }
+
+// key / structural identity: ops.py hashes (op,dtype,arg)+children keys. The derived Eq on the
+// recursive struct gives the same structural equality; key_str renders that canonical key.
+fn op_name(u: read UOp) -> fresh String {
+    if u.op == Const { return "CONST" }
+    if u.op == Var { return "VAR" }
+    if u.op == Add { return "ADD" }
+    if u.op == Mul { return "MUL" }
+    if u.op == Max { return "MAX" }
+    return "STACK"
+}
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn key_str(u: read UOp) -> fresh String {
+    let head = cat3(a: read op_name(u: read u), b: read "{", c: read cat3(a: read u.dtype, b: read ",", c: read Int.to_string(value: read u.arg)))
+    let n = List.len(list: read u.src)
+    if n == 0 { return cat(a: read head, b: read "}") }
+    let c0 = List.get(list: read u.src, index: 0)
+    let k0 = cat(a: read ",", b: read key_str(u: read c0))
+    if n == 1 { return cat3(a: read head, b: read k0, c: read "}") }
+    let c1 = List.get(list: read u.src, index: 1)
+    let k1 = cat(a: read ",", b: read key_str(u: read c1))
+    return cat3(a: read head, b: read cat(a: read k0, b: read k1), c: read "}")
+}
+
+// *** vmin / vmax (interval bounds; ops.py UOp._min_max). Reuses the symbolic.rss rules over a
+// single Var range [lo,hi]. CONST -> [c,c]; ADD -> sum of bounds; MUL/MAX -> corner combos. ***
+
+fn min2(a: Int, b: Int) -> Int { if a < b { return a } return b }
+fn max2(a: Int, b: Int) -> Int { if a > b { return a } return b }
+fn min4(a: Int, b: Int, c: Int, d: Int) -> Int { return min2(a: min2(a: a, b: b), b: min2(a: c, b: d)) }
+fn max4(a: Int, b: Int, c: Int, d: Int) -> Int { return max2(a: max2(a: a, b: b), b: max2(a: c, b: d)) }
+
+fn vmin(u: read UOp, lo: Int, hi: Int) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return lo }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmin(u: read c0, lo: lo, hi: hi) + vmin(u: read c1, lo: lo, hi: hi) }
+    let amin = vmin(u: read c0, lo: lo, hi: hi)
+    let amax = vmax(u: read c0, lo: lo, hi: hi)
+    let bmin = vmin(u: read c1, lo: lo, hi: hi)
+    let bmax = vmax(u: read c1, lo: lo, hi: hi)
+    if u.op == Max { return max2(a: amin, b: bmin) }
+    return min4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+}
+fn vmax(u: read UOp, lo: Int, hi: Int) -> Int {
+    if u.op == Const { return u.arg }
+    if u.op == Var { return hi }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Add { return vmax(u: read c0, lo: lo, hi: hi) + vmax(u: read c1, lo: lo, hi: hi) }
+    let amin = vmin(u: read c0, lo: lo, hi: hi)
+    let amax = vmax(u: read c0, lo: lo, hi: hi)
+    let bmin = vmin(u: read c1, lo: lo, hi: hi)
+    let bmax = vmax(u: read c1, lo: lo, hi: hi)
+    if u.op == Max { return max2(a: amax, b: bmax) }
+    return max4(a: amin * bmin, b: amin * bmax, c: amax * bmin, d: amax * bmax)
+}
+
+// *** substitute(u, old, new): copy of the graph w/ every structural occurrence of `old`
+// replaced by `new`, bottom-up & recursive (ops.py UOp.substitute via _substitute rewrite). ***
+fn substitute(u: read UOp, old: read UOp, new: read UOp) -> fresh UOp {
+    if u == old { return Clone.clone<UOp>(self: read new) }
+    let n = List.len(list: read u.src)
+    if n == 0 { return Clone.clone<UOp>(self: read u) }
+    // rebuild children recursively, then the node from the rewritten children
+    let c0 = List.get(list: read u.src, index: 0)
+    let r0 = substitute(u: read c0, old: read old, new: read new)
+    if n == 1 {
+        local s = List.new<UOp>()
+        List.push(list: mut s, value: read r0)
+        local o1 = Clone.clone<Ops>(self: read u.op)
+        let dt1 = String.concat(left: read u.dtype, right: read "")
+        return UOp(op: take o1, dtype: dt1, src: take s, arg: u.arg)
+    }
+    let c1 = List.get(list: read u.src, index: 1)
+    let r1 = substitute(u: read c1, old: read old, new: read new)
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read r0)
+    List.push(list: mut s, value: read r1)
+    local o2 = Clone.clone<Ops>(self: read u.op)
+    let dt2 = String.concat(left: read u.dtype, right: read "")
+    return UOp(op: take o2, dtype: dt2, src: take s, arg: u.arg)
+}
+
+// *** simplify (const-fold), reused to validate substitute folds to a const (ops.py simplify) ***
+fn is_const(u: read UOp) -> Bool { return u.op == Const }
+fn simplify(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let a = simplify(u: read c0)
+    let b = simplify(u: read c1)
+    if u.op == Mul {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg * b.arg) }
+            if a.arg == 1 { return Clone.clone<UOp>(self: read b) }
+            if a.arg == 0 { return uconst(v: 0) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 1 { return Clone.clone<UOp>(self: read a) }
+            if b.arg == 0 { return uconst(v: 0) }
+        }
+        return uop_mul(a: read a, b: read b)
+    }
+    if u.op == Add {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: a.arg + b.arg) }
+            if a.arg == 0 { return Clone.clone<UOp>(self: read b) }
+        }
+        if is_const(u: read b) {
+            if b.arg == 0 { return Clone.clone<UOp>(self: read a) }
+        }
+        return uop_add(a: read a, b: read b)
+    }
+    if u.op == Max {
+        if is_const(u: read a) {
+            if is_const(u: read b) { return uconst(v: max2(a: a.arg, b: b.arg)) }
+        }
+        return uop_max(a: read a, b: read b)
+    }
+    return uop_add(a: read a, b: read b)
+}
+
+// *** toposort (ops.py UOp.toposort): sources-before-node, shared nodes visited once. sparents
+// = the set of unique nodes (count = len of the toposort). ***
+fn visit(u: read UOp, seen: mut Set<UOp>, order: mut List<UOp>) -> Unit {
+    if Set.contains(set: read seen, value: read u) { return Unit }
+    let n = List.len(list: read u.src)
+    let mut i = 0
+    while i < n {
+        let c = List.get(list: read u.src, index: i)
+        visit(u: read c, seen: mut seen, order: mut order)
+        i = i + 1
+    }
+    Set.insert(set: mut seen, value: read u)
+    List.push(list: mut order, value: read u)
+    return Unit
+}
+fn toposort(root: read UOp, order: mut List<UOp>) -> Unit {
+    let seen = Set.new<UOp>()
+    visit(u: read root, seen: mut seen, order: mut order)
+    return Unit
+}
+// sparents count = number of unique nodes in the graph (len of toposort).
+fn sparents_count(root: read UOp) -> Int {
+    let o = List.new<UOp>()
+    let seen = Set.new<UOp>()
+    visit(u: read root, seen: mut seen, order: mut o)
+    return List.len(list: read o)
+}
+
+// *** rendering helpers ***
+fn opsym(u: read UOp) -> fresh String {
+    if u.op == Add { return " + " }
+    if u.op == Mul { return " * " }
+    if u.op == Max { return " max " }
+    return " , "
+}
+fn render(u: read UOp) -> fresh String {
+    if u.op == Const { return Int.to_string(value: read u.arg) }
+    if u.op == Var { return cat(a: read "v", b: read Int.to_string(value: read u.arg)) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let mid = cat3(a: read render(u: read c0), b: read opsym(u: read u), c: read render(u: read c1))
+    return cat3(a: read "(", b: read mid, c: read ")")
+}
+
+fn describe(label: read String, u: read UOp) -> Unit {
+    let mut s = String.concat(left: read label, right: read op_name(u: read u))
+    s = String.concat(left: read s, right: read "(dtype=")
+    s = String.concat(left: read s, right: read u.dtype)
+    s = String.concat(left: read s, right: read ", arg=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read u.arg))
+    s = String.concat(left: read s, right: read ", arity=")
+    s = String.concat(left: read s, right: read Int.to_string(value: read arity(u: read u)))
+    s = String.concat(left: read s, right: read ")")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn log_int(label: read String, v: Int) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read Int.to_string(value: read v)))
+    return Unit
+}
+fn log_str(label: read String, v: read String) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read v))
+    return Unit
+}
+fn log_bool(label: read String, b: Bool) -> Unit {
+    if b { Log.write(message: read String.concat(left: read label, right: read "yes")) }
+    if b == false { Log.write(message: read String.concat(left: read label, right: read "no")) }
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "== builder sugar / constructors ==")
+    // u_const / const_like / ufix
+    let cf = u_const(dtype: read "int", v: 7)
+    describe(label: read "u_const(int,7)        = ", u: read cf)
+    let cl = const_like(u: read cf, v: 9)
+    describe(label: read "const_like(^,9)       = ", u: read cl)
+    let uf = ufix(u: read cf, x: 42)
+    describe(label: read "ufix(^,42)            = ", u: read uf)
+
+    // alu builders
+    let x = uvar(id: 0)
+    let e = uop_add(a: read x, b: read uconst(v: 1))
+    describe(label: read "alu add (v0 + 1)      = ", u: read e)
+    log_str(label: read "  render               = ", v: read render(u: read e))
+
+    Log.write(message: read "== broadcast / replace ==")
+    // broadcast count=1 -> identity; count=3 -> STACK arity 3
+    let b1 = broadcast(u: read cf, count: 1)
+    log_bool(label: read "broadcast(c,1)==c     : ", b: b1 == cf)
+    let b3 = broadcast(u: read cf, count: 3)
+    describe(label: read "broadcast(c,3)        = ", u: read b3)
+    // replace: change one field, keep structure
+    let ra = replace_arg(u: read cf, a: 99)
+    describe(label: read "replace_arg(c,99)     = ", u: read ra)
+    let rd = replace_dtype(u: read cf, dt: read "half")
+    describe(label: read "replace_dtype(c,half) = ", u: read rd)
+
+    Log.write(message: read "== properties: dtype / arity / key ==")
+    log_str(label: read "dtype_of(add)         = ", v: read dtype_of(u: read e))
+    log_int(label: read "arity(add)            = ", v: arity(u: read e))
+    log_int(label: read "arity(const)          = ", v: arity(u: read cf))
+    log_str(label: read "key(add)              = ", v: read key_str(u: read e))
+    // structural equality: two independently-built identical graphs are == (interning)
+    let e_a = uop_mul(a: read uop_add(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    let e_b = uop_mul(a: read uop_add(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 4))
+    let e_c = uop_mul(a: read uop_add(a: read uconst(v: 2), b: read uconst(v: 3)), b: read uconst(v: 5))
+    log_bool(label: read "(2+3)*4 == (2+3)*4    : ", b: e_a == e_b)
+    log_bool(label: read "(2+3)*4 == (2+3)*5    : ", b: e_a == e_c)
+    log_bool(label: read "key eq <-> struct eq  : ", b: key_str(u: read e_a) == key_str(u: read e_b))
+
+    Log.write(message: read "== vmin / vmax (x in [0,10]) ==")
+    let xm = uop_mul(a: read x, b: read uconst(v: 3))
+    let xe = uop_add(a: read xm, b: read uconst(v: 2))   // (x*3)+2
+    log_str(label: read "expr                  = ", v: read render(u: read xe))
+    log_int(label: read "vmin                  = ", v: vmin(u: read xe, lo: 0, hi: 10))   // 2
+    log_int(label: read "vmax                  = ", v: vmax(u: read xe, lo: 0, hi: 10))   // 32
+
+    Log.write(message: read "== substitute: Var0 -> Const(5) in (v0+v0)*3 ==")
+    // (v0 + v0) * 3
+    let g = uop_mul(a: read uop_add(a: read uvar(id: 0), b: read uvar(id: 0)), b: read uconst(v: 3))
+    log_str(label: read "before                = ", v: read render(u: read g))
+    let sub = substitute(u: read g, old: read uvar(id: 0), new: read uconst(v: 5))
+    log_str(label: read "after                 = ", v: read render(u: read sub))   // ((5 + 5) * 3)
+    let folded = simplify(u: read sub)
+    describe(label: read "simplify(after)       = ", u: read folded)              // CONST 30
+    log_int(label: read "  value               = ", v: folded.arg)               // 30
+
+    Log.write(message: read "== toposort / sparents ==")
+    // (2+3)*4 -> 2,3,Add,4,Mul = 5 unique nodes
+    let o1 = List.new<UOp>()
+    toposort(root: read e_a, order: mut o1)
+    log_int(label: read "toposort((2+3)*4) len : ", v: List.len(list: read o1))
+    log_int(label: read "sparents count        : ", v: sparents_count(root: read e_a))
+    // x*x with shared x -> x,Mul = 2 unique (not 3): shared subgraph visited once
+    let xx = uop_mul(a: read x, b: read x)
+    log_int(label: read "sparents(x*x) shared  : ", v: sparents_count(root: read xx))
+    return Unit
+}

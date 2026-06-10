@@ -56,7 +56,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `renderer/{amd,ptx,llvmir,nir,wgsl,isa}` (~3.9k) — other backends, not the mc/C target.
 
 ## engine/, ~265 in-scope
-- 🟡 `engine/realize.py` (265) → `schedule*.rss`,`device.rss` — single+multi-kernel scheduling/dispatch, run via mc. **Remaining:** faithful ExecItem/CompiledRunner/BufferCopy, Schedule execution order, var binding.
+- 🟡 `engine/realize.py` (265) → `realize.rss`,`schedule*.rss`,`device.rss` — **ExecItem list + realize(): schedule a graph to ordered kernels, allocate buffers, run in order via mc** (x-sum(x) -> 2 kernels K1(reduce)->intermediate->K2(map), executes natively, matches tinygrad). **Remaining:** CompiledRunner/BufferCopy abstraction, var binding, JIT.
 - ⛔ `engine/jit.py` (312) — TinyJit graph capture/replay (optimization; out of scope for correctness).
 
 ## schedule/, ~1100 in-scope

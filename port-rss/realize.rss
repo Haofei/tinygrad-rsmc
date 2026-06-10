@@ -1,0 +1,297 @@
+// Port of tinygrad/engine/realize.py -- the end-to-end "realize" engine that turns a
+// Tensor/UOp graph into an ORDERED list of kernels (ExecItems) and RUNS them, wiring an
+// intermediate buffer between kernels. This faithfully mirrors realize.py's structure:
+//
+//   realize.py            this file
+//   ----------------      ------------------------------------------------------------
+//   Buf                Buf (id + size + role: Input/Intermediate/Output)
+//   ExecItem (prg, bufs)  ExecItem (kernel name + out/in buffer-index lists)
+//   schedule -> linear    schedule(graph) -> List<ExecItem>   (one ExecItem per kernel)
+//   run_linear(linear)    realize(items) -> a hosted mc program that calls each ExecItem's
+//                          kernel IN ORDER, passing the buffers it names (exec_kernel)
+//
+// Canonical 2-kernel graph (a reduce feeding an elementwise op -> cannot be one kernel):
+//   y[i]   = x[i] + 1          (could fuse into k2; kept simple: x is the input)
+//   s[0]   = sum_i x[i]        kernel 1 (REDUCE)  -> writes intermediate buffer  s
+//   out[i] = x[i] - s[0]       kernel 2 (MAP)     -> reads x + intermediate s, writes out
+//
+// schedule() emits ExecItems [K1, K2] with their buffer wiring; realize() renders one mc
+// program with both kernels + a hosted_kernel_run() that runs them in scheduled order through
+// the shared intermediate buffer (exactly exec_kernel's job). Validated end-to-end via mc.
+
+features: local
+
+// ----- the ported UOp graph (same shape as schedule_multi.rss) -----
+sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul Sub Sum }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+fn uvar(id: Int) -> fresh UOp { return UOp(op: Var, src: List.new<UOp>(), arg: id) }
+fn usub(a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: Sub, src: take s, arg: 0)
+}
+fn usum(a: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    return UOp(op: Sum, src: take s, arg: 0)
+}
+
+// ----- the engine data model: Buf + ExecItem (mirrors realize.py) -----
+sum BufRole derives(Clone, Eq, Hash) { Input Intermediate Output }
+
+struct Buf derives(Clone, Eq, Hash) {
+    id: Int        // buffer index (slot in the program's buffer table)
+    size: Int      // element count
+    role: BufRole
+}
+
+// An ExecItem binds a compiled kernel to the buffers it runs over (exec_kernel in realize.py).
+// kind: 0 = reduce kernel, 1 = elementwise/map kernel.  out = output buffer index,
+// ins = input buffer indices (in kernel-arg order, data1, data2, ...).
+struct ExecItem derives(Clone, Eq, Hash) {
+    name: String
+    kind: Int
+    out: Int
+    ins: List<Int>
+}
+
+// ----- string helpers (same idiom as the other ports) -----
+fn cat(a: read String, b: read String) -> fresh String { return String.concat(left: read a, right: read b) }
+fn cat3(a: read String, b: read String, c: read String) -> fresh String { return cat(a: read cat(a: read a, b: read b), b: read c) }
+fn pl(lines: mut List<String>, t: read String) -> Unit {
+    List.push(list: mut lines, value: read t)
+    return Unit
+}
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+
+// render an elementwise expr: Var->xi, Const->lit, Sum-> the precomputed intermediate s0
+fn render_expr(u: read UOp) -> fresh String {
+    if u.op == Var { return cat(a: read "", b: read "xi") }
+    if u.op == Sum { return cat(a: read "", b: read "s0") }      // reduce result -> intermediate load
+    if u.op == Const { return cat(a: read Int.to_string(value: read u.arg), b: read ".0") }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    let mut opsym = " + "
+    if u.op == Mul { opsym = " * " }
+    if u.op == Sub { opsym = " - " }
+    let left = render_expr(u: read c0)
+    let right = render_expr(u: read c1)
+    return cat3(a: read "(", b: read cat3(a: read left, b: read opsym, c: read right), c: read ")")
+}
+
+// ============================================================================
+// SCHEDULE: turn the graph into an ordered ExecItem list + a buffer table.
+// A reduce feeding an elementwise op is split: the reduce is scheduled FIRST into an
+// intermediate buffer, then the map kernel consumes it (tinygrad's schedule split).
+// ============================================================================
+fn ipush(l: mut List<Int>, v: Int) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn schedule_items(out: mut List<ExecItem>) -> Unit {
+    // K1 (REDUCE): out=buf1 (intermediate s), in=buf0 (input x)
+    local k1ins = List.new<Int>()
+    ipush(l: mut k1ins, v: 0)
+    local k1name = cat(a: read "", b: read "K1")
+    let k1 = ExecItem(name: take k1name, kind: 0, out: 1, ins: take k1ins)
+    List.push(list: mut out, value: read k1)
+    // K2 (MAP): out=buf2 (output), ins=buf0 (input x), buf1 (intermediate s)
+    local k2ins = List.new<Int>()
+    ipush(l: mut k2ins, v: 0)
+    ipush(l: mut k2ins, v: 1)
+    local k2name = cat(a: read "", b: read "K2")
+    let k2 = ExecItem(name: take k2name, kind: 1, out: 2, ins: take k2ins)
+    List.push(list: mut out, value: read k2)
+    return Unit
+}
+
+fn schedule_buffers(out: mut List<Buf>, n: Int) -> Unit {
+    let b0 = Buf(id: 0, size: n, role: Input)
+    List.push(list: mut out, value: read b0)
+    let b1 = Buf(id: 1, size: 1, role: Intermediate)
+    List.push(list: mut out, value: read b1)
+    let b2 = Buf(id: 2, size: n, role: Output)
+    List.push(list: mut out, value: read b2)
+    return Unit
+}
+
+// ----- pretty-print the schedule (the "linear" listing realize.py would run) -----
+fn role_str(r: read BufRole) -> fresh String {
+    match r {
+        Input => { return cat(a: read "", b: read "input") }
+        Intermediate => { return cat(a: read "", b: read "intermediate") }
+        Output => { return cat(a: read "", b: read "output") }
+    }
+}
+fn print_schedule(items: read List<ExecItem>, bufs: read List<Buf>) -> Unit {
+    Log.write(message: read "=== SCHEDULE (ExecItem list) ===")
+    let nb = List.len(list: read bufs)
+    let mut bi = 0
+    while bi < nb {
+        let b = List.get(list: read bufs, index: bi)
+        Log.write(message: read cat3(a: read cat3(a: read "  buf", b: read Int.to_string(value: read b.id), c: read ": size="), b: read Int.to_string(value: read b.size), c: read cat(a: read " role=", b: read role_str(r: read b.role))))
+        bi = bi + 1
+    }
+    let ni = List.len(list: read items)
+    let mut ii = 0
+    while ii < ni {
+        let it = List.get(list: read items, index: ii)
+        let mut ins_s = cat(a: read "", b: read "")
+        let nin = List.len(list: read it.ins)
+        let mut ji = 0
+        while ji < nin {
+            if ji > 0 { ins_s = cat(a: read ins_s, b: read ",") }
+            ins_s = cat3(a: read ins_s, b: read "buf", c: read Int.to_string(value: read iget(l: read it.ins, i: ji)))
+            ji = ji + 1
+        }
+        let mut kindname = cat(a: read "", b: read "MAP")
+        if it.kind == 0 { kindname = cat(a: read "", b: read "REDUCE") }
+        Log.write(message: read cat3(a: read cat3(a: read cat3(a: read "  exec ", b: read Int.to_string(value: read ii), c: read ": "), b: read it.name, c: read cat(a: read " (", b: read kindname)), b: read cat3(a: read ")  out=buf", b: read Int.to_string(value: read it.out), c: read cat3(a: read " ins=[", b: read ins_s, c: read "]")), c: read ""))
+        ii = ii + 1
+    }
+    return Unit
+}
+
+// ----- mc kernel bodies (one per ExecItem kind), named by the ExecItem -----
+fn emit_reduce_kernel(lines: mut List<String>, name: read String, reduce_body: read String, ns: read String) -> Unit {
+    pl(lines: mut lines, t: read cat3(a: read "export fn ", b: read name, c: read "(data0: PAddr, data1: PAddr) -> void {"))
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    var acc: [1]f32 = uninit;")
+    pl(lines: mut lines, t: read "    acc[0] = 0.0;")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read ns, c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      acc[0] = acc[0] + ", b: read reduce_body, c: read ";"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "    raw.store<f32>(pa_offset(data0, 0), acc[0]);")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    return Unit
+}
+fn emit_map_kernel(lines: mut List<String>, name: read String, ew_body: read String, ns: read String) -> Unit {
+    pl(lines: mut lines, t: read cat3(a: read "export fn ", b: read name, c: read "(data0: PAddr, data1: PAddr, data2: PAddr) -> void {"))
+    pl(lines: mut lines, t: read "  unsafe {")
+    pl(lines: mut lines, t: read "    let s0: f32 = raw.load<f32>(pa_offset(data2, 0));")
+    pl(lines: mut lines, t: read "    var i: usize = 0;")
+    pl(lines: mut lines, t: read cat3(a: read "    while i < ", b: read ns, c: read " {"))
+    pl(lines: mut lines, t: read "      let xi: f32 = raw.load<f32>(pa_offset(data1, i * 4));")
+    pl(lines: mut lines, t: read cat3(a: read "      raw.store<f32>(pa_offset(data0, i * 4), ", b: read ew_body, c: read ");"))
+    pl(lines: mut lines, t: read "      i = i + 1;")
+    pl(lines: mut lines, t: read "    }")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "}")
+    return Unit
+}
+
+// host buffer name for a buffer index, from the buffer table roles
+fn host_name(bufs: read List<Buf>, idx: Int) -> fresh String {
+    let b = List.get(list: read bufs, index: idx)
+    match b.role {
+        Input => { return cat(a: read "", b: read "x") }
+        Intermediate => { return cat(a: read "", b: read "s") }
+        Output => { return cat(a: read "", b: read "o") }
+    }
+}
+fn host_ptr(bufs: read List<Buf>, idx: Int) -> fresh String {
+    return cat3(a: read "pa((&", b: read host_name(bufs: read bufs, idx: idx), c: read "[0]) as usize)")
+}
+
+// ============================================================================
+// REALIZE: emit a hosted mc program that DEFINES each ExecItem's kernel and then,
+// in hosted_kernel_run(), allocates every Buf and CALLS each ExecItem in order,
+// passing (out, ins...) -- this is run_linear / exec_kernel turned into mc.
+// ============================================================================
+fn realize(items: read List<ExecItem>, bufs: read List<Buf>, reduce_body: read String, ew_body: read String, n: Int) -> fresh String {
+    let ns = String.from_int(value: n)
+    let lines = List.new<String>()
+    pl(lines: mut lines, t: read "import \"std/addr.mc\";")
+    pl(lines: mut lines, t: read "import \"std/hosted_io.mc\";")
+    pl(lines: mut lines, t: read "")
+    // --- define each scheduled kernel ---
+    let ni = List.len(list: read items)
+    let mut ki = 0
+    while ki < ni {
+        let it = List.get(list: read items, index: ki)
+        if it.kind == 0 { emit_reduce_kernel(lines: mut lines, name: read it.name, reduce_body: read reduce_body, ns: read ns) }
+        if it.kind == 1 { emit_map_kernel(lines: mut lines, name: read it.name, ew_body: read ew_body, ns: read ns) }
+        ki = ki + 1
+    }
+    pl(lines: mut lines, t: read "")
+    // --- read_exact helper ---
+    pl(lines: mut lines, t: read "fn read_exact(f: Fd, buf: PAddr, m: usize) -> Result<bool, IoError> {")
+    pl(lines: mut lines, t: read "  var done: usize = 0;")
+    pl(lines: mut lines, t: read "  while done < m {")
+    pl(lines: mut lines, t: read "    let r: usize = io_read(f, pa_offset(buf, done), m - done)?;")
+    pl(lines: mut lines, t: read "    if r == 0 { return err(.ReadFailed); }")
+    pl(lines: mut lines, t: read "    done = done + r;")
+    pl(lines: mut lines, t: read "  }")
+    pl(lines: mut lines, t: read "  return ok(true);")
+    pl(lines: mut lines, t: read "}")
+    // --- the runner: allocate all buffers, read input, exec items in order, write output ---
+    pl(lines: mut lines, t: read "export fn hosted_kernel_run() -> i32 {")
+    let nb = List.len(list: read bufs)
+    let mut bi = 0
+    while bi < nb {
+        let b = List.get(list: read bufs, index: bi)
+        pl(lines: mut lines, t: read cat3(a: read cat3(a: read "  var ", b: read host_name(bufs: read bufs, idx: bi), c: read ": ["), b: read String.from_int(value: b.size), c: read "]f32 = uninit;"))
+        bi = bi + 1
+    }
+    pl(lines: mut lines, t: read "  let input: Fd = stdin_fd();")
+    pl(lines: mut lines, t: read "  let output: Fd = stdout_fd();")
+    // read the input buffer (buf0) from stdin
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = read_exact(input, ", b: read host_ptr(bufs: read bufs, idx: 0), c: read cat3(a: read ", ", b: read String.from_int(value: n * 4), c: read ") { return 1; }")))
+    // exec each ExecItem in scheduled order: name(out_ptr, in_ptrs...)
+    let mut ei = 0
+    while ei < ni {
+        let it = List.get(list: read items, index: ei)
+        let mut callline = cat3(a: read "  ", b: read it.name, c: read cat(a: read "(", b: read host_ptr(bufs: read bufs, idx: it.out)))
+        let nin = List.len(list: read it.ins)
+        let mut ji = 0
+        while ji < nin {
+            callline = cat3(a: read callline, b: read ", ", c: read host_ptr(bufs: read bufs, idx: iget(l: read it.ins, i: ji)))
+            ji = ji + 1
+        }
+        callline = cat(a: read callline, b: read ");")
+        pl(lines: mut lines, t: read callline)
+        ei = ei + 1
+    }
+    // write the output buffer (the last item's out) to stdout
+    let last = List.get(list: read items, index: ni - 1)
+    pl(lines: mut lines, t: read cat3(a: read "  if let err(e) = io_write_all(output, ", b: read host_ptr(bufs: read bufs, idx: last.out), c: read cat3(a: read ", ", b: read String.from_int(value: n * 4), c: read ") { return 9; }")))
+    pl(lines: mut lines, t: read "  return 0;")
+    pl(lines: mut lines, t: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn main() -> Unit {
+    let n = 4
+    // build the graph:  out[i] = x[i] - sum(x)   (reduce feeds elementwise -> 2 kernels)
+    let sumx = usum(a: read uvar(id: 0))
+    let root = usub(a: read uvar(id: 0), b: read sumx)
+    let sumchild = uvar(id: 0)                       // the reduce's input expr
+    let reduce_body = render_expr(u: read sumchild)  // kernel 1 body (over x[i])
+    let ew_body = render_expr(u: read root)          // kernel 2 body (Sum -> s0)
+
+    // SCHEDULE: graph -> ordered ExecItems + buffer table
+    let items = List.new<ExecItem>()
+    schedule_items(out: mut items)
+    let bufs = List.new<Buf>()
+    schedule_buffers(out: mut bufs, n: n)
+
+    // print the schedule (what realize.py's run_linear would iterate)
+    print_schedule(items: read items, bufs: read bufs)
+    Log.write(message: read "=== REALIZED MC PROGRAM ===")
+
+    // REALIZE: emit the orchestrated mc program that runs the ExecItems in order
+    Log.write(message: read realize(items: read items, bufs: read bufs, reduce_body: read reduce_body, ew_body: read ew_body, n: n))
+    return Unit
+}

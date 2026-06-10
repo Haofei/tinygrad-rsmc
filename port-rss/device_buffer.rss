@@ -1,0 +1,194 @@
+// Port of tinygrad device.py host-side HostBuffer/Allocator lifecycle (HostBuffer, Allocator,
+// MallocAllocator/Compiled accounting). This extends device.rss (Device[name] dispatch +
+// CPU interpreter) with the buffer/allocator state machine and memory bookkeeping.
+//
+// Mirrors:
+//   HostBuffer.nbytes            = size * dtype.itemsize
+//   HostBuffer.is_allocated()    -> device in self._bufs   (modeled as `allocated` flag)
+//   HostBuffer.allocate()        -> assert not initialized; sets allocated; sizes the host buf;
+//                               bumps GlobalCounters.mem_used (our Allocator.alloc)
+//   HostBuffer.ensure_allocated()-> idempotent allocate (allocate only if not yet allocated)
+//   HostBuffer.copyin(mv)        -> assert is_initialized; writes host data
+//   HostBuffer.copyout(mv)       -> assert is_initialized; reads host data
+//   Allocator.alloc/free     -> in_use / peak accounting (GlobalCounters.mem_used style)
+//
+// dtype is kept as its itemsize (Int); buffer payload is List<Float>; flags are Bool.
+
+// ---- HostBuffer: host-side buffer with allocation lifecycle ----
+struct HostBuffer derives(Clone) {
+    size: Int
+    dtype_itemsize: Int
+    data: List<Float>
+    allocated: Bool
+}
+
+// constructor: NOT yet allocated (mirrors HostBuffer.__init__ without preallocate)
+fn buffer_new(size: Int, itemsize: Int) -> fresh HostBuffer {
+    return HostBuffer(size: size, dtype_itemsize: itemsize, data: List.new<Float>(), allocated: false)
+}
+
+// nbytes = size * dtype.itemsize
+fn nbytes(buf: read HostBuffer) -> Int {
+    return buf.size * buf.dtype_itemsize
+}
+
+// is_allocated()
+fn is_allocated(buf: read HostBuffer) -> Bool {
+    return buf.allocated
+}
+
+// allocate(): assert not already allocated, then mark allocated and size the host data with
+// zeros. Mirrors HostBuffer.allocate() (which raises if is_initialized()).
+fn allocate(buf: mut HostBuffer) -> Unit {
+    if buf.allocated {
+        Log.write(message: read "  allocate(): already allocated -- refusing (mirrors assert)")
+        return Unit
+    }
+    buf.allocated = true
+    let n = buf.size
+    let mut i = 0
+    while i < n {
+        List.push(list: mut buf.data, value: read 0.0)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ensure_allocated(): idempotent -- allocate only if not already allocated.
+fn ensure_allocated(buf: mut HostBuffer) -> Unit {
+    if buf.allocated == false {
+        allocate(buf: mut buf)
+    }
+    return Unit
+}
+
+// copyin(src): assert allocated, then copy host list into the buffer (size-checked).
+fn copyin(buf: mut HostBuffer, src: read List<Float>) -> Bool {
+    if buf.allocated == false {
+        Log.write(message: read "  copyin(): can't copyin to unallocated buffer")
+        return false
+    }
+    let n = List.len(list: read src)
+    if n != buf.size {
+        Log.write(message: read "  copyin(): size mismatch")
+        return false
+    }
+    let mut i = 0
+    while i < n {
+        let v = List.get(list: read src, index: i)
+        List.set(list: mut buf.data, index: i, value: read v)
+        i = i + 1
+    }
+    return true
+}
+
+// copyout(out): assert allocated, then copy the buffer contents into an out-param list.
+fn copyout(buf: read HostBuffer, out: mut List<Float>) -> Bool {
+    if buf.allocated == false {
+        Log.write(message: read "  copyout(): can't copyout unallocated buffer")
+        return false
+    }
+    let n = buf.size
+    let mut i = 0
+    while i < n {
+        let v = List.get(list: read buf.data, index: i)
+        List.push(list: mut out, value: read v)
+        i = i + 1
+    }
+    return true
+}
+
+// ---- Allocator: bump/counter accounting (GlobalCounters.mem_used style) ----
+struct Allocator derives(Clone) {
+    in_use_bytes: Int
+    peak_bytes: Int
+}
+
+fn allocator_new() -> fresh Allocator {
+    return Allocator(in_use_bytes: 0, peak_bytes: 0)
+}
+
+// alloc(n): in_use += n; track peak (GlobalCounters.mem_used += nbytes)
+fn alloc(a: mut Allocator, n: Int) -> Unit {
+    a.in_use_bytes = a.in_use_bytes + n
+    if a.in_use_bytes > a.peak_bytes {
+        a.peak_bytes = a.in_use_bytes
+    }
+    return Unit
+}
+
+// free(n): in_use -= n (GlobalCounters.mem_used -= nbytes); peak unchanged
+fn free(a: mut Allocator, n: Int) -> Unit {
+    a.in_use_bytes = a.in_use_bytes - n
+    return Unit
+}
+
+// ---- helpers ----
+fn dump_floats(label: read String, buf: read List<Float>) -> Unit {
+    let n = List.len(list: read buf)
+    let mut s = String.concat(left: read label, right: read "")
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: List.get(list: read buf, index: i)))
+        s = String.concat(left: read s, right: read " ")
+        i = i + 1
+    }
+    Log.write(message: read s)
+    return Unit
+}
+
+fn say_int(label: read String, n: Int) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read Int.to_string(value: read n)))
+    return Unit
+}
+
+fn say_bool(label: read String, b: Bool) -> Unit {
+    if b {
+        Log.write(message: read String.concat(left: read label, right: read "true"))
+        return Unit
+    }
+    Log.write(message: read String.concat(left: read label, right: read "false"))
+    return Unit
+}
+
+fn main() -> Unit {
+    // --- HostBuffer lifecycle ---
+    let mut buf = buffer_new(size: 4, itemsize: 4)
+    say_int(label: read "HostBuffer nbytes (size 4, itemsize 4): ", n: nbytes(buf: read buf))   // 16
+    say_bool(label: read "is_allocated before allocate: ", b: is_allocated(buf: read buf))    // false
+
+    allocate(buf: mut buf)
+    say_bool(label: read "is_allocated after allocate:  ", b: is_allocated(buf: read buf))    // true
+
+    // ensure_allocated is idempotent -- a second allocate would assert; ensure_allocated no-ops
+    ensure_allocated(buf: mut buf)
+    say_bool(label: read "is_allocated after ensure_allocated (idempotent): ", b: is_allocated(buf: read buf)) // true
+
+    // copyin / copyout round-trip
+    let src = List.new<Float>()
+    List.push(list: mut src, value: read 1.0)
+    List.push(list: mut src, value: read 2.0)
+    List.push(list: mut src, value: read 3.0)
+    List.push(list: mut src, value: read 4.0)
+    let okin = copyin(buf: mut buf, src: read src)
+    say_bool(label: read "copyin ok: ", b: okin)                                              // true
+
+    let out = List.new<Float>()
+    let okout = copyout(buf: read buf, out: mut out)
+    if okout {
+        dump_floats(label: read "copyout (round-trip): ", buf: read out)                      // 1 2 3 4
+    }
+
+    // --- Allocator accounting ---
+    let mut alc = allocator_new()
+    alloc(a: mut alc, n: 16)
+    alloc(a: mut alc, n: 8)
+    say_int(label: read "Allocator in_use after alloc(16)+alloc(8): ", n: alc.in_use_bytes)   // 24
+    say_int(label: read "Allocator peak  after alloc(16)+alloc(8): ", n: alc.peak_bytes)      // 24
+
+    free(a: mut alc, n: 16)
+    say_int(label: read "Allocator in_use after free(16): ", n: alc.in_use_bytes)             // 8
+    say_int(label: read "Allocator peak  after free(16): ", n: alc.peak_bytes)                // 24 (peak unchanged)
+
+    return Unit
+}

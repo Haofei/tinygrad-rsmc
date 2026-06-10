@@ -1,0 +1,413 @@
+// Numeric port of tinygrad Tensor's elementwise + broadcasting op surface, operating on a
+// flat List<Float> `data` plus a `shape: List<Int>` (NumPy/tinygrad broadcasting).
+//
+// Faithful to /home/zoe/tinygrad/tinygrad/mixin/elementwise.py (_broadcasted) and
+// tinygrad/uop/ops.py (_align_left / _broadcast_shape): shapes are right-aligned
+// (left-padded with 1s), per-dim result is max of the inputs, and a size-1 dim
+// broadcasts (contributes stride 0 when indexing -- the same View stride idea used in
+// shapetracker). Covers:
+//   - broadcast_shapes(a,b): (2,1)&(1,3)->(2,3), (3,)&(2,3)->(2,3)
+//   - elementwise binary w/ broadcast: add, sub, mul, div, maximum
+//   - unary: neg, relu, reciprocal
+//   - reduce: sum(axis), max(axis)  (keepdim=False)
+//
+// rss gaps used (see BRIEFING.md): flat data is List<Float>, shapes/strides/counts are
+// List<Int>/Int (no Int->Float), typed `iget` for Int field-list access, and list-returning
+// helpers use out-params (fresh-return restriction). One statement per line.
+
+// ---------- typed accessors ----------
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+fn imax(a: Int, b: Int) -> Int {
+    if a > b { return a }
+    return b
+}
+fn fmaxf(a: Float, b: Float) -> Float {
+    if a > b { return a }
+    return b
+}
+
+// product of a shape (number of elements)
+fn numel(shape: read List<Int>) -> Int {
+    let n = List.len(list: read shape)
+    let mut p = 1
+    let mut i = 0
+    while i < n {
+        p = p * iget(l: read shape, i: i)
+        i = i + 1
+    }
+    return p
+}
+
+// ---------- broadcast_shapes: right-aligned, 1 stretches ----------
+// out[k] (over the max rank) = max(a-dim, b-dim) where missing dims are treated as 1.
+fn broadcast_shapes(a: read List<Int>, b: read List<Int>, out: mut List<Int>) -> Unit {
+    let na = List.len(list: read a)
+    let nb = List.len(list: read b)
+    let nd = imax(a: na, b: nb)
+    let mut k = 0
+    while k < nd {
+        // index from the right: position from the end is (nd-1-k)
+        let from_end = nd - 1 - k
+        let ai = na - 1 - from_end
+        let bi = nb - 1 - from_end
+        let mut da = 1
+        if ai >= 0 { da = iget(l: read a, i: ai) }
+        let mut db = 1
+        if bi >= 0 { db = iget(l: read b, i: bi) }
+        List.push(list: mut out, value: read imax(a: da, b: db))
+        k = k + 1
+    }
+    return Unit
+}
+
+// ---------- broadcast strides for one input against an output shape ----------
+// Build row-major strides for `shape` aligned to the right of `out_shape`; a dim that is
+// size 1 (or missing -> treated as size 1) gets stride 0 so it broadcasts.
+fn bstrides(shape: read List<Int>, out_shape: read List<Int>, out: mut List<Int>) -> Unit {
+    let ns = List.len(list: read shape)
+    let nd = List.len(list: read out_shape)
+    // first, base row-major strides of the (un-aligned) input shape, right-to-left
+    let base = List.new<Int>()
+    let mut acc = 1
+    let mut j = ns - 1
+    while j >= 0 {
+        let d = iget(l: read shape, i: j)
+        List.push(list: mut base, value: read acc)
+        acc = acc * d
+        j = j - 1
+    }
+    // base now holds strides in reversed order: base[0] is stride of last dim.
+    // Emit a stride for each of the nd output dims (right-aligned).
+    let mut k = 0
+    while k < nd {
+        let from_end = nd - 1 - k
+        let si = ns - 1 - from_end
+        let mut st = 0
+        if si >= 0 {
+            let d = iget(l: read shape, i: si)
+            if d != 1 {
+                // base index for this dim: reversed position is from_end
+                st = iget(l: read base, i: from_end)
+            }
+        }
+        List.push(list: mut out, value: read st)
+        k = k + 1
+    }
+    return Unit
+}
+
+// flat offset into an input given the output multi-index `idx` and that input's bstrides.
+fn offset_of(idx: read List<Int>, strides: read List<Int>) -> Int {
+    let n = List.len(list: read idx)
+    let mut off = 0
+    let mut i = 0
+    while i < n {
+        off = off + iget(l: read idx, i: i) * iget(l: read strides, i: i)
+        i = i + 1
+    }
+    return off
+}
+
+// increment a multi-index `idx` in-place over `shape` (row-major, last dim fastest).
+fn inc_index(idx: mut List<Int>, shape: read List<Int>) -> Unit {
+    let n = List.len(list: read shape)
+    let mut i = n - 1
+    while i >= 0 {
+        let v = iget(l: read idx, i: i) + 1
+        if v < iget(l: read shape, i: i) {
+            List.set(list: mut idx, index: i, value: read v)
+            return Unit
+        }
+        List.set(list: mut idx, index: i, value: read 0)
+        i = i - 1
+    }
+    return Unit
+}
+
+// zero-initialised multi-index of length nd
+fn zero_index(nd: Int, out: mut List<Int>) -> Unit {
+    let mut i = 0
+    while i < nd {
+        List.push(list: mut out, value: read 0)
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- elementwise binary with broadcasting ----------
+// op codes: 0 add, 1 sub, 2 mul, 3 div, 4 maximum
+fn binop1(a: Float, b: Float, op: Int) -> Float {
+    if op == 0 { return a + b }
+    if op == 1 { return a - b }
+    if op == 2 { return a * b }
+    if op == 3 { return a / b }
+    return fmaxf(a: a, b: b)
+}
+
+fn broadcast_binop(adata: read List<Float>, ashape: read List<Int>,
+                   bdata: read List<Float>, bshape: read List<Int>,
+                   op: Int, out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    broadcast_shapes(a: read ashape, b: read bshape, out: mut out_shape)
+    let astr = List.new<Int>()
+    bstrides(shape: read ashape, out_shape: read out_shape, out: mut astr)
+    let bstr = List.new<Int>()
+    bstrides(shape: read bshape, out_shape: read out_shape, out: mut bstr)
+    let total = numel(shape: read out_shape)
+    let nd = List.len(list: read out_shape)
+    let idx = List.new<Int>()
+    zero_index(nd: nd, out: mut idx)
+    let mut c = 0
+    while c < total {
+        let av = fget(l: read adata, i: offset_of(idx: read idx, strides: read astr))
+        let bv = fget(l: read bdata, i: offset_of(idx: read idx, strides: read bstr))
+        List.push(list: mut out, value: read binop1(a: av, b: bv, op: op))
+        inc_index(idx: mut idx, shape: read out_shape)
+        c = c + 1
+    }
+    return Unit
+}
+
+// ---------- unary ----------
+// uop codes: 0 neg, 1 relu, 2 reciprocal
+fn unop1(x: Float, op: Int) -> Float {
+    if op == 0 { return 0.0 - x }
+    if op == 1 { return fmaxf(a: 0.0, b: x) }
+    return 1.0 / x
+}
+fn unary(data: read List<Float>, op: Int, out: mut List<Float>) -> Unit {
+    let n = List.len(list: read data)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read unop1(x: fget(l: read data, i: i), op: op))
+        i = i + 1
+    }
+    return Unit
+}
+
+// ---------- reduce over one axis (keepdim=False) ----------
+// rop: 0 sum, 1 max
+fn reduce_axis(data: read List<Float>, shape: read List<Int>, axis: Int, rop: Int,
+               out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    let nd = List.len(list: read shape)
+    let axn = iget(l: read shape, i: axis)
+    // row-major strides of the input
+    let instr = List.new<Int>()
+    let rev = List.new<Int>()
+    let mut acc = 1
+    let mut j = nd - 1
+    while j >= 0 {
+        List.push(list: mut rev, value: read acc)
+        acc = acc * iget(l: read shape, i: j)
+        j = j - 1
+    }
+    // un-reverse into instr[dim]
+    let mut k = 0
+    while k < nd {
+        List.push(list: mut instr, value: read iget(l: read rev, i: nd - 1 - k))
+        k = k + 1
+    }
+    // output shape = input shape with `axis` dropped
+    let mut d = 0
+    while d < nd {
+        if d != axis { List.push(list: mut out_shape, value: read iget(l: read shape, i: d)) }
+        d = d + 1
+    }
+    let axstride = iget(l: read instr, i: axis)
+    let total = numel(shape: read out_shape)
+    let ond = List.len(list: read out_shape)
+    let oidx = List.new<Int>()
+    zero_index(nd: ond, out: mut oidx)
+    let mut c = 0
+    while c < total {
+        // base offset into input from the output index (skipping the reduced axis)
+        let mut base = 0
+        let mut oi = 0
+        let mut di = 0
+        while di < nd {
+            if di != axis {
+                base = base + iget(l: read oidx, i: oi) * iget(l: read instr, i: di)
+                oi = oi + 1
+            }
+            di = di + 1
+        }
+        // reduce along axis
+        let mut r = 0.0
+        if rop == 1 { r = fget(l: read data, i: base) }
+        let mut s = 0
+        while s < axn {
+            let v = fget(l: read data, i: base + s * axstride)
+            if rop == 0 { r = r + v }
+            if rop == 1 { r = fmaxf(a: r, b: v) }
+            s = s + 1
+        }
+        List.push(list: mut out, value: read r)
+        inc_index(idx: mut oidx, shape: read out_shape)
+        c = c + 1
+    }
+    return Unit
+}
+
+// ---------- printing ----------
+fn show_shape(label: read String, shape: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read shape, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+fn pushi(l: mut List<Int>, v: Int) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    // ===== broadcast_shapes rule =====
+    // (2,1) & (1,3) -> (2,3)
+    let s21 = List.new<Int>()
+    pushi(l: mut s21, v: 2)
+    pushi(l: mut s21, v: 1)
+    let s13 = List.new<Int>()
+    pushi(l: mut s13, v: 1)
+    pushi(l: mut s13, v: 3)
+    let bs1 = List.new<Int>()
+    broadcast_shapes(a: read s21, b: read s13, out: mut bs1)
+    show_shape(label: read "broadcast_shapes((2,1),(1,3)) = ", shape: read bs1)   // [2, 3]
+
+    // (3,) & (2,3) -> (2,3)
+    let s3 = List.new<Int>()
+    pushi(l: mut s3, v: 3)
+    let s23 = List.new<Int>()
+    pushi(l: mut s23, v: 2)
+    pushi(l: mut s23, v: 3)
+    let bs2 = List.new<Int>()
+    broadcast_shapes(a: read s3, b: read s23, out: mut bs2)
+    show_shape(label: read "broadcast_shapes((3,),(2,3)) = ", shape: read bs2)    // [2, 3]
+
+    // ===== elementwise binary with broadcast =====
+    // a=(2,1)=[[1],[2]], b=(1,3)=[[10,20,30]]
+    let a = List.new<Float>()
+    pushf(l: mut a, v: 1.0)
+    pushf(l: mut a, v: 2.0)
+    let b = List.new<Float>()
+    pushf(l: mut b, v: 10.0)
+    pushf(l: mut b, v: 20.0)
+    pushf(l: mut b, v: 30.0)
+
+    // add -> [[11,21,31],[12,22,32]]
+    let oshp = List.new<Int>()
+    let oadd = List.new<Float>()
+    broadcast_binop(adata: read a, ashape: read s21, bdata: read b, bshape: read s13, op: 0, out_shape: mut oshp, out: mut oadd)
+    show_vec(label: read "(2,1)+(1,3) = ", v: read oadd)        // [11,21,31,12,22,32]
+
+    // sub -> [[-9,-19,-29],[-8,-18,-28]]
+    let oshp2 = List.new<Int>()
+    let osub = List.new<Float>()
+    broadcast_binop(adata: read a, ashape: read s21, bdata: read b, bshape: read s13, op: 1, out_shape: mut oshp2, out: mut osub)
+    show_vec(label: read "(2,1)-(1,3) = ", v: read osub)        // [-9,-19,-29,-8,-18,-28]
+
+    // div b/a -> [[10,20,30],[5,10,15]]
+    let oshp3 = List.new<Int>()
+    let odiv = List.new<Float>()
+    broadcast_binop(adata: read b, ashape: read s13, bdata: read a, bshape: read s21, op: 3, out_shape: mut oshp3, out: mut odiv)
+    show_vec(label: read "(1,3)/(2,1) = ", v: read odiv)        // [10,20,30,5,10,15]
+
+    // maximum a.maximum(b) -> [[10,20,30],[10,20,30]]
+    let oshp4 = List.new<Int>()
+    let omax = List.new<Float>()
+    broadcast_binop(adata: read a, ashape: read s21, bdata: read b, bshape: read s13, op: 4, out_shape: mut oshp4, out: mut omax)
+    show_vec(label: read "max((2,1),(1,3)) = ", v: read omax)   // [10,20,30,10,20,30]
+
+    // (2,3)*(3,): x=[[1,2,3],[4,5,6]], v=[10,20,30] -> [[10,40,90],[40,100,180]]
+    let x = List.new<Float>()
+    pushf(l: mut x, v: 1.0)
+    pushf(l: mut x, v: 2.0)
+    pushf(l: mut x, v: 3.0)
+    pushf(l: mut x, v: 4.0)
+    pushf(l: mut x, v: 5.0)
+    pushf(l: mut x, v: 6.0)
+    let vv = List.new<Float>()
+    pushf(l: mut vv, v: 10.0)
+    pushf(l: mut vv, v: 20.0)
+    pushf(l: mut vv, v: 30.0)
+    let oshp5 = List.new<Int>()
+    let omul = List.new<Float>()
+    broadcast_binop(adata: read x, ashape: read s23, bdata: read vv, bshape: read s3, op: 2, out_shape: mut oshp5, out: mut omul)
+    show_vec(label: read "(2,3)*(3,) = ", v: read omul)         // [10,40,90,40,100,180]
+
+    // ===== unary on a (2,3) =====
+    // relu of r=[[-1,2,-3],[4,-5,6]] -> [0,2,0,4,0,6]
+    let r = List.new<Float>()
+    pushf(l: mut r, v: -1.0)
+    pushf(l: mut r, v: 2.0)
+    pushf(l: mut r, v: -3.0)
+    pushf(l: mut r, v: 4.0)
+    pushf(l: mut r, v: -5.0)
+    pushf(l: mut r, v: 6.0)
+    let orelu = List.new<Float>()
+    unary(data: read r, op: 1, out: mut orelu)
+    show_vec(label: read "relu (2,3) = ", v: read orelu)        // [0,2,0,4,0,6]
+
+    // neg of x -> [-1,-2,-3,-4,-5,-6]
+    let oneg = List.new<Float>()
+    unary(data: read x, op: 0, out: mut oneg)
+    show_vec(label: read "neg (2,3) = ", v: read oneg)          // [-1,-2,-3,-4,-5,-6]
+
+    // reciprocal of v=[10,20,30] -> [0.1,0.05,0.0333...]
+    let orec = List.new<Float>()
+    unary(data: read vv, op: 2, out: mut orec)
+    show_vec(label: read "reciprocal (3,) = ", v: read orec)    // [0.1,0.05,0.03333]
+
+    // ===== reduce =====
+    // sum(axis=1) of x (2,3) -> [6,15]
+    let sshp = List.new<Int>()
+    let ssum = List.new<Float>()
+    reduce_axis(data: read x, shape: read s23, axis: 1, rop: 0, out_shape: mut sshp, out: mut ssum)
+    show_shape(label: read "x.sum(axis=1) shape = ", shape: read sshp)  // [2]
+    show_vec(label: read "x.sum(axis=1) = ", v: read ssum)             // [6,15]
+
+    // sum(axis=0) of x -> [5,7,9]
+    let sshp0 = List.new<Int>()
+    let ssum0 = List.new<Float>()
+    reduce_axis(data: read x, shape: read s23, axis: 0, rop: 0, out_shape: mut sshp0, out: mut ssum0)
+    show_vec(label: read "x.sum(axis=0) = ", v: read ssum0)            // [5,7,9]
+
+    // max(axis=0) of x -> [4,5,6]
+    let mshp = List.new<Int>()
+    let mmax = List.new<Float>()
+    reduce_axis(data: read x, shape: read s23, axis: 0, rop: 1, out_shape: mut mshp, out: mut mmax)
+    show_shape(label: read "x.max(axis=0) shape = ", shape: read mshp)  // [3]
+    show_vec(label: read "x.max(axis=0) = ", v: read mmax)             // [4,5,6]
+
+    // max(axis=1) of x -> [3,6]
+    let mshp1 = List.new<Int>()
+    let mmax1 = List.new<Float>()
+    reduce_axis(data: read x, shape: read s23, axis: 1, rop: 1, out_shape: mut mshp1, out: mut mmax1)
+    show_vec(label: read "x.max(axis=1) = ", v: read mmax1)            // [3,6]
+    return Unit
+}

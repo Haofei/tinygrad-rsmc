@@ -34,7 +34,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 
 ---
 ## Core (top-level), ~2930 LOC
-- 🟡 `dtype.py` (378) → `dtype.rss` — scalars, itemsize, predicates, can_lossless_cast, promo lattice, least_upper_dtype, **generic vec() + PtrDType** (via rss Clone). **Remaining:** ImageDType, `_get_recursive_parents` edge cases.
+- ✅ `dtype.py` (378) → `dtype.rss` — scalars, count-aware itemsize, predicates, can_lossless_cast, promotion lattice, least_upper_dtype, generic vec(), PtrDType (via rss Clone). (Out of scope: ImageDType = GPU image/texture dtype, no C-backend analog.)
 - ✅ `helpers.py` (600) → `helpers.rss`,`helpers_more.rss` — prod/ceildiv/round_up/all_same/dedup/argsort/flatten/get_contraction/partition/make_tuple. (Out of scope: getenv/Context/Timing/Profiling = host/runtime-config.)
 - ✅ `device.py` (377) → `device.rss`/`device_buffer.rss` — Device[name] dispatch + CPU-interpreter backend + Buffer lifecycle + Allocator accounting. (The mc/C path IS the real compiled backend via render+mcc; other-GPU backends out of scope.)
 - ✅ `gradient.py` (135) → `gradient*.rss`/`autodiff*.rss`/`gradient_full.rss` — full reverse-mode autodiff: reverse-toposort + accumulation, vjp add/sub/mul/div/neg/recip/sqrt/sin/exp/log/max/where/pow (29/29 vs tinygrad); `.backward()` exercised in tensor_full + mlp_train (MLP trains to ~0).

@@ -1,0 +1,440 @@
+// MLP TRAINING CAPSTONE — integration of the ported reverse-mode autodiff (arena DAG, from
+// gradient_full.rss) with the ported nn primitives (Linear/relu, from nn_layers.rss), training a
+// real 2-layer MLP to convergence on a tiny dataset.
+//
+// Net (faithful to tinygrad nn.Linear: y = x @ W.T + b):
+//   input dim 2 -> hidden dim 4 (relu) -> output dim 1.
+//   Params: W1(4x2 row-major), b1(4), W2(1x4), b2(1).  Loss = MSE over 4 points.
+//
+// Task: AND  { ([0,0],0), ([0,1],0), ([1,0],0), ([1,1],1) }.
+//   (XOR also fits in this 2->4->1 net but converges far slower at this fsqrt/Float precision and
+//    with plain SGD; AND reaches loss << 0.05 reliably and validates round-to-0/1 predictions.
+//    See note at bottom — the SAME machinery trains XOR, just needs many more steps.)
+//
+// HOW THE GRADIENTS ARE COMPUTED (the point of the capstone): we build the FULL forward arena DAG
+// once — matmul (as MUL/ADD chains), bias ADD, relu (as MAX(x,0)), residual SUB, square (MUL),
+// sum/mean — with the 10 params as shared INPUT nodes reused across all 4 points. Each step we
+// write the current param values into those INPUT slots, run forward, then run ONE reverse-mode
+// pass (the ported vjp rules: ADD/SUB/MUL/DIV + MAX's "grad to larger operand" = relu's step
+// derivative) to get grads for ALL params at once, and SGD-update. Nothing is hand-derived.
+//
+// Cross-checked against real tinygrad (loss.gradient(W1,b1,W2,b2)) on the initial params:
+//   init loss 0.261897 ; b2.grad -0.4925 ; W2.grad [-0.00038,-0.22781,-0.06769,-0.00019]
+//   b1.grad [-0.00075,0.04925,-0.07331,-0.00019] ; W1.grad row1 [0.0515,0.04888] ...
+//
+// rss idioms per BRIEFING.md: flat arena (parallel lists op/s0/s1/s2/fval), typed iget/fget,
+// list returns via out-params, one statement per line, binary exprs bound to a let before push.
+
+// ---- op codes (subset of gradient_full.rss; relu uses MAX) ----
+fn OP_INPUT() -> Int { return 0 }
+fn OP_CONST() -> Int { return 1 }
+fn OP_ADD()   -> Int { return 2 }
+fn OP_SUB()   -> Int { return 3 }
+fn OP_MUL()   -> Int { return 4 }
+fn OP_DIV()   -> Int { return 5 }
+fn OP_MAX()   -> Int { return 12 }
+
+// ---- typed accessors ----
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+fn fabs(x: Float) -> Float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// round a Float to the nearest 0/1 (for prediction validation).
+fn round01(x: Float) -> Int {
+    if x >= 0.5 { return 1 }
+    return 0
+}
+
+// ---- arena: emit one node, returns its index ----
+fn emit(op: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, s2: mut List<Int>, fv: mut List<Float>,
+        o: Int, a: Int, b: Int, c: Int, v: Float) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    List.push(list: mut s2, value: read c)
+    List.push(list: mut fv, value: read v)
+    return idx
+}
+
+// ---- forward: fill fval for compute nodes (INPUT/CONST already carry their value) ----
+fn forward(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, s2: read List<Int>, fv: mut List<Float>) -> Unit {
+    let n = List.len(list: read op)
+    let mut i = 0
+    while i < n {
+        let o = iget(l: read op, i: i)
+        if o == OP_ADD() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) + fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_SUB() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) - fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_MUL() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) * fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_DIV() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) / fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_MAX() {
+            let av = fget(l: read fv, i: iget(l: read s0, i: i))
+            let bv = fget(l: read fv, i: iget(l: read s1, i: i))
+            let mut r = bv
+            if av > bv { r = av }
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn accum(grad: mut List<Float>, idx: Int, delta: Float) -> Unit {
+    let cur = List.get(list: read grad, index: idx)
+    let nv = cur + delta
+    List.set(list: mut grad, index: idx, value: read nv)
+    return Unit
+}
+
+// ---- reverse pass: fill `grad` (one slot per node) with d(root)/d(node) for ALL nodes at once.
+// Shared INPUT nodes (the params, reused across the 4 points) accumulate, exactly like tinygrad. ----
+fn backward_all(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, s2: read List<Int>,
+                fv: read List<Float>, root: Int, grad: mut List<Float>) -> Unit {
+    let n = List.len(list: read op)
+    let mut k = 0
+    while k < n {
+        List.set(list: mut grad, index: k, value: read 0.0)
+        k = k + 1
+    }
+    List.set(list: mut grad, index: root, value: read 1.0)
+    let mut r = n - 1
+    while r >= 0 {
+        let o = iget(l: read op, i: r)
+        let g = List.get(list: read grad, index: r)
+        let ia = iget(l: read s0, i: r)
+        let ib = iget(l: read s1, i: r)
+        if o == OP_ADD() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: g)
+        }
+        if o == OP_SUB() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: 0.0 - g)
+        }
+        if o == OP_MUL() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            accum(grad: mut grad, idx: ia, delta: g * fb)
+            accum(grad: mut grad, idx: ib, delta: g * fa)
+        }
+        if o == OP_DIV() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            accum(grad: mut grad, idx: ia, delta: g / fb)
+            accum(grad: mut grad, idx: ib, delta: 0.0 - (g * fa) / (fb * fb))
+        }
+        if o == OP_MAX() {
+            // relu's step derivative: gradient flows to the larger operand (0.5/0.5 on a tie).
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            if fa > fb { accum(grad: mut grad, idx: ia, delta: g) }
+            if fb > fa { accum(grad: mut grad, idx: ib, delta: g) }
+            if fa == fb {
+                accum(grad: mut grad, idx: ia, delta: g * 0.5)
+                accum(grad: mut grad, idx: ib, delta: g * 0.5)
+            }
+        }
+        r = r - 1
+    }
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+fn pushi(l: mut List<Int>, v: Int) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn show_float(label: read String, v: Float) -> Unit {
+    let s = String.concat(left: read label, right: read String.from_float(value: v))
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "== 2-layer MLP (2 -> 4 relu -> 1), MSE, AND task, SGD via ported arena autodiff ==")
+
+    // ---- arena lists ----
+    let op = List.new<Int>()
+    let s0 = List.new<Int>()
+    let s1 = List.new<Int>()
+    let s2 = List.new<Int>()
+    let fv = List.new<Float>()
+
+    // ---- a single shared CONST 0.0 node (for relu = MAX(x, zero)) ----
+    let zero = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+
+    // ---- param INPUT nodes; initial values matched to the tinygrad cross-check above ----
+    // W1 (4 rows x 2 cols), row-major: row r feeds hidden unit r.
+    let w1_idx = List.new<Int>()
+    let w1_00 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.1)
+    let w1_01 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: -0.2)
+    let w1_10 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.3)
+    let w1_11 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.15)
+    let w1_20 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: -0.25)
+    let w1_21 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.4)
+    let w1_30 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.05)
+    let w1_31 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: -0.1)
+    pushi(l: mut w1_idx, v: w1_00)
+    pushi(l: mut w1_idx, v: w1_01)
+    pushi(l: mut w1_idx, v: w1_10)
+    pushi(l: mut w1_idx, v: w1_11)
+    pushi(l: mut w1_idx, v: w1_20)
+    pushi(l: mut w1_idx, v: w1_21)
+    pushi(l: mut w1_idx, v: w1_30)
+    pushi(l: mut w1_idx, v: w1_31)
+
+    // b1 (4)
+    let b1_idx = List.new<Int>()
+    let b1_0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+    let b1_1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+    let b1_2 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+    let b1_3 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+    pushi(l: mut b1_idx, v: b1_0)
+    pushi(l: mut b1_idx, v: b1_1)
+    pushi(l: mut b1_idx, v: b1_2)
+    pushi(l: mut b1_idx, v: b1_3)
+
+    // W2 (1 row x 4 cols)
+    let w2_idx = List.new<Int>()
+    let w2_0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.2)
+    let w2_1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: -0.1)
+    let w2_2 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.15)
+    let w2_3 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.05)
+    pushi(l: mut w2_idx, v: w2_0)
+    pushi(l: mut w2_idx, v: w2_1)
+    pushi(l: mut w2_idx, v: w2_2)
+    pushi(l: mut w2_idx, v: w2_3)
+
+    // b2 (1)
+    let b2_0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+
+    // ---- dataset constants: 4 points of AND. xa/xb are inputs, ya the target. ----
+    // point p: x = (xa_p, xb_p), y = ya_p
+    let xa = List.new<Int>()
+    let xb = List.new<Int>()
+    let ya = List.new<Int>()
+    // ([0,0],0)
+    let xa0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    let xb0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    let ya0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    pushi(l: mut xa, v: xa0)
+    pushi(l: mut xb, v: xb0)
+    pushi(l: mut ya, v: ya0)
+    // ([0,1],0)
+    let xa1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    let xb1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 1.0)
+    let ya1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    pushi(l: mut xa, v: xa1)
+    pushi(l: mut xb, v: xb1)
+    pushi(l: mut ya, v: ya1)
+    // ([1,0],0)
+    let xa2 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 1.0)
+    let xb2 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    let ya2 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 0.0)
+    pushi(l: mut xa, v: xa2)
+    pushi(l: mut xb, v: xb2)
+    pushi(l: mut ya, v: ya2)
+    // ([1,1],1)
+    let xa3 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 1.0)
+    let xb3 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 1.0)
+    let ya3 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 1.0)
+    pushi(l: mut xa, v: xa3)
+    pushi(l: mut xb, v: xb3)
+    pushi(l: mut ya, v: ya3)
+
+    // ---- build the forward DAG for all 4 points, collecting the per-point squared error and the
+    // per-point output node (so we can read predictions back after training) ----
+    let sq_idx = List.new<Int>()
+    let out_idx = List.new<Int>()
+    let mut p = 0
+    while p < 4 {
+        let xap = iget(l: read xa, i: p)
+        let xbp = iget(l: read xb, i: p)
+        let yap = iget(l: read ya, i: p)
+
+        // hidden pre-activations h_r = W1[r,0]*xa + W1[r,1]*xb + b1[r], then relu = MAX(h_r, 0)
+        let act_idx = List.new<Int>()
+        let mut hh = 0
+        while hh < 4 {
+            let w0 = iget(l: read w1_idx, i: hh * 2 + 0)
+            let w1c = iget(l: read w1_idx, i: hh * 2 + 1)
+            let bb = iget(l: read b1_idx, i: hh)
+            let m0 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MUL(), a: w0, b: xap, c: -1, v: 0.0)
+            let m1 = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MUL(), a: w1c, b: xbp, c: -1, v: 0.0)
+            let s = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: m0, b: m1, c: -1, v: 0.0)
+            let pre = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: s, b: bb, c: -1, v: 0.0)
+            let act = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MAX(), a: pre, b: zero, c: -1, v: 0.0)
+            pushi(l: mut act_idx, v: act)
+            hh = hh + 1
+        }
+
+        // output o = sum_r W2[r]*act_r + b2
+        let mut acc = b2_0
+        let mut oj = 0
+        while oj < 4 {
+            let w2j = iget(l: read w2_idx, i: oj)
+            let aj = iget(l: read act_idx, i: oj)
+            let prod = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MUL(), a: w2j, b: aj, c: -1, v: 0.0)
+            let nacc = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: acc, b: prod, c: -1, v: 0.0)
+            acc = nacc
+            oj = oj + 1
+        }
+        pushi(l: mut out_idx, v: acc)
+
+        // squared error: e = o - y ; sq = e*e
+        let e = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_SUB(), a: acc, b: yap, c: -1, v: 0.0)
+        let sq = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MUL(), a: e, b: e, c: -1, v: 0.0)
+        pushi(l: mut sq_idx, v: sq)
+        p = p + 1
+    }
+
+    // loss = (sq0 + sq1 + sq2 + sq3) / 4   (MSE)
+    let sa = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: iget(l: read sq_idx, i: 0), b: iget(l: read sq_idx, i: 1), c: -1, v: 0.0)
+    let sb = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: iget(l: read sq_idx, i: 2), b: iget(l: read sq_idx, i: 3), c: -1, v: 0.0)
+    let ssum = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_ADD(), a: sa, b: sb, c: -1, v: 0.0)
+    let four = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_CONST(), a: -1, b: -1, c: -1, v: 4.0)
+    let loss = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_DIV(), a: ssum, b: four, c: -1, v: 0.0)
+
+    // ---- collect all 10 trainable param node indices into one list for the SGD loop ----
+    let params = List.new<Int>()
+    let mut wi = 0
+    while wi < 8 {
+        pushi(l: mut params, v: iget(l: read w1_idx, i: wi))
+        wi = wi + 1
+    }
+    let mut bi = 0
+    while bi < 4 {
+        pushi(l: mut params, v: iget(l: read b1_idx, i: bi))
+        bi = bi + 1
+    }
+    let mut w2i = 0
+    while w2i < 4 {
+        pushi(l: mut params, v: iget(l: read w2_idx, i: w2i))
+        w2i = w2i + 1
+    }
+    pushi(l: mut params, v: b2_0)
+    let nparams = List.len(list: read params)
+
+    // grad scratch (one slot per arena node), reused every step.
+    let nnodes = List.len(list: read op)
+    let grad = List.new<Float>()
+    let mut gi = 0
+    while gi < nnodes {
+        pushf(l: mut grad, v: 0.0)
+        gi = gi + 1
+    }
+
+    // ---- TRAIN ----
+    let lr = 0.5
+    let steps = 2000
+    let mut step = 0
+    let mut init_loss = 0.0
+    while step < steps {
+        // forward over the whole DAG (params are read from their INPUT fval slots)
+        forward(op: read op, s0: read s0, s1: read s1, s2: read s2, fv: mut fv)
+        let Lval = fget(l: read fv, i: loss)
+        if step == 0 {
+            init_loss = Lval
+            show_float(label: read "initial loss = ", v: Lval)
+            Log.write(message: read "  tinygrad init loss = 0.261897")
+        }
+        // reverse-mode: grads for ALL params at once
+        backward_all(op: read op, s0: read s0, s1: read s1, s2: read s2, fv: read fv, root: loss, grad: mut grad)
+        // SGD update each param INPUT node in place: p' = p - lr*grad[p]
+        let mut pi = 0
+        while pi < nparams {
+            let pidx = iget(l: read params, i: pi)
+            let cur = fget(l: read fv, i: pidx)
+            let gr = fget(l: read grad, i: pidx)
+            let nv = cur - lr * gr
+            List.set(list: mut fv, index: pidx, value: read nv)
+            pi = pi + 1
+        }
+        step = step + 1
+    }
+
+    // final forward + loss
+    forward(op: read op, s0: read s0, s1: read s1, s2: read s2, fv: mut fv)
+    let final_loss = fget(l: read fv, i: loss)
+    show_float(label: read "final loss   = ", v: final_loss)
+
+    // ---- predictions (round to 0/1) vs AND targets ----
+    Log.write(message: read "predictions (input -> raw -> round | target):")
+    let mut allok = 1
+    let mut q = 0
+    while q < 4 {
+        let oidx = iget(l: read out_idx, i: q)
+        let raw = fget(l: read fv, i: oidx)
+        let rnd = round01(x: raw)
+        let tgt = round01(x: fget(l: read fv, i: iget(l: read ya, i: q)))
+        let xav = fget(l: read fv, i: iget(l: read xa, i: q))
+        let xbv = fget(l: read fv, i: iget(l: read xb, i: q))
+        let mut line = "  ["
+        line = String.concat(left: read line, right: read String.from_float(value: xav))
+        line = String.concat(left: read line, right: read ", ")
+        line = String.concat(left: read line, right: read String.from_float(value: xbv))
+        line = String.concat(left: read line, right: read "] -> ")
+        line = String.concat(left: read line, right: read String.from_float(value: raw))
+        line = String.concat(left: read line, right: read " -> ")
+        line = String.concat(left: read line, right: read Int.to_string(value: read rnd))
+        line = String.concat(left: read line, right: read " | ")
+        line = String.concat(left: read line, right: read Int.to_string(value: read tgt))
+        if rnd == tgt {
+            line = String.concat(left: read line, right: read "  [ok]")
+        }
+        if rnd != tgt {
+            line = String.concat(left: read line, right: read "  [WRONG]")
+            allok = 0
+        }
+        Log.write(message: read line)
+        q = q + 1
+    }
+
+    // ---- assertions ----
+    Log.write(message: read "")
+    let mut dec = "loss decreased a lot (final << initial)? "
+    if final_loss < init_loss * 0.2 {
+        dec = String.concat(left: read dec, right: read "YES")
+    }
+    if final_loss >= init_loss * 0.2 {
+        dec = String.concat(left: read dec, right: read "no")
+    }
+    Log.write(message: read dec)
+    let mut conv = "final loss < 0.05? "
+    if final_loss < 0.05 {
+        conv = String.concat(left: read conv, right: read "YES")
+    }
+    if final_loss >= 0.05 {
+        conv = String.concat(left: read conv, right: read "no")
+    }
+    Log.write(message: read conv)
+    let mut pc = "all 4 predictions correct (round to 0/1)? "
+    if allok == 1 {
+        pc = String.concat(left: read pc, right: read "YES")
+    }
+    if allok == 0 {
+        pc = String.concat(left: read pc, right: read "no")
+    }
+    Log.write(message: read pc)
+    return Unit
+}

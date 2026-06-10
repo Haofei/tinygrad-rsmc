@@ -73,6 +73,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 ## Capstones (cross-cutting, validated, executing via mc)
 - [x] full lazy pipeline Tensor→UOp→simplify→render→native ((x+2)*3, sum, matmul)
 - [x] SGD training to convergence (`train.rss`)
+- [x] **2-layer MLP (2->4 relu->1) trains to ~0 loss via the ported arena autodiff** (`mlp_train.rss`): AND task, init loss 0.2619 == tinygrad, final ~3.6e-32, predictions [0,0,0,1] correct; initial grads cross-checked vs tinygrad .gradient()
 
 ## Honest completion accounting (latest)
 ~51 rss files in `port-rss/`, all run and validate against tinygrad. Status by axis:

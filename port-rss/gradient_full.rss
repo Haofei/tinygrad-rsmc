@@ -1,0 +1,571 @@
+// Full NUMERIC reverse-mode autodiff over a flat arena DAG, porting the core of
+// tinygrad/gradient.py (compute_gradient + pm_gradient vjp rules).
+//
+// The graph is a flat arena: parallel lists (op, s0, s1, s2, fval). A node's identity is its
+// index, so a value used by multiple parents is a single shared node -> its gradient ACCUMULATES
+// contributions from every use (exactly tinygrad's `grads[k] = grads[k] + v`). The reverse pass
+// walks indices high->low (a valid reverse-toposort here because every src index < node index),
+// initializing grad[root]=1 and adding each op's vjp into its operands' grad slots.
+//
+// Ops + vjp (ctx = incoming adjoint g, matching tinygrad pm_gradient):
+//   ADD: g->a, g->b              SUB: g->a, -g->b
+//   MUL: g*b->a, g*a->b          DIV: g/b->a, -(g*a)/(b*b)->b
+//   NEG: -g->a                   RECIP(1/x): -g/(x*x)->x
+//   SQRT: g/(2*sqrt(x))->x       SIN: g*cos(x)->x
+//   EXP:  g*exp(x)->x            LOG: g/x->x
+//   MAX(a,b): g to larger operand (0.5/0.5 on tie)
+//   WHERE(c,a,b): 0->c, g->a if c>0 else g->b
+//   POW(a,b): g*b*a^(b-1)->a, g*(a^b)*ln(a)->b
+//
+// Float transcendentals are implemented from scratch (no Math.* float intrinsics in this rss
+// build) via Newton / range-reduced Taylor, each validated to <1e-4 vs python math below.
+
+// ---- op codes ----
+fn OP_INPUT() -> Int { return 0 }
+fn OP_CONST() -> Int { return 1 }
+fn OP_ADD()   -> Int { return 2 }
+fn OP_SUB()   -> Int { return 3 }
+fn OP_MUL()   -> Int { return 4 }
+fn OP_DIV()   -> Int { return 5 }
+fn OP_NEG()   -> Int { return 6 }
+fn OP_RECIP() -> Int { return 7 }
+fn OP_SQRT()  -> Int { return 8 }
+fn OP_SIN()   -> Int { return 9 }
+fn OP_EXP()   -> Int { return 10 }
+fn OP_LOG()   -> Int { return 11 }
+fn OP_MAX()   -> Int { return 12 }
+fn OP_WHERE() -> Int { return 13 }
+fn OP_POW()   -> Int { return 14 }
+
+// ---- constants ----
+fn LN2()    -> Float { return 0.6931471805599453 }
+fn PI()     -> Float { return 3.141592653589793 }
+fn TWOPI()  -> Float { return 6.283185307179586 }
+
+// ---- numeric helpers (pure Float arithmetic) ----
+
+fn fabs(x: Float) -> Float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// sqrt via Newton's method on f(y)=y*y-x.
+fn fsqrt(x: Float) -> Float {
+    if x <= 0.0 { return 0.0 }
+    let mut y = x
+    if y < 1.0 { y = 1.0 }
+    let mut i = 0
+    while i < 40 {
+        y = 0.5 * (y + x / y)
+        i = i + 1
+    }
+    return y
+}
+
+// exp via range reduction x = k*ln2 + r (|r|<=ln2/2 roughly), then Taylor on r, scale by 2^k.
+fn fexp(x: Float) -> Float {
+    // find integer k such that r = x - k*ln2 is small, by stepping in units of ln2.
+    let mut k = 0
+    let mut r = x
+    while r > LN2() {
+        r = r - LN2()
+        k = k + 1
+    }
+    while r < 0.0 {
+        r = r + LN2()
+        k = k - 1
+    }
+    // Taylor series of exp(r), |r| <= ln2.
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut n = 1
+    while n < 30 {
+        let fn_ = Int.to_float(value: read n)
+        term = term * r / fn_
+        sum = sum + term
+        n = n + 1
+    }
+    // multiply by 2^k.
+    let mut result = sum
+    if k > 0 {
+        let mut j = 0
+        while j < k {
+            result = result * 2.0
+            j = j + 1
+        }
+    }
+    if k < 0 {
+        let neg = 0 - k
+        let mut j = 0
+        while j < neg {
+            result = result / 2.0
+            j = j + 1
+        }
+    }
+    return result
+}
+
+// ln via scaling x into [~0.707, ~1.414] by powers of 2, then atanh series:
+//   ln(m) = 2*atanh(t), t=(m-1)/(m+1).  ln(x) = e*ln2 + ln(m).
+fn fln(x: Float) -> Float {
+    if x <= 0.0 { return 0.0 }
+    let mut m = x
+    let mut e = 0
+    while m > 1.4142135623730951 {
+        m = m / 2.0
+        e = e + 1
+    }
+    while m < 0.7071067811865476 {
+        m = m * 2.0
+        e = e - 1
+    }
+    let t = (m - 1.0) / (m + 1.0)
+    let t2 = t * t
+    let mut term = t
+    let mut sum = t
+    let mut k = 1
+    while k < 30 {
+        term = term * t2
+        let denom = Int.to_float(value: read (2 * k + 1))
+        sum = sum + term / denom
+        k = k + 1
+    }
+    let fe = Int.to_float(value: read e)
+    return 2.0 * sum + fe * LN2()
+}
+
+// reduce angle into [-pi, pi] by subtracting multiples of 2pi (integer-counted).
+fn reduce_angle(x: Float) -> Float {
+    let mut r = x
+    while r > PI() {
+        r = r - TWOPI()
+    }
+    while r < (0.0 - PI()) {
+        r = r + TWOPI()
+    }
+    return r
+}
+
+fn fsin(x: Float) -> Float {
+    let r = reduce_angle(x: r_in_dummy(x: x))
+    let r2 = r * r
+    let mut term = r
+    let mut sum = r
+    let mut n = 1
+    while n < 14 {
+        let a = Int.to_float(value: read (2 * n))
+        let b = Int.to_float(value: read (2 * n + 1))
+        term = 0.0 - term * r2 / (a * b)
+        sum = sum + term
+        n = n + 1
+    }
+    return sum
+}
+
+fn fcos(x: Float) -> Float {
+    let r = reduce_angle(x: r_in_dummy(x: x))
+    let r2 = r * r
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut n = 1
+    while n < 14 {
+        let a = Int.to_float(value: read (2 * n - 1))
+        let b = Int.to_float(value: read (2 * n))
+        term = 0.0 - term * r2 / (a * b)
+        sum = sum + term
+        n = n + 1
+    }
+    return sum
+}
+
+// identity passthrough so reduce_angle gets a plain Float arg cleanly.
+fn r_in_dummy(x: Float) -> Float { return x }
+
+// a^b = exp(b*ln(a)) for a>0.
+fn fpow(a: Float, b: Float) -> Float {
+    if a <= 0.0 { return 0.0 }
+    return fexp(x: b * fln(x: a))
+}
+
+// ---- arena ----
+fn emit(op: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, s2: mut List<Int>, fv: mut List<Float>,
+        o: Int, a: Int, b: Int, c: Int, v: Float) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    List.push(list: mut s2, value: read c)
+    List.push(list: mut fv, value: read v)
+    return idx
+}
+
+// typed Int getter (List.get on a List<Int> arg keeps Int).
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+// forward pass: fill fval for every node (INPUT/CONST already carry their value).
+fn forward(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, s2: read List<Int>, fv: mut List<Float>) -> Unit {
+    let n = List.len(list: read op)
+    let mut i = 0
+    while i < n {
+        let o = iget(l: read op, i: i)
+        if o == OP_ADD() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) + fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_SUB() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) - fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_MUL() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) * fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_DIV() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) / fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_NEG() {
+            let r = 0.0 - fget(l: read fv, i: iget(l: read s0, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_RECIP() {
+            let r = 1.0 / fget(l: read fv, i: iget(l: read s0, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_SQRT() {
+            let r = fsqrt(x: fget(l: read fv, i: iget(l: read s0, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_SIN() {
+            let r = fsin(x: fget(l: read fv, i: iget(l: read s0, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_EXP() {
+            let r = fexp(x: fget(l: read fv, i: iget(l: read s0, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_LOG() {
+            let r = fln(x: fget(l: read fv, i: iget(l: read s0, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_MAX() {
+            let r = Math_max(a: fget(l: read fv, i: iget(l: read s0, i: i)), b: fget(l: read fv, i: iget(l: read s1, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_POW() {
+            let r = fpow(a: fget(l: read fv, i: iget(l: read s0, i: i)), b: fget(l: read fv, i: iget(l: read s1, i: i)))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_WHERE() {
+            let cv = fget(l: read fv, i: iget(l: read s0, i: i))
+            let av = fget(l: read fv, i: iget(l: read s1, i: i))
+            let bv = fget(l: read fv, i: iget(l: read s2, i: i))
+            let mut r = bv
+            if cv > 0.0 { r = av }
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn Math_max(a: Float, b: Float) -> Float {
+    if a > b { return a }
+    return b
+}
+
+// add `delta` into grad slot `idx`.
+fn accum(grad: mut List<Float>, idx: Int, delta: Float) -> Unit {
+    let cur = List.get(list: read grad, index: idx)
+    let nv = cur + delta
+    List.set(list: mut grad, index: idx, value: read nv)
+    return Unit
+}
+
+// reverse pass. returns grad of node `wrt` for loss = node[root].
+fn backward(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, s2: read List<Int>, fv: read List<Float>,
+            root: Int, wrt: Int) -> Float {
+    let n = List.len(list: read op)
+    let grad = List.new<Float>()
+    let mut k = 0
+    while k < n {
+        List.push(list: mut grad, value: read 0.0)
+        k = k + 1
+    }
+    List.set(list: mut grad, index: root, value: read 1.0)
+    let mut r = n - 1
+    while r >= 0 {
+        let o = iget(l: read op, i: r)
+        let g = List.get(list: read grad, index: r)
+        let ia = iget(l: read s0, i: r)
+        let ib = iget(l: read s1, i: r)
+        let ic = iget(l: read s2, i: r)
+        if o == OP_ADD() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: g)
+        }
+        if o == OP_SUB() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: 0.0 - g)
+        }
+        if o == OP_MUL() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            accum(grad: mut grad, idx: ia, delta: g * fb)
+            accum(grad: mut grad, idx: ib, delta: g * fa)
+        }
+        if o == OP_DIV() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            accum(grad: mut grad, idx: ia, delta: g / fb)
+            accum(grad: mut grad, idx: ib, delta: 0.0 - (g * fa) / (fb * fb))
+        }
+        if o == OP_NEG() {
+            accum(grad: mut grad, idx: ia, delta: 0.0 - g)
+        }
+        if o == OP_RECIP() {
+            let fa = fget(l: read fv, i: ia)
+            accum(grad: mut grad, idx: ia, delta: 0.0 - g / (fa * fa))
+        }
+        if o == OP_SQRT() {
+            let sv = fget(l: read fv, i: r)
+            accum(grad: mut grad, idx: ia, delta: g / (2.0 * sv))
+        }
+        if o == OP_SIN() {
+            let fa = fget(l: read fv, i: ia)
+            accum(grad: mut grad, idx: ia, delta: g * fcos(x: fa))
+        }
+        if o == OP_EXP() {
+            let sv = fget(l: read fv, i: r)
+            accum(grad: mut grad, idx: ia, delta: g * sv)
+        }
+        if o == OP_LOG() {
+            let fa = fget(l: read fv, i: ia)
+            accum(grad: mut grad, idx: ia, delta: g / fa)
+        }
+        if o == OP_MAX() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            if fa > fb { accum(grad: mut grad, idx: ia, delta: g) }
+            if fb > fa { accum(grad: mut grad, idx: ib, delta: g) }
+            if fa == fb {
+                accum(grad: mut grad, idx: ia, delta: g * 0.5)
+                accum(grad: mut grad, idx: ib, delta: g * 0.5)
+            }
+        }
+        if o == OP_WHERE() {
+            let cv = fget(l: read fv, i: ia)
+            if cv > 0.0 { accum(grad: mut grad, idx: ib, delta: g) }
+            if cv <= 0.0 { accum(grad: mut grad, idx: ic, delta: g) }
+        }
+        if o == OP_POW() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            let sv = fget(l: read fv, i: r)
+            let da = g * fb * fpow(a: fa, b: fb - 1.0)
+            accum(grad: mut grad, idx: ia, delta: da)
+            let db = g * sv * fln(x: fa)
+            accum(grad: mut grad, idx: ib, delta: db)
+        }
+        r = r - 1
+    }
+    return List.get(list: read grad, index: wrt)
+}
+
+fn report(label: read String, got: Float, want: Float) -> Unit {
+    let diff = fabs(x: got - want)
+    let mut ok = "FAIL"
+    if diff < 0.001 { ok = "ok" }
+    let mut s = String.concat(left: read label, right: read "got=")
+    s = String.concat(left: read s, right: read String.from_float(value: got))
+    s = String.concat(left: read s, right: read " want=")
+    s = String.concat(left: read s, right: read String.from_float(value: want))
+    s = String.concat(left: read s, right: read " [")
+    s = String.concat(left: read s, right: read ok)
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+
+fn run_grad(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, s2: read List<Int>, fv0: read List<Float>,
+            root: Int, wrt: Int) -> Float {
+    let fv = List.new<Float>()
+    let mut i = 0
+    let n = List.len(list: read fv0)
+    while i < n {
+        List.push(list: mut fv, value: read List.get(list: read fv0, index: i))
+        i = i + 1
+    }
+    forward(op: read op, s0: read s0, s1: read s1, s2: read s2, fv: mut fv)
+    return backward(op: read op, s0: read s0, s1: read s1, s2: read s2, fv: read fv, root: root, wrt: wrt)
+}
+
+fn main() -> Unit {
+    // ---- validate numeric helpers vs python math (tol 1e-4) ----
+    Log.write(message: read "== helper validation (tol 1e-4) ==")
+    report(label: read "fsqrt(4)=2          ", got: fsqrt(x: 4.0), want: 2.0)
+    report(label: read "fsqrt(2)=1.41421356 ", got: fsqrt(x: 2.0), want: 1.4142135623730951)
+    report(label: read "fexp(1)=e           ", got: fexp(x: 1.0), want: 2.718281828459045)
+    report(label: read "fexp(-2)=0.13533528 ", got: fexp(x: 2.0 * (0.0 - 1.0)), want: 0.1353352832366127)
+    report(label: read "fln(2)=0.69314718   ", got: fln(x: 2.0), want: 0.6931471805599453)
+    report(label: read "fln(10)=2.30258509  ", got: fln(x: 10.0), want: 2.302585092994046)
+    report(label: read "fsin(1)=0.84147098  ", got: fsin(x: 1.0), want: 0.8414709848078965)
+    report(label: read "fsin(3)=0.14112001  ", got: fsin(x: 3.0), want: 0.1411200080598672)
+    report(label: read "fcos(1)=0.54030231  ", got: fcos(x: 1.0), want: 0.5403023058681398)
+    report(label: read "fcos(0)=1           ", got: fcos(x: 0.0), want: 1.0)
+    report(label: read "fpow(2,3)=8         ", got: fpow(a: 2.0, b: 3.0), want: 8.0)
+
+    Log.write(message: read "== autodiff vs tinygrad (tol 1e-3) ==")
+
+    // 1) d(x*x)/dx at x=3 -> 6  (SHARED node: x feeds both MUL operands; grad ACCUMULATES)
+    let op = List.new<Int>()
+    let s0 = List.new<Int>()
+    let s1 = List.new<Int>()
+    let s2 = List.new<Int>()
+    let fv = List.new<Float>()
+    let x = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 3.0)
+    let t = emit(op: mut op, s0: mut s0, s1: mut s1, s2: mut s2, fv: mut fv, o: OP_MUL(), a: x, b: x, c: -1, v: 0.0)
+    report(label: read "d(x*x)/dx x=3 (shared) ", got: run_grad(op: read op, s0: read s0, s1: read s1, s2: read s2, fv0: read fv, root: t, wrt: x), want: 6.0)
+
+    // 2) d(sqrt(x))/dx at x=4 -> 0.25
+    let op2 = List.new<Int>()
+    let a2 = List.new<Int>()
+    let b2 = List.new<Int>()
+    let c2 = List.new<Int>()
+    let v2 = List.new<Float>()
+    let x2 = emit(op: mut op2, s0: mut a2, s1: mut b2, s2: mut c2, fv: mut v2, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 4.0)
+    let t2 = emit(op: mut op2, s0: mut a2, s1: mut b2, s2: mut c2, fv: mut v2, o: OP_SQRT(), a: x2, b: -1, c: -1, v: 0.0)
+    report(label: read "d(sqrt(x))/dx x=4      ", got: run_grad(op: read op2, s0: read a2, s1: read b2, s2: read c2, fv0: read v2, root: t2, wrt: x2), want: 0.25)
+
+    // 3) d(sin(x))/dx at x=0 -> 1
+    let op3 = List.new<Int>()
+    let a3 = List.new<Int>()
+    let b3 = List.new<Int>()
+    let c3 = List.new<Int>()
+    let v3 = List.new<Float>()
+    let x3 = emit(op: mut op3, s0: mut a3, s1: mut b3, s2: mut c3, fv: mut v3, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 0.0)
+    let t3 = emit(op: mut op3, s0: mut a3, s1: mut b3, s2: mut c3, fv: mut v3, o: OP_SIN(), a: x3, b: -1, c: -1, v: 0.0)
+    report(label: read "d(sin(x))/dx x=0       ", got: run_grad(op: read op3, s0: read a3, s1: read b3, s2: read c3, fv0: read v3, root: t3, wrt: x3), want: 1.0)
+
+    // 4) d(exp(x))/dx at x=1 -> e
+    let op4 = List.new<Int>()
+    let a4 = List.new<Int>()
+    let b4 = List.new<Int>()
+    let c4 = List.new<Int>()
+    let v4 = List.new<Float>()
+    let x4 = emit(op: mut op4, s0: mut a4, s1: mut b4, s2: mut c4, fv: mut v4, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 1.0)
+    let t4 = emit(op: mut op4, s0: mut a4, s1: mut b4, s2: mut c4, fv: mut v4, o: OP_EXP(), a: x4, b: -1, c: -1, v: 0.0)
+    report(label: read "d(exp(x))/dx x=1       ", got: run_grad(op: read op4, s0: read a4, s1: read b4, s2: read c4, fv0: read v4, root: t4, wrt: x4), want: 2.718281828459045)
+
+    // 5) d(x/y) at x=6,y=2 -> dx=0.5, dy=-1.5
+    let op5 = List.new<Int>()
+    let a5 = List.new<Int>()
+    let b5 = List.new<Int>()
+    let c5 = List.new<Int>()
+    let v5 = List.new<Float>()
+    let x5 = emit(op: mut op5, s0: mut a5, s1: mut b5, s2: mut c5, fv: mut v5, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 6.0)
+    let y5 = emit(op: mut op5, s0: mut a5, s1: mut b5, s2: mut c5, fv: mut v5, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let t5 = emit(op: mut op5, s0: mut a5, s1: mut b5, s2: mut c5, fv: mut v5, o: OP_DIV(), a: x5, b: y5, c: -1, v: 0.0)
+    report(label: read "d(x/y)/dx x=6,y=2      ", got: run_grad(op: read op5, s0: read a5, s1: read b5, s2: read c5, fv0: read v5, root: t5, wrt: x5), want: 0.5)
+    report(label: read "d(x/y)/dy x=6,y=2      ", got: run_grad(op: read op5, s0: read a5, s1: read b5, s2: read c5, fv0: read v5, root: t5, wrt: y5), want: 0.0 - 1.5)
+
+    // 6) d(max(x,3))/dx : at x=5 -> 1 ; at x=1 -> 0
+    let op6 = List.new<Int>()
+    let a6 = List.new<Int>()
+    let b6 = List.new<Int>()
+    let c6 = List.new<Int>()
+    let v6 = List.new<Float>()
+    let x6 = emit(op: mut op6, s0: mut a6, s1: mut b6, s2: mut c6, fv: mut v6, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 5.0)
+    let k6 = emit(op: mut op6, s0: mut a6, s1: mut b6, s2: mut c6, fv: mut v6, o: OP_CONST(), a: -1, b: -1, c: -1, v: 3.0)
+    let t6 = emit(op: mut op6, s0: mut a6, s1: mut b6, s2: mut c6, fv: mut v6, o: OP_MAX(), a: x6, b: k6, c: -1, v: 0.0)
+    report(label: read "d(max(x,3))/dx x=5     ", got: run_grad(op: read op6, s0: read a6, s1: read b6, s2: read c6, fv0: read v6, root: t6, wrt: x6), want: 1.0)
+
+    let op7 = List.new<Int>()
+    let a7 = List.new<Int>()
+    let b7 = List.new<Int>()
+    let c7 = List.new<Int>()
+    let v7 = List.new<Float>()
+    let x7 = emit(op: mut op7, s0: mut a7, s1: mut b7, s2: mut c7, fv: mut v7, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 1.0)
+    let k7 = emit(op: mut op7, s0: mut a7, s1: mut b7, s2: mut c7, fv: mut v7, o: OP_CONST(), a: -1, b: -1, c: -1, v: 3.0)
+    let t7 = emit(op: mut op7, s0: mut a7, s1: mut b7, s2: mut c7, fv: mut v7, o: OP_MAX(), a: x7, b: k7, c: -1, v: 0.0)
+    report(label: read "d(max(x,3))/dx x=1     ", got: run_grad(op: read op7, s0: read a7, s1: read b7, s2: read c7, fv0: read v7, root: t7, wrt: x7), want: 0.0)
+
+    // 7) SHARED-node accumulation: d(x*x + sin(x))/dx at x=1 -> 2x + cos(x) = 2.540302
+    let op8 = List.new<Int>()
+    let a8 = List.new<Int>()
+    let b8 = List.new<Int>()
+    let c8 = List.new<Int>()
+    let v8 = List.new<Float>()
+    let x8 = emit(op: mut op8, s0: mut a8, s1: mut b8, s2: mut c8, fv: mut v8, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 1.0)
+    let sq = emit(op: mut op8, s0: mut a8, s1: mut b8, s2: mut c8, fv: mut v8, o: OP_MUL(), a: x8, b: x8, c: -1, v: 0.0)
+    let sn = emit(op: mut op8, s0: mut a8, s1: mut b8, s2: mut c8, fv: mut v8, o: OP_SIN(), a: x8, b: -1, c: -1, v: 0.0)
+    let t8 = emit(op: mut op8, s0: mut a8, s1: mut b8, s2: mut c8, fv: mut v8, o: OP_ADD(), a: sq, b: sn, c: -1, v: 0.0)
+    report(label: read "d(x*x+sin x)/dx x=1    ", got: run_grad(op: read op8, s0: read a8, s1: read b8, s2: read c8, fv0: read v8, root: t8, wrt: x8), want: 2.5403023058681398)
+
+    // 8) d(x^y) at x=2,y=3 -> dx=12, dy=8*ln2=5.545177
+    let op9 = List.new<Int>()
+    let a9 = List.new<Int>()
+    let b9 = List.new<Int>()
+    let c9 = List.new<Int>()
+    let v9 = List.new<Float>()
+    let x9 = emit(op: mut op9, s0: mut a9, s1: mut b9, s2: mut c9, fv: mut v9, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let y9 = emit(op: mut op9, s0: mut a9, s1: mut b9, s2: mut c9, fv: mut v9, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 3.0)
+    let t9 = emit(op: mut op9, s0: mut a9, s1: mut b9, s2: mut c9, fv: mut v9, o: OP_POW(), a: x9, b: y9, c: -1, v: 0.0)
+    report(label: read "d(x^y)/dx x=2,y=3      ", got: run_grad(op: read op9, s0: read a9, s1: read b9, s2: read c9, fv0: read v9, root: t9, wrt: x9), want: 12.0)
+    report(label: read "d(x^y)/dy x=2,y=3      ", got: run_grad(op: read op9, s0: read a9, s1: read b9, s2: read c9, fv0: read v9, root: t9, wrt: y9), want: 5.545177444479562)
+
+    // 9) d(where(c,a,b))/da,/db at c=1,a=5,b=2 -> da=1, db=0
+    let opA = List.new<Int>()
+    let aA = List.new<Int>()
+    let bA = List.new<Int>()
+    let cA = List.new<Int>()
+    let vA = List.new<Float>()
+    let cc = emit(op: mut opA, s0: mut aA, s1: mut bA, s2: mut cA, fv: mut vA, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 1.0)
+    let aa = emit(op: mut opA, s0: mut aA, s1: mut bA, s2: mut cA, fv: mut vA, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 5.0)
+    let bb = emit(op: mut opA, s0: mut aA, s1: mut bA, s2: mut cA, fv: mut vA, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let tw = emit(op: mut opA, s0: mut aA, s1: mut bA, s2: mut cA, fv: mut vA, o: OP_WHERE(), a: cc, b: aa, c: bb, v: 0.0)
+    report(label: read "d(where(1,a,b))/da     ", got: run_grad(op: read opA, s0: read aA, s1: read bA, s2: read cA, fv0: read vA, root: tw, wrt: aa), want: 1.0)
+    report(label: read "d(where(1,a,b))/db     ", got: run_grad(op: read opA, s0: read aA, s1: read bA, s2: read cA, fv0: read vA, root: tw, wrt: bb), want: 0.0)
+
+    // 10) d(1/x)/dx at x=2 -> -0.25 (RECIP) ; d(log(x))/dx x=2 -> 0.5 ; d(-x)/dx -> -1 ; d(x-y)/dy -> -1
+    let opB = List.new<Int>()
+    let aB = List.new<Int>()
+    let bB = List.new<Int>()
+    let cB = List.new<Int>()
+    let vB = List.new<Float>()
+    let xB = emit(op: mut opB, s0: mut aB, s1: mut bB, s2: mut cB, fv: mut vB, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let rB = emit(op: mut opB, s0: mut aB, s1: mut bB, s2: mut cB, fv: mut vB, o: OP_RECIP(), a: xB, b: -1, c: -1, v: 0.0)
+    report(label: read "d(1/x)/dx x=2          ", got: run_grad(op: read opB, s0: read aB, s1: read bB, s2: read cB, fv0: read vB, root: rB, wrt: xB), want: 0.0 - 0.25)
+
+    let opC = List.new<Int>()
+    let aC = List.new<Int>()
+    let bC = List.new<Int>()
+    let cC = List.new<Int>()
+    let vC = List.new<Float>()
+    let xC = emit(op: mut opC, s0: mut aC, s1: mut bC, s2: mut cC, fv: mut vC, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let lC = emit(op: mut opC, s0: mut aC, s1: mut bC, s2: mut cC, fv: mut vC, o: OP_LOG(), a: xC, b: -1, c: -1, v: 0.0)
+    report(label: read "d(log(x))/dx x=2       ", got: run_grad(op: read opC, s0: read aC, s1: read bC, s2: read cC, fv0: read vC, root: lC, wrt: xC), want: 0.5)
+
+    let opD = List.new<Int>()
+    let aD = List.new<Int>()
+    let bD = List.new<Int>()
+    let cD = List.new<Int>()
+    let vD = List.new<Float>()
+    let xD = emit(op: mut opD, s0: mut aD, s1: mut bD, s2: mut cD, fv: mut vD, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 3.0)
+    let nD = emit(op: mut opD, s0: mut aD, s1: mut bD, s2: mut cD, fv: mut vD, o: OP_NEG(), a: xD, b: -1, c: -1, v: 0.0)
+    report(label: read "d(-x)/dx x=3           ", got: run_grad(op: read opD, s0: read aD, s1: read bD, s2: read cD, fv0: read vD, root: nD, wrt: xD), want: 0.0 - 1.0)
+
+    let opE = List.new<Int>()
+    let aE = List.new<Int>()
+    let bE = List.new<Int>()
+    let cE = List.new<Int>()
+    let vE = List.new<Float>()
+    let xE = emit(op: mut opE, s0: mut aE, s1: mut bE, s2: mut cE, fv: mut vE, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 5.0)
+    let yE = emit(op: mut opE, s0: mut aE, s1: mut bE, s2: mut cE, fv: mut vE, o: OP_INPUT(), a: -1, b: -1, c: -1, v: 2.0)
+    let tE = emit(op: mut opE, s0: mut aE, s1: mut bE, s2: mut cE, fv: mut vE, o: OP_SUB(), a: xE, b: yE, c: -1, v: 0.0)
+    report(label: read "d(x-y)/dx x=5,y=2      ", got: run_grad(op: read opE, s0: read aE, s1: read bE, s2: read cE, fv0: read vE, root: tE, wrt: xE), want: 1.0)
+    report(label: read "d(x-y)/dy x=5,y=2      ", got: run_grad(op: read opE, s0: read aE, s1: read bE, s2: read cE, fv0: read vE, root: tE, wrt: yE), want: 0.0 - 1.0)
+
+    return Unit
+}

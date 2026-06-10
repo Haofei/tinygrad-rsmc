@@ -48,7 +48,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - 🟡 `uop/__init__.py` (145) → covered by `ops_enum.rss` — its substance is `FastEnum` + the `Ops` enum (all 93 ops ported). **Remaining:** FastEnum auto-numbering is a Python metaclass detail, N/A for rss.
 
 ## codegen/, ~1000 LOC in-scope (opt-search excluded)
-- 🟡 lowering to kernels → `render*.rss` (elementwise/reduce/matmul + relu/div/neg/max/exp/log/tanh emitters), `buffer_reuse.rss` (liveness memory planner), **`linearizer.rss`** (toposort + priority-heap ordering -> SSA instruction stream, RANGE/ENDRANGE placement; matches tinygrad ordering). **Remaining:** `simplify.py` (157), `late/devectorizer.py` (390), `late/expander.py` (160), `late/regalloc.py` (137), gpudims (GPU-only).
+- 🟡 lowering to kernels → `render*.rss` (elementwise/reduce/matmul + relu/div/neg/max/exp/log/tanh emitters), `buffer_reuse.rss` (liveness memory planner), **`linearizer.rss`** (toposort + priority-heap ordering -> SSA instruction stream, RANGE/ENDRANGE placement; matches tinygrad ordering). + **`codegen_late.rss`**: expander (no_vectorized_alu: VEC ALU -> N scalar lanes) + devectorizer folds (GEP-of-VEC -> lane, VEC-of-same -> broadcast), cross-checked vs tinygrad STACK/gep. **Remaining:** `simplify.py` full ruleset, `late/regalloc.py`, WMMA/UNROLL axis bookkeeping, gpudims (GPU-only).
 - ⛔ `codegen/opt/*` (search/heuristic/tc/postrange ~875) — autotuning search; out of scope for a correctness port.
 
 ## renderer/, in-scope = cstyle only

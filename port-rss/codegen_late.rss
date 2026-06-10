@@ -1,0 +1,335 @@
+// Port of tinygrad's codegen LATE passes: the vectorize/expand machinery in
+// codegen/late/expander.py (do_expand / no_vectorized_alu) and codegen/late/devectorizer.py
+// (the GEP-of-VECTORIZE fold and VECTORIZE-of-const broadcast). Ground-truth: /home/zoe/tinygrad.
+//
+// Two complementary structural rewrites over a UOp graph:
+//
+// 1. EXPANDER (devectorizer.py:239 `no_vectorized_alu`, expander.py `do_expand`):
+//    a width-N vectorized elementwise op is UNROLLED into N scalar lane ops.
+//      VEC4(ADD(x, c))  ->  STACK[ ADD(x.gep0, c.gep0), ADD(x.gep1, c.gep1), ... ]
+//    tinygrad: `alus = tuple(UOp(alu.op, alu.dtype.scalar(), tuple(s.gep(i) for s in alu.src),
+//              alu.arg) for i in range(alu.dtype.vcount)); return UOp(Ops.STACK, dtype, alus)`.
+//    Here each scalar source's lane-i is taken via gep; a broadcast scalar's gep(i) is itself.
+//
+// 2. DEVECTORIZER cleanup (the inverse / fold, symbolic.py:206 `gep_through_vectorize` +
+//    the .gep(int) shortcut at ops.py:513 `if self.op is Ops.STACK: return self.src[i]`):
+//      GEP(VECTORIZE(a,b,c,d), i)  ->  i-th element            (extract-of-construct)
+//    and VECTORIZE-of-all-same-scalar is recognised as a broadcast (pm_render.py:284, the
+//    CONST-with-vcount>1 -> STACK-of-repeated-scalar rule run in reverse).
+//
+// Represented over a FLAT ARENA (parallel List<Int>) per BRIEFING: Int op-codes; for a VEC node
+// the lane width lives in the `arg` field, and for a GEP node the lane index lives in `arg`. A
+// node has at most two structural srcs (s0,s1); VEC nodes additionally name their lanes in a
+// separate `vlanes` arena list so a VEC can carry arbitrary width. Typed `iget`, out-params,
+// one statement per line.
+//
+// SIMPLIFICATIONS vs tinygrad: scalar ALU is binary (ADD only is exercised; the lane loop is
+// generic over the two srcs); UNROLL/CONTRACT axis bookkeeping (_expand_arg_to_idx / swizzle /
+// exclude_args for WMMA) is dropped -- we model the single-axis "vcount lanes" case that
+// no_vectorized_alu handles. dtype is a fixed scalar "float"; no PtrDType/REG/Image special
+// cases. STACK and VECTORIZE are the same construct node (tinygrad renders VECTORIZE as STACK);
+// we call it VEC. broadcast(x,n) is a VEC whose lanes are all x.
+
+features: local
+
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn iset(l: mut List<Int>, i: Int, v: Int) -> Unit {
+    List.set(list: mut l, index: i, value: read v)
+    return Unit
+}
+
+// op codes: 0=CONST 1=VAR 2=ADD 3=MUL 4=VEC 5=GEP 6=BROADCAST(materialized as VEC)
+fn CONST() -> Int { return 0 }
+fn VAR() -> Int { return 1 }
+fn ADD() -> Int { return 2 }
+fn MUL() -> Int { return 3 }
+fn VEC() -> Int { return 4 }
+fn GEP() -> Int { return 5 }
+
+fn op_name(op: Int) -> fresh String {
+    if op == CONST() { return "CONST" }
+    if op == VAR() { return "VAR" }
+    if op == ADD() { return "ADD" }
+    if op == MUL() { return "MUL" }
+    if op == VEC() { return "VEC" }
+    return "GEP"
+}
+
+fn is_alu(op: Int) -> Int {
+    if op == ADD() { return 1 }
+    if op == MUL() { return 1 }
+    return 0
+}
+
+// ---- arena. node fields: op, s0, s1, arg. VEC lanes are stored out-of-band in `vlanes`,
+// indexed by a (vstart, vlen) slice the node records in (s0=vstart, s1=vlen, arg=width). ----
+fn emit(ops: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, arg: mut List<Int>, op: Int, a: Int, b: Int, g: Int) -> Int {
+    let idx = List.len(list: read ops)
+    List.push(list: mut ops, value: read op)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    List.push(list: mut arg, value: read g)
+    return idx
+}
+
+// build a VEC node from an explicit list of lane arena-indices. width = number of lanes.
+fn emit_vec(ops: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, arg: mut List<Int>, vlanes: mut List<Int>, lanes: read List<Int>) -> Int {
+    let vstart = List.len(list: read vlanes)
+    let vlen = List.len(list: read lanes)
+    let mut i = 0
+    while i < vlen {
+        List.push(list: mut vlanes, value: read iget(l: read lanes, i: i))
+        i = i + 1
+    }
+    return emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VEC(), a: vstart, b: vlen, g: vlen)
+}
+
+// k-th lane arena-index of a VEC node u
+fn vec_lane(s0: read List<Int>, vlanes: read List<Int>, u: Int, k: Int) -> Int {
+    let vstart = iget(l: read s0, i: u)
+    return iget(l: read vlanes, i: vstart + k)
+}
+
+fn width_of(arg: read List<Int>, u: Int) -> Int { return iget(l: read arg, i: u) }
+
+// ---- DEVECTORIZER fold #1: gep_through_vectorize.
+// GEP(VEC(l0,l1,...,l_{n-1}), i) -> l_i. Mirrors ops.py gep(int) STACK shortcut `self.src[i]`
+// and symbolic.py `gep_through_vectorize`. Returns the resolved arena index (the i-th lane).
+fn gep_through_vectorize(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, arg: read List<Int>, vlanes: read List<Int>, gep_node: Int) -> Int {
+    let vecn = iget(l: read s0, i: gep_node)        // the VEC being indexed
+    let i = iget(l: read arg, i: gep_node)          // GEP arg = lane index
+    return vec_lane(s0: read s0, vlanes: read vlanes, u: vecn, k: i)
+}
+
+// ---- DEVECTORIZER fold #2: VEC of all-same-scalar is a broadcast.
+// pm_render's CONST-vcount>1 -> STACK-of-repeated-scalar, read in reverse. Returns 1 if every
+// lane of the VEC is the SAME arena node (a broadcast of one scalar), else 0.
+fn is_broadcast(s0: read List<Int>, s1: read List<Int>, vlanes: read List<Int>, u: Int) -> Int {
+    let n = iget(l: read s1, i: u)
+    if n == 0 { return 0 }
+    let l0 = vec_lane(s0: read s0, vlanes: read vlanes, u: u, k: 0)
+    let mut k = 1
+    let mut same = 1
+    while k < n {
+        if vec_lane(s0: read s0, vlanes: read vlanes, u: u, k: k) != l0 { same = 0 }
+        k = k + 1
+    }
+    return same
+}
+
+// the scalar a broadcast VEC repeats (its lane 0)
+fn broadcast_scalar(s0: read List<Int>, vlanes: read List<Int>, u: Int) -> Int {
+    return vec_lane(s0: read s0, vlanes: read vlanes, u: u, k: 0)
+}
+
+// ---- helper: take lane k of an arbitrary scalar/vector source (the `s.gep(i)` in
+// no_vectorized_alu). For a VEC source -> its k-th lane; for a scalar source -> itself
+// (broadcast across lanes, matching tinygrad's broadcast of a scalar before the per-lane GEP).
+fn src_lane(ops: read List<Int>, s0: read List<Int>, vlanes: read List<Int>, src: Int, k: Int) -> Int {
+    if iget(l: read ops, i: src) == VEC() {
+        return vec_lane(s0: read s0, vlanes: read vlanes, u: src, k: k)
+    }
+    return src
+}
+
+// ---- EXPANDER: no_vectorized_alu / do_expand on a VEC(ALU) shape.
+// Input `root` is a VEC node whose every lane is the SAME alu op applied lane-wise, OR -- the
+// shape the brief asks for -- a VEC wrapping ONE alu whose srcs are width-N vectors. We model
+// the latter directly: given an ALU node `alu` of logical width N (its vector srcs have width N),
+// expand into N scalar alu nodes [op(s0.gep0,s1.gep0), ...] and return a VEC of them.
+// Faithful to: alus = (UOp(op, scalar, (s.gep(i) for s in src), arg) for i in range(vcount)).
+fn expand_alu(ops: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, arg: mut List<Int>, vlanes: mut List<Int>, alu: Int, width: Int) -> Int {
+    let op = iget(l: read ops, i: alu)
+    let a = iget(l: read s0, i: alu)
+    let b = iget(l: read s1, i: alu)
+    let lanes = List.new<Int>()
+    let mut i = 0
+    while i < width {
+        let la = src_lane(ops: read ops, s0: read s0, vlanes: read vlanes, src: a, k: i)
+        let lb = src_lane(ops: read ops, s0: read s0, vlanes: read vlanes, src: b, k: i)
+        let scalar = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: op, a: la, b: lb, g: 0)
+        List.push(list: mut lanes, value: read scalar)
+        i = i + 1
+    }
+    return emit_vec(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, lanes: read lanes)
+}
+
+// ---- printing ----
+// (rss: a `String` is a value, not a mutable container -- a `mut String` param can't be rebound
+// (RS0311) and a `fresh` fn can't return a reassigned `let mut` local (RS0601). So the recursive
+// pretty-printer pushes string PIECES into a `mut List<String>` out-param, joined at the top.)
+fn describe_into(ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, arg: read List<Int>, vlanes: read List<Int>, u: Int, out: mut List<String>) -> Unit {
+    let op = iget(l: read ops, i: u)
+    List.push(list: mut out, value: read op_name(op: op))
+    if op == CONST() {
+        List.push(list: mut out, value: read "(")
+        List.push(list: mut out, value: read Int.to_string(value: read iget(l: read arg, i: u)))
+        List.push(list: mut out, value: read ")")
+        return Unit
+    }
+    if op == VAR() {
+        List.push(list: mut out, value: read "#")
+        List.push(list: mut out, value: read Int.to_string(value: read iget(l: read arg, i: u)))
+        return Unit
+    }
+    if op == VEC() {
+        let n = iget(l: read s1, i: u)
+        List.push(list: mut out, value: read Int.to_string(value: read n))
+        List.push(list: mut out, value: read "[")
+        let mut k = 0
+        while k < n {
+            if k > 0 { List.push(list: mut out, value: read ", ") }
+            let lane = vec_lane(s0: read s0, vlanes: read vlanes, u: u, k: k)
+            describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: lane, out: mut out)
+            k = k + 1
+        }
+        List.push(list: mut out, value: read "]")
+        return Unit
+    }
+    if op == GEP() {
+        List.push(list: mut out, value: read "(")
+        let vecn = iget(l: read s0, i: u)
+        describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: vecn, out: mut out)
+        List.push(list: mut out, value: read ", ")
+        List.push(list: mut out, value: read Int.to_string(value: read iget(l: read arg, i: u)))
+        List.push(list: mut out, value: read ")")
+        return Unit
+    }
+    // ALU: op(s0, s1)
+    List.push(list: mut out, value: read "(")
+    describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: iget(l: read s0, i: u), out: mut out)
+    List.push(list: mut out, value: read ", ")
+    describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: iget(l: read s1, i: u), out: mut out)
+    List.push(list: mut out, value: read ")")
+    return Unit
+}
+
+fn yn(b: Int) -> fresh String {
+    if b == 1 { return "yes" }
+    return "no"
+}
+
+// Log a label followed by the pretty-printed node `u`, then a trailing suffix.
+fn log_node(label: read String, ops: read List<Int>, s0: read List<Int>, s1: read List<Int>, arg: read List<Int>, vlanes: read List<Int>, u: Int, suffix: read String) -> Unit {
+    let parts = List.new<String>()
+    List.push(list: mut parts, value: read label)
+    describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: u, out: mut parts)
+    List.push(list: mut parts, value: read suffix)
+    Log.write(message: read String.join(parts: read parts, separator: read ""))
+    return Unit
+}
+
+fn main() -> Unit {
+    let ops = List.new<Int>()
+    let s0 = List.new<Int>()
+    let s1 = List.new<Int>()
+    let arg = List.new<Int>()
+    let vlanes = List.new<Int>()
+
+    // ===================================================================================
+    // VALIDATION 1 -- EXPANDER: expand of VEC4(ADD(x, c)) -> 4 scalar ADDs (lanes 0..3)
+    // ===================================================================================
+    // Build x = a width-4 vector VAR (lanes x0..x3), c = a broadcast const 7 (lanes c,c,c,c),
+    // then the vectorized ADD over those width-4 srcs. Expanding gives 4 scalar ADD lanes.
+    Log.write(message: read "=== VALIDATION 1: EXPANDER (no_vectorized_alu / do_expand) ===")
+
+    // width-4 vector source x: four distinct scalar VARs gathered into a VEC
+    let x0 = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 0)
+    let x1 = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 1)
+    let x2 = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 2)
+    let x3 = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 3)
+    let xl = List.new<Int>()
+    List.push(list: mut xl, value: read x0)
+    List.push(list: mut xl, value: read x1)
+    List.push(list: mut xl, value: read x2)
+    List.push(list: mut xl, value: read x3)
+    let xvec = emit_vec(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, lanes: read xl)
+
+    // broadcast const 7 over width 4
+    let c = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: CONST(), a: -1, b: -1, g: 7)
+    let cl = List.new<Int>()
+    List.push(list: mut cl, value: read c)
+    List.push(list: mut cl, value: read c)
+    List.push(list: mut cl, value: read c)
+    List.push(list: mut cl, value: read c)
+    let cvec = emit_vec(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, lanes: read cl)
+
+    // the vectorized ADD(xvec, cvec) of logical width 4
+    let vadd = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: ADD(), a: xvec, b: cvec, g: 0)
+    log_node(label: read "  before: VEC4(", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: vadd, suffix: read ")")
+
+    let expanded = expand_alu(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, alu: vadd, width: 4)
+    log_node(label: read "  after : ", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: expanded, suffix: read "")
+
+    let lanes = width_of(arg: read arg, u: expanded)
+    Log.write(message: read String.concat(left: read "  lane count = ", right: read Int.to_string(value: read lanes)))
+    let mut k = 0
+    let mut all_add = 1
+    while k < lanes {
+        let lane = vec_lane(s0: read s0, vlanes: read vlanes, u: expanded, k: k)
+        let lop = iget(l: read ops, i: lane)
+        let parts = List.new<String>()
+        List.push(list: mut parts, value: read "    lane ")
+        List.push(list: mut parts, value: read Int.to_string(value: read k))
+        List.push(list: mut parts, value: read ": ")
+        describe_into(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: lane, out: mut parts)
+        List.push(list: mut parts, value: read "  scalar ADD? ")
+        let mut sc = 0
+        if lop == ADD() { sc = 1 }
+        List.push(list: mut parts, value: read yn(b: sc))
+        Log.write(message: read String.join(parts: read parts, separator: read ""))
+        if lop == ADD() { } else { all_add = 0 }
+        k = k + 1
+    }
+    Log.write(message: read String.concat(left: read "  all 4 lanes are scalar ADD: ", right: read yn(b: all_add)))
+
+    // ===================================================================================
+    // VALIDATION 2 -- DEVECTORIZER: GEP(VEC(a,b,c,d), 2) -> c   (gep_through_vectorize)
+    // ===================================================================================
+    Log.write(message: read "")
+    Log.write(message: read "=== VALIDATION 2: DEVECTORIZER GEP-of-VEC fold (gep_through_vectorize) ===")
+    let va = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 10)  // a
+    let vb = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 11)  // b
+    let vc = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 12)  // c
+    let vd = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 13)  // d
+    let abcd = List.new<Int>()
+    List.push(list: mut abcd, value: read va)
+    List.push(list: mut abcd, value: read vb)
+    List.push(list: mut abcd, value: read vc)
+    List.push(list: mut abcd, value: read vd)
+    let vec4 = emit_vec(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, lanes: read abcd)
+    // GEP(vec4, 2)
+    let gep2 = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: GEP(), a: vec4, b: -1, g: 2)
+    log_node(label: read "  expr: ", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: gep2, suffix: read "")
+
+    let resolved = gep_through_vectorize(ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, gep_node: gep2)
+    log_node(label: read "  GEP(VEC(a,b,c,d), 2) -> ", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: resolved, suffix: read "")
+    let mut is_c = 0
+    if resolved == vc { is_c = 1 }
+    Log.write(message: read String.concat(left: read "  resolved to the 3rd lane (c): ", right: read yn(b: is_c)))
+
+    // ===================================================================================
+    // VALIDATION 3 -- DEVECTORIZER: VEC(x,x,x,x) recognized as broadcast(x)
+    // ===================================================================================
+    Log.write(message: read "")
+    Log.write(message: read "=== VALIDATION 3: DEVECTORIZER VEC-of-same -> broadcast (vectorize_const) ===")
+    let xx = emit(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, op: VAR(), a: -1, b: -1, g: 42)
+    let bl = List.new<Int>()
+    List.push(list: mut bl, value: read xx)
+    List.push(list: mut bl, value: read xx)
+    List.push(list: mut bl, value: read xx)
+    List.push(list: mut bl, value: read xx)
+    let bvec = emit_vec(ops: mut ops, s0: mut s0, s1: mut s1, arg: mut arg, vlanes: mut vlanes, lanes: read bl)
+    log_node(label: read "  expr: ", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: bvec, suffix: read "")
+    let bc = is_broadcast(s0: read s0, s1: read s1, vlanes: read vlanes, u: bvec)
+    Log.write(message: read String.concat(left: read "  is broadcast (all lanes same): ", right: read yn(b: bc)))
+    if bc == 1 {
+        let sc = broadcast_scalar(s0: read s0, vlanes: read vlanes, u: bvec)
+        log_node(label: read "  VEC4(x,x,x,x) == broadcast(", ops: read ops, s0: read s0, s1: read s1, arg: read arg, vlanes: read vlanes, u: sc, suffix: read ", 4)")
+    }
+    // negative control: a non-uniform VEC is NOT a broadcast
+    let nbc = is_broadcast(s0: read s0, s1: read s1, vlanes: read vlanes, u: vec4)
+    Log.write(message: read String.concat(left: read "  VEC4(a,b,c,d) is broadcast: ", right: read yn(b: nbc)))
+
+    return Unit
+}

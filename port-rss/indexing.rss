@@ -1,0 +1,275 @@
+// Port of tinygrad's index/valid generation (the CORE of turning an output loop index into an
+// input memory offset through a movement chain). In tinygrad v0.13 this lives in
+// schedule/indexing.py::apply_movement_op: an OUTPUT index (a tuple of ranges) is swizzled
+// through each movement op into the INPUT index, then the load offset is sum(idx*strides)+offset.
+//   - PERMUTE: rngs = tuple(rngs[p] for p in argsort(arg))  -> equivalently strides/shape reorder
+//   - PAD:     rng valid = (r >= off) & (r < sh+off), src index = r-off  (out-of-range = invalid)
+// We build on shapetracker.rss's stride-based View {shape,strides,offset}: a movement op is a pure
+// stride manipulation, and idx_to_offset is the indexing step. For PAD we carry per-dim valid
+// bounds [lo,hi) so valid(view,out_idx) reproduces tinygrad's mask, and the src offset uses the
+// un-padded coordinate (r-off) -> which equals reading the base element at idx-off.
+
+features: local
+
+struct View derives(Clone) {
+    shape: List<Int>
+    strides: List<Int>
+    offset: Int
+    // pad bounds: for each output dim, valid iff lo[d] <= out_idx[d] < hi[d].
+    // contiguous/permuted views set lo=0, hi=shape[d] (always valid).
+    plo: List<Int>
+    phi: List<Int>
+    // per-dim shift applied to the output index before striding (PAD subtracts off).
+    pshift: List<Int>
+}
+
+// typed element accessor: List.get on a struct-field List<Int> loses element-type inference
+// in == / arithmetic contexts (returns T), so route those through a typed helper.
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+
+// row-major strides with canonicalization: stride[i] = prod(shape[i+1:]); size-1 dim -> 0
+fn strides_for_shape(shape: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        let mut acc = 1
+        let mut j = i + 1
+        while j < n {
+            acc = acc * List.get(list: read shape, index: j)
+            j = j + 1
+        }
+        if List.get(list: read shape, index: i) == 1 { acc = 0 }
+        List.push(list: mut out, value: read acc)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn copy_ints(src: read List<Int>, out: mut List<Int>) -> Unit {
+    let n = List.len(list: read src)
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read List.get(list: read src, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+// fill a list with `n` copies of `val`
+fn fill_ints(val: Int, n: Int, out: mut List<Int>) -> Unit {
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read val)
+        i = i + 1
+    }
+    return Unit
+}
+
+// contiguous View for a shape: lo=0, hi=shape, shift=0 (no padding -> always valid)
+fn v_create(shape: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    copy_ints(src: read shape, out: mut sh)
+    local st = List.new<Int>()
+    strides_for_shape(shape: read shape, out: mut st)
+    let n = List.len(list: read shape)
+    local lo = List.new<Int>()
+    fill_ints(val: 0, n: n, out: mut lo)
+    local hi = List.new<Int>()
+    copy_ints(src: read shape, out: mut hi)
+    local sf = List.new<Int>()
+    fill_ints(val: 0, n: n, out: mut sf)
+    return View(shape: take sh, strides: take st, offset: 0, plo: take lo, phi: take hi, pshift: take sf)
+}
+
+// RESHAPE (contiguous only): a contiguous view of new_shape. This is the common reshape case
+// (tinygrad merges views; for a contiguous base the result is just contiguous strides).
+fn v_reshape(new_shape: read List<Int>) -> fresh View {
+    return v_create(shape: read new_shape)
+}
+
+// PERMUTE: reorder shape/strides/pad-bounds/shift by perm (stride form of rngs[p] swizzle).
+fn v_permute(v: read View, perm: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    local st = List.new<Int>()
+    local lo = List.new<Int>()
+    local hi = List.new<Int>()
+    local sf = List.new<Int>()
+    let n = List.len(list: read perm)
+    let mut i = 0
+    while i < n {
+        let p = List.get(list: read perm, index: i)
+        List.push(list: mut sh, value: read List.get(list: read v.shape, index: p))
+        List.push(list: mut st, value: read List.get(list: read v.strides, index: p))
+        List.push(list: mut lo, value: read List.get(list: read v.plo, index: p))
+        List.push(list: mut hi, value: read List.get(list: read v.phi, index: p))
+        List.push(list: mut sf, value: read List.get(list: read v.pshift, index: p))
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset, plo: take lo, phi: take hi, pshift: take sf)
+}
+
+// PAD one dim `d` by (before, after): output dim grows by before+after; valid window is
+// [before, before+orig_size); the output coord is shifted by -before before striding (r-off).
+fn v_pad(v: read View, d: Int, before: Int, after: Int) -> fresh View {
+    local sh = List.new<Int>()
+    local st = List.new<Int>()
+    local lo = List.new<Int>()
+    local hi = List.new<Int>()
+    local sf = List.new<Int>()
+    let n = List.len(list: read v.shape)
+    let mut i = 0
+    while i < n {
+        let osz = iget(l: read v.shape, i: i)
+        if i == d {
+            let nsz = osz + before + after
+            let nhi = before + osz
+            let nsf = iget(l: read v.pshift, i: i) - before
+            List.push(list: mut sh, value: read nsz)
+            List.push(list: mut lo, value: read before)
+            List.push(list: mut hi, value: read nhi)
+            List.push(list: mut sf, value: read nsf)
+        } else {
+            List.push(list: mut sh, value: read osz)
+            List.push(list: mut lo, value: read iget(l: read v.plo, i: i))
+            List.push(list: mut hi, value: read iget(l: read v.phi, i: i))
+            List.push(list: mut sf, value: read iget(l: read v.pshift, i: i))
+        }
+        List.push(list: mut st, value: read iget(l: read v.strides, i: i))
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset, plo: take lo, phi: take hi, pshift: take sf)
+}
+
+// (1) idx_to_offset: the indexing step. flat offset = sum((out_idx[d]+shift[d])*strides[d]) + offset.
+// shift is 0 for non-padded dims, so this reduces to sum(out_idx*strides)+offset exactly as in
+// shapetracker.rss; for a PAD dim it applies r-off so the load reads the base element idx-before.
+fn idx_to_offset(v: read View, out_idx: read List<Int>) -> Int {
+    let mut acc = v.offset
+    let n = List.len(list: read out_idx)
+    let mut i = 0
+    while i < n {
+        let coord = iget(l: read out_idx, i: i) + iget(l: read v.pshift, i: i)
+        acc = acc + (coord * iget(l: read v.strides, i: i))
+        i = i + 1
+    }
+    return acc
+}
+
+// (3) valid mask for a (possibly padded) view: True iff every dim's out index is in [lo,hi).
+fn valid(v: read View, out_idx: read List<Int>) -> Bool {
+    let n = List.len(list: read out_idx)
+    let mut i = 0
+    while i < n {
+        let x = iget(l: read out_idx, i: i)
+        if x < iget(l: read v.plo, i: i) { return false }
+        if x >= iget(l: read v.phi, i: i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// helpers --------------------------------------------------------------------
+
+fn mk2(a: Int, b: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push(list: mut l, value: read a)
+    List.push(list: mut l, value: read b)
+    return l
+}
+fn mk1(a: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push(list: mut l, value: read a)
+    return l
+}
+
+fn say_off(label: read String, off: Int) -> Unit {
+    Log.write(message: read String.concat(left: read label, right: read Int.to_string(value: read off)))
+    return Unit
+}
+fn say_valid(label: read String, b: Bool) -> Unit {
+    let mut s = String.concat(left: read label, right: read "")
+    if b { s = String.concat(left: read s, right: read "valid") }
+    if b == false { s = String.concat(left: read s, right: read "INVALID") }
+    Log.write(message: read s)
+    return Unit
+}
+
+fn main() -> Unit {
+    // === (1) idx_to_offset on a base (2,3) contiguous view: strides [3,1] ===
+    let base = v_create(shape: read mk2(a: 2, b: 3))
+    let o12 = idx_to_offset(v: read base, out_idx: read mk2(a: 1, b: 2))
+    say_off(label: read "idx_to_offset base(2,3)@[1,2] = ", off: o12)   // 1*3+2*1 = 5
+
+    // === (2) VIEW CHAIN: permute (2,3) -> (3,2) via perm (1,0) ===
+    // tinygrad: out[i,j] of the permuted (3,2) reads the base element at [j,i].
+    let perm = v_permute(v: read base, perm: read mk2(a: 1, b: 0))
+    // out[2,1] of permuted(3,2) must equal base in[1,2]:
+    let po = idx_to_offset(v: read perm, out_idx: read mk2(a: 2, b: 1))
+    let bo = idx_to_offset(v: read base, out_idx: read mk2(a: 1, b: 2))
+    say_off(label: read "permute(3,2) out[2,1] offset = ", off: po)     // 5
+    say_off(label: read "base(2,3)    in [1,2] offset = ", off: bo)     // 5
+    if po == bo { Log.write(message: read "permute element-identity out[2,1]==in[1,2]: MATCH") }
+    if po != bo { Log.write(message: read "permute element-identity: MISMATCH") }
+
+    // full permuted (3,2) offset grid vs tinygrad [[0,3],[1,4],[2,5]]
+    let mut i = 0
+    while i < 3 {
+        let mut j = 0
+        let mut row = String.concat(left: read "permuted row ", right: read Int.to_string(value: read i))
+        row = String.concat(left: read row, right: read " offsets = [")
+        while j < 2 {
+            let off = idx_to_offset(v: read perm, out_idx: read mk2(a: i, b: j))
+            row = String.concat(left: read row, right: read Int.to_string(value: read off))
+            if j < 1 { row = String.concat(left: read row, right: read ", ") }
+            j = j + 1
+        }
+        row = String.concat(left: read row, right: read "]")
+        Log.write(message: read row)
+        i = i + 1
+    }
+
+    // === (2b) CHAIN of two movement ops: reshape (2,3)->(3,2) then permute (1,0) -> (2,3) ===
+    // tinygrad chain offsets: row0 [0,2,4], row1 [1,3,5]
+    let rs = v_reshape(new_shape: read mk2(a: 3, b: 2))
+    let chain = v_permute(v: read rs, perm: read mk2(a: 1, b: 0))
+    let mut r = 0
+    while r < 2 {
+        let mut c = 0
+        let mut line = String.concat(left: read "chain reshape+permute row ", right: read Int.to_string(value: read r))
+        line = String.concat(left: read line, right: read " = [")
+        while c < 3 {
+            let off = idx_to_offset(v: read chain, out_idx: read mk2(a: r, b: c))
+            line = String.concat(left: read line, right: read Int.to_string(value: read off))
+            if c < 2 { line = String.concat(left: read line, right: read ", ") }
+            c = c + 1
+        }
+        line = String.concat(left: read line, right: read "]")
+        Log.write(message: read line)
+        r = r + 1
+    }
+
+    // === (3) VALID mask for a PAD: 1-D size-3 dim padded (1,1) -> size 5 ===
+    // tinygrad: out 0 and 4 INVALID; 1,2,3 valid reading base 0,1,2.
+    let base1 = v_create(shape: read mk1(a: 3))
+    let padded = v_pad(v: read base1, d: 0, before: 1, after: 1)
+    say_off(label: read "padded shape[0] = ", off: iget(l: read padded.shape, i: 0))  // 5
+    let mut k = 0
+    while k < 5 {
+        let idx = mk1(a: k)
+        let vv = valid(v: read padded, out_idx: read idx)
+        let mut lab = String.concat(left: read "pad out ", right: read Int.to_string(value: read k))
+        lab = String.concat(left: read lab, right: read ": ")
+        if vv {
+            let so = idx_to_offset(v: read padded, out_idx: read mk1(a: k))
+            lab = String.concat(left: read lab, right: read "valid -> base offset ")
+            lab = String.concat(left: read lab, right: read Int.to_string(value: read so))
+            Log.write(message: read lab)
+        }
+        if vv == false {
+            lab = String.concat(left: read lab, right: read "INVALID")
+            Log.write(message: read lab)
+        }
+        k = k + 1
+    }
+    return Unit
+}

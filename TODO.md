@@ -60,7 +60,7 @@ Rule: when rss/mc lacks a feature needed for a faithful port, **fix rss/mc first
 - ⛔ `engine/jit.py` (312) — TinyJit graph capture/replay (optimization; out of scope for correctness).
 
 ## schedule/, ~1100 in-scope
-- 🟡 `schedule/__init__.py` (147) + `memory.py` (64) + `rangeify.py` (611) → `schedule.rss`,`schedule_multi.rss`,`buffer_reuse.rss`,`rangeify.rss` — kernel-shape dispatch, reduce-split, liveness buffer reuse, **kernel-grouping/fusion pass** (elementwise fuse, reduce/store/shared boundaries; kernel counts match tinygrad). **Remaining:** real index/range arithmetic in `indexing.py` (286), COPY/upload kernels, cost model.
+- 🟡 `schedule/__init__.py` (147) + `memory.py` (64) + `rangeify.py` (611) → `schedule.rss`,`schedule_multi.rss`,`buffer_reuse.rss`,`rangeify.rss` — kernel-shape dispatch, reduce-split, liveness buffer reuse, **kernel-grouping/fusion pass** (elementwise fuse, reduce/store/shared boundaries; kernel counts match tinygrad). + **`indexing.rss`**: index/valid generation -- map output multi-index through movement chain (permute/reshape) to input offset + PAD valid mask (matches tinygrad). **Remaining:** COPY/upload kernels, cost model.
 - ⛔ `schedule/multi.py` (175), `allreduce.py` (62) — multi-GPU, out of scope.
 
 ## nn/, ~900 in-scope

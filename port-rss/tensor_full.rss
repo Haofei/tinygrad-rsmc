@@ -1,0 +1,467 @@
+// Numeric port of tinygrad Tensor's CREATION op surface + a small end-to-end .backward() demo,
+// operating on a flat List<Float> `data` plus a `shape: List<Int>` (the same flat representation
+// as tensor_ops.rss / tensor_higher.rss). Faithful to /home/zoe/tinygrad/tinygrad/tensor.py:
+//   - full(shape, v) / zeros(shape) / ones(shape)  (tensor.py `full`/`zeros`/`ones`)
+//   - arange(n) -> [0,1,...,n-1]                    (tensor.py `arange`)
+//   - eye(n) -> n*n identity, flattened             (tensor.py `eye`)
+//   - reshape / flatten: data unchanged, only shape changes (validate numel matches)
+//   - mean(axis) = sum(axis)/axis_len, mean() = sum/numel   (tensor.py `mean`)
+//   - end-to-end autograd: 1-layer linear regression L = sum((w*x_i + b - y_i)^2), reverse-mode
+//     over a flat arena DAG (same approach as gradient_full.rss), dL/dw & dL/db, one SGD step.
+//
+// rss idioms (BRIEFING.md): flat data List<Float>, shapes List<Int>, typed `iget`, list returns
+// via out-params, one statement per line, `Int.to_float(value: read n)` for denominators.
+// All values validated against real tinygrad .tolist() (expected printed alongside each line).
+
+// ---------- typed accessors ----------
+fn iget(l: read List<Int>, i: Int) -> Int { return List.get(list: read l, index: i) }
+fn fget(l: read List<Float>, i: Int) -> Float { return List.get(list: read l, index: i) }
+
+fn fabs(x: Float) -> Float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// product of a shape (number of elements)
+fn numel(shape: read List<Int>) -> Int {
+    let n = List.len(list: read shape)
+    let mut p = 1
+    let mut i = 0
+    while i < n {
+        p = p * iget(l: read shape, i: i)
+        i = i + 1
+    }
+    return p
+}
+
+// ---------- creation ops ----------
+// full(shape, v): every element = v.  zeros/ones are full with v=0/1.
+fn full(shape: read List<Int>, v: Float, out: mut List<Float>) -> Unit {
+    let total = numel(shape: read shape)
+    let mut i = 0
+    while i < total {
+        List.push(list: mut out, value: read v)
+        i = i + 1
+    }
+    return Unit
+}
+fn zeros(shape: read List<Int>, out: mut List<Float>) -> Unit {
+    full(shape: read shape, v: 0.0, out: mut out)
+    return Unit
+}
+fn ones(shape: read List<Int>, out: mut List<Float>) -> Unit {
+    full(shape: read shape, v: 1.0, out: mut out)
+    return Unit
+}
+
+// arange(n) -> [0, 1, ..., n-1]  (Int counter -> Float via Int.to_float)
+fn arange(n: Int, out: mut List<Float>) -> Unit {
+    let mut i = 0
+    while i < n {
+        List.push(list: mut out, value: read Int.to_float(value: read i))
+        i = i + 1
+    }
+    return Unit
+}
+
+// eye(n) -> n*n identity flattened row-major: 1.0 where row==col else 0.0
+fn eye(n: Int, out: mut List<Float>) -> Unit {
+    let mut r = 0
+    while r < n {
+        let mut c = 0
+        while c < n {
+            let mut v = 0.0
+            if r == c { v = 1.0 }
+            List.push(list: mut out, value: read v)
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return Unit
+}
+
+// ---------- reshape / flatten (data unchanged; only shape changes; validate numel) ----------
+// returns 1 if the new shape is valid for `data` (same element count), 0 otherwise.
+fn reshape_ok(data: read List<Float>, new_shape: read List<Int>) -> Int {
+    let have = List.len(list: read data)
+    let want = numel(shape: read new_shape)
+    if have == want { return 1 }
+    return 0
+}
+// flatten -> shape becomes [numel(data)]
+fn flatten_shape(data: read List<Float>, out_shape: mut List<Int>) -> Unit {
+    let n = List.len(list: read data)
+    List.push(list: mut out_shape, value: read n)
+    return Unit
+}
+
+// ---------- mean over one axis of a 2D (r,c), keepdim=False ----------
+// axis 0 -> mean over rows -> (c,); axis 1 -> mean over cols -> (r,)
+fn mean_axis2d(data: read List<Float>, r: Int, c: Int, axis: Int,
+               out_shape: mut List<Int>, out: mut List<Float>) -> Unit {
+    if axis == 0 {
+        List.push(list: mut out_shape, value: read c)
+        let denom = Int.to_float(value: read r)
+        let mut j = 0
+        while j < c {
+            let mut s = 0.0
+            let mut i = 0
+            while i < r {
+                s = s + fget(l: read data, i: i * c + j)
+                i = i + 1
+            }
+            let mv = s / denom
+            List.push(list: mut out, value: read mv)
+            j = j + 1
+        }
+        return Unit
+    }
+    List.push(list: mut out_shape, value: read r)
+    let denom = Int.to_float(value: read c)
+    let mut i = 0
+    while i < r {
+        let mut s = 0.0
+        let mut j = 0
+        while j < c {
+            s = s + fget(l: read data, i: i * c + j)
+            j = j + 1
+        }
+        let mv = s / denom
+        List.push(list: mut out, value: read mv)
+        i = i + 1
+    }
+    return Unit
+}
+
+// mean over all elements -> scalar
+fn mean_all(data: read List<Float>) -> Float {
+    let n = List.len(list: read data)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + fget(l: read data, i: i)
+        i = i + 1
+    }
+    return s / Int.to_float(value: read n)
+}
+
+// ====================================================================================
+// end-to-end autograd over a flat arena DAG (same reverse-mode style as gradient_full.rss)
+// ====================================================================================
+fn OP_INPUT() -> Int { return 0 }
+fn OP_CONST() -> Int { return 1 }
+fn OP_ADD()   -> Int { return 2 }
+fn OP_SUB()   -> Int { return 3 }
+fn OP_MUL()   -> Int { return 4 }
+
+fn emit(op: mut List<Int>, s0: mut List<Int>, s1: mut List<Int>, fv: mut List<Float>,
+        o: Int, a: Int, b: Int, v: Float) -> Int {
+    let idx = List.len(list: read op)
+    List.push(list: mut op, value: read o)
+    List.push(list: mut s0, value: read a)
+    List.push(list: mut s1, value: read b)
+    List.push(list: mut fv, value: read v)
+    return idx
+}
+
+// forward: fill fval for ADD/SUB/MUL (INPUT/CONST already carry their value).
+fn forward(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, fv: mut List<Float>) -> Unit {
+    let n = List.len(list: read op)
+    let mut i = 0
+    while i < n {
+        let o = iget(l: read op, i: i)
+        if o == OP_ADD() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) + fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_SUB() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) - fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        if o == OP_MUL() {
+            let r = fget(l: read fv, i: iget(l: read s0, i: i)) * fget(l: read fv, i: iget(l: read s1, i: i))
+            List.set(list: mut fv, index: i, value: read r)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn accum(grad: mut List<Float>, idx: Int, delta: Float) -> Unit {
+    let cur = List.get(list: read grad, index: idx)
+    let nv = cur + delta
+    List.set(list: mut grad, index: idx, value: read nv)
+    return Unit
+}
+
+// reverse pass: grad of node `wrt` for loss = node[root]. Shared nodes (w,b reused per point)
+// accumulate, exactly like tinygrad's grad accumulation.
+fn backward(op: read List<Int>, s0: read List<Int>, s1: read List<Int>, fv: read List<Float>,
+            root: Int, wrt: Int) -> Float {
+    let n = List.len(list: read op)
+    let grad = List.new<Float>()
+    let mut k = 0
+    while k < n {
+        List.push(list: mut grad, value: read 0.0)
+        k = k + 1
+    }
+    List.set(list: mut grad, index: root, value: read 1.0)
+    let mut r = n - 1
+    while r >= 0 {
+        let o = iget(l: read op, i: r)
+        let g = List.get(list: read grad, index: r)
+        let ia = iget(l: read s0, i: r)
+        let ib = iget(l: read s1, i: r)
+        if o == OP_ADD() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: g)
+        }
+        if o == OP_SUB() {
+            accum(grad: mut grad, idx: ia, delta: g)
+            accum(grad: mut grad, idx: ib, delta: 0.0 - g)
+        }
+        if o == OP_MUL() {
+            let fa = fget(l: read fv, i: ia)
+            let fb = fget(l: read fv, i: ib)
+            accum(grad: mut grad, idx: ia, delta: g * fb)
+            accum(grad: mut grad, idx: ib, delta: g * fa)
+        }
+        r = r - 1
+    }
+    return List.get(list: read grad, index: wrt)
+}
+
+// ---------- printing ----------
+fn show_shape(label: read String, shape: read List<Int>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read shape)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read Int.to_string(value: read iget(l: read shape, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn show_vec(label: read String, v: read List<Float>) -> Unit {
+    let mut s = String.concat(left: read label, right: read "[")
+    let n = List.len(list: read v)
+    let mut i = 0
+    while i < n {
+        s = String.concat(left: read s, right: read String.from_float(value: fget(l: read v, i: i)))
+        if i < n - 1 { s = String.concat(left: read s, right: read ", ") }
+        i = i + 1
+    }
+    s = String.concat(left: read s, right: read "]")
+    Log.write(message: read s)
+    return Unit
+}
+fn show_float(label: read String, v: Float) -> Unit {
+    let s = String.concat(left: read label, right: read String.from_float(value: v))
+    Log.write(message: read s)
+    return Unit
+}
+
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+fn pushi(l: mut List<Int>, v: Int) -> Unit {
+    List.push(list: mut l, value: read v)
+    return Unit
+}
+
+fn main() -> Unit {
+    Log.write(message: read "== creation ops (validate vs tinygrad .tolist()) ==")
+
+    // full((2,3), 5.0) -> 6x 5.0
+    let s23 = List.new<Int>()
+    pushi(l: mut s23, v: 2)
+    pushi(l: mut s23, v: 3)
+    let f = List.new<Float>()
+    full(shape: read s23, v: 5.0, out: mut f)
+    show_vec(label: read "full((2,3),5) = ", v: read f)
+    Log.write(message: read "  tinygrad: [[5,5,5],[5,5,5]] flat=[5,5,5,5,5,5]")
+
+    // zeros((2,2))
+    let s22 = List.new<Int>()
+    pushi(l: mut s22, v: 2)
+    pushi(l: mut s22, v: 2)
+    let z = List.new<Float>()
+    zeros(shape: read s22, out: mut z)
+    show_vec(label: read "zeros((2,2)) = ", v: read z)
+    Log.write(message: read "  tinygrad: [[0,0],[0,0]] flat=[0,0,0,0]")
+
+    // ones((3,))
+    let s3 = List.new<Int>()
+    pushi(l: mut s3, v: 3)
+    let on = List.new<Float>()
+    ones(shape: read s3, out: mut on)
+    show_vec(label: read "ones((3,)) = ", v: read on)
+    Log.write(message: read "  tinygrad: [1,1,1]")
+
+    // arange(5)
+    let ar = List.new<Float>()
+    arange(n: 5, out: mut ar)
+    show_vec(label: read "arange(5) = ", v: read ar)
+    Log.write(message: read "  tinygrad: [0,1,2,3,4]")
+
+    // eye(3) flattened
+    let ey = List.new<Float>()
+    eye(n: 3, out: mut ey)
+    show_vec(label: read "eye(3) = ", v: read ey)
+    Log.write(message: read "  tinygrad: [[1,0,0],[0,1,0],[0,0,1]] flat=[1,0,0,0,1,0,0,0,1]")
+
+    Log.write(message: read "")
+    Log.write(message: read "== reshape / flatten (data unchanged, validate shape) ==")
+    // data = [1..6] as a (2,3); reshape to (3,2)
+    let data = List.new<Float>()
+    pushf(l: mut data, v: 1.0)
+    pushf(l: mut data, v: 2.0)
+    pushf(l: mut data, v: 3.0)
+    pushf(l: mut data, v: 4.0)
+    pushf(l: mut data, v: 5.0)
+    pushf(l: mut data, v: 6.0)
+    let ns = List.new<Int>()
+    pushi(l: mut ns, v: 3)
+    pushi(l: mut ns, v: 2)
+    let ok = reshape_ok(data: read data, new_shape: read ns)
+    show_shape(label: read "reshape((2,3)->(3,2)) new shape = ", shape: read ns)
+    let mut okmsg = "reshape valid? "
+    okmsg = String.concat(left: read okmsg, right: read Int.to_string(value: read ok))
+    Log.write(message: read okmsg)
+    show_vec(label: read "reshape data (unchanged) = ", v: read data)
+    Log.write(message: read "  tinygrad: [[1,2],[3,4],[5,6]] flat=[1,2,3,4,5,6] valid?1")
+
+    // reshape to invalid (2,4) -> should be 0
+    let bad = List.new<Int>()
+    pushi(l: mut bad, v: 2)
+    pushi(l: mut bad, v: 4)
+    let badok = reshape_ok(data: read data, new_shape: read bad)
+    let mut badmsg = "reshape((2,3)->(2,4)) valid? "
+    badmsg = String.concat(left: read badmsg, right: read Int.to_string(value: read badok))
+    Log.write(message: read badmsg)
+    Log.write(message: read "  tinygrad: invalid (raises) -> 0")
+
+    // flatten -> [6]
+    let fshp = List.new<Int>()
+    flatten_shape(data: read data, out_shape: mut fshp)
+    show_shape(label: read "flatten shape = ", shape: read fshp)
+    Log.write(message: read "  tinygrad: [6]")
+
+    Log.write(message: read "")
+    Log.write(message: read "== mean (sum/len) ==")
+    // x = [[1,2,3],[4,5,6]]
+    let mas0 = List.new<Int>()
+    let ma0 = List.new<Float>()
+    mean_axis2d(data: read data, r: 2, c: 3, axis: 0, out_shape: mut mas0, out: mut ma0)
+    show_vec(label: read "mean(axis=0) = ", v: read ma0)
+    Log.write(message: read "  tinygrad: [2.5, 3.5, 4.5]")
+    let mas1 = List.new<Int>()
+    let ma1 = List.new<Float>()
+    mean_axis2d(data: read data, r: 2, c: 3, axis: 1, out_shape: mut mas1, out: mut ma1)
+    show_vec(label: read "mean(axis=1) = ", v: read ma1)
+    Log.write(message: read "  tinygrad: [2.0, 5.0]")
+    show_float(label: read "mean(all) = ", v: mean_all(data: read data))
+    Log.write(message: read "  tinygrad: 3.5")
+
+    Log.write(message: read "")
+    Log.write(message: read "== end-to-end .backward(): linear regression L = sum((w*x_i + b - y_i)^2) ==")
+    // points: x=[1,2,3,4], y=[3,5,7,9] (true y=2x+1); init w=0.5, b=0.0
+    // Build the arena DAG sharing the single w and b nodes across all 4 points.
+    let op = List.new<Int>()
+    let s0 = List.new<Int>()
+    let s1 = List.new<Int>()
+    let fv = List.new<Float>()
+
+    let w = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, v: 0.5)
+    let b = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_INPUT(), a: -1, b: -1, v: 0.0)
+
+    // point 1: x=1, y=3
+    let x1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 1.0)
+    let y1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 3.0)
+    let wx1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: w, b: x1, v: 0.0)
+    let p1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: wx1, b: b, v: 0.0)
+    let e1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_SUB(), a: p1, b: y1, v: 0.0)
+    let sq1 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: e1, b: e1, v: 0.0)
+
+    // point 2: x=2, y=5
+    let x2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 2.0)
+    let y2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 5.0)
+    let wx2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: w, b: x2, v: 0.0)
+    let p2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: wx2, b: b, v: 0.0)
+    let e2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_SUB(), a: p2, b: y2, v: 0.0)
+    let sq2 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: e2, b: e2, v: 0.0)
+
+    // point 3: x=3, y=7
+    let x3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 3.0)
+    let y3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 7.0)
+    let wx3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: w, b: x3, v: 0.0)
+    let p3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: wx3, b: b, v: 0.0)
+    let e3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_SUB(), a: p3, b: y3, v: 0.0)
+    let sq3 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: e3, b: e3, v: 0.0)
+
+    // point 4: x=4, y=9
+    let x4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 4.0)
+    let y4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_CONST(), a: -1, b: -1, v: 9.0)
+    let wx4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: w, b: x4, v: 0.0)
+    let p4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: wx4, b: b, v: 0.0)
+    let e4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_SUB(), a: p4, b: y4, v: 0.0)
+    let sq4 = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_MUL(), a: e4, b: e4, v: 0.0)
+
+    // L = sq1 + sq2 + sq3 + sq4
+    let ab = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: sq1, b: sq2, v: 0.0)
+    let cd = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: sq3, b: sq4, v: 0.0)
+    let L = emit(op: mut op, s0: mut s0, s1: mut s1, fv: mut fv, o: OP_ADD(), a: ab, b: cd, v: 0.0)
+
+    forward(op: read op, s0: read s0, s1: read s1, fv: mut fv)
+    let Lval = fget(l: read fv, i: L)
+    show_float(label: read "L (initial) = ", v: Lval)
+    Log.write(message: read "  tinygrad: 101.5")
+
+    let dw = backward(op: read op, s0: read s0, s1: read s1, fv: read fv, root: L, wrt: w)
+    let db = backward(op: read op, s0: read s0, s1: read s1, fv: read fv, root: L, wrt: b)
+    show_float(label: read "dL/dw = ", v: dw)
+    Log.write(message: read "  tinygrad w.grad: -110.0")
+    show_float(label: read "dL/db = ", v: db)
+    Log.write(message: read "  tinygrad b.grad: -38.0")
+
+    // ONE SGD step: param = param - lr * grad
+    let lr = 0.001
+    let w_new = 0.5 - lr * dw
+    let b_new = 0.0 - lr * db
+    show_float(label: read "w after SGD = ", v: w_new)
+    Log.write(message: read "  tinygrad: 0.6100000143051147")
+    show_float(label: read "b after SGD = ", v: b_new)
+    Log.write(message: read "  tinygrad: 0.03800000250339508")
+
+    // recompute L with updated params (analytic) to show it decreased
+    let xs = List.new<Float>()
+    pushf(l: mut xs, v: 1.0)
+    pushf(l: mut xs, v: 2.0)
+    pushf(l: mut xs, v: 3.0)
+    pushf(l: mut xs, v: 4.0)
+    let ys = List.new<Float>()
+    pushf(l: mut ys, v: 3.0)
+    pushf(l: mut ys, v: 5.0)
+    pushf(l: mut ys, v: 7.0)
+    pushf(l: mut ys, v: 9.0)
+    let mut L2 = 0.0
+    let mut i = 0
+    while i < 4 {
+        let pr = w_new * fget(l: read xs, i: i) + b_new
+        let er = pr - fget(l: read ys, i: i)
+        L2 = L2 + er * er
+        i = i + 1
+    }
+    show_float(label: read "L (after 1 SGD step) = ", v: L2)
+    Log.write(message: read "  tinygrad: 88.40837444286252")
+    let mut dec = "loss decreased? "
+    let mut decok = "no"
+    if L2 < Lval { decok = "YES" }
+    dec = String.concat(left: read dec, right: read decok)
+    Log.write(message: read dec)
+    return Unit
+}

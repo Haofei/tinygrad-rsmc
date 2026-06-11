@@ -63,3 +63,17 @@ fn tensor_matmul2d(cache: mut UOpCache, a: Int, b: Int) -> Int {
     push1(l: mut smn, a: n)
     return mk_reshape(cache: mut cache, x: summed, new_shape: read smn)
 }
+
+// relu(x) = max(x, 0) — composed from MAX with a broadcast scalar 0 (tinygrad Tensor.relu).
+fn tensor_relu(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let zero = mk_const_float(cache: mut cache, dt: read dt, v: 0.0)
+    return tensor_binary(cache: mut cache, op: MAX, a: x, b: zero)
+}
+
+// a dense/linear layer forward: relu(x @ W + b)  (tinygrad nn.Linear forward, sans bias-optional)
+fn linear_forward(cache: mut UOpCache, x: Int, w: Int, b: Int) -> Int {
+    let xw = tensor_matmul2d(cache: mut cache, a: x, b: w)
+    let xwb = tensor_binary(cache: mut cache, op: ADD, a: xw, b: b)
+    return tensor_relu(cache: mut cache, x: xwb)
+}

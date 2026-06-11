@@ -88,6 +88,12 @@ fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
         let d = List.get<List<Float>>(list: read cache.datas, index: di)
         return copy_float_list(l: read d)
     }
+    if op == CONST {
+        local out = List.new<Float>()
+        let v = node_const_float(cache: read cache, id: id)
+        List.push<Float>(list: mut out, value: read v)
+        return take out
+    }
     if op == RESHAPE {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return eval_tensor(cache: read cache, id: x)

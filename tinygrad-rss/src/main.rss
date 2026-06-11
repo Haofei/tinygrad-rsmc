@@ -16,31 +16,41 @@ fn pushi(l: mut List<Int>, v: Int) -> Unit {
     List.push<Int>(list: mut l, value: read v)
     return Unit
 }
+fn shp(a: Int, b: Int) -> fresh List<Int> {
+    local s = List.new<Int>()
+    pushi(l: mut s, v: a)
+    pushi(l: mut s, v: b)
+    return take s
+}
 fn main() -> Unit {
     local cache = cache_new()
     let f32 = dt_float32()
-    // A = [[1,2],[3,4]]  (2x2)
-    local sa = List.new<Int>()
-    pushi(l: mut sa, v: 2)
-    pushi(l: mut sa, v: 2)
-    local da = List.new<Float>()
-    pushf(l: mut da, v: 1.0)
-    pushf(l: mut da, v: 2.0)
-    pushf(l: mut da, v: 3.0)
-    pushf(l: mut da, v: 4.0)
-    let A = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sa, data: read da)
-    // B = [[5,6],[7,8]]  (2x2)
+    // x = [[1,2,3]] (1x3)
+    local sx = shp(a: 1, b: 3)
+    local dx = List.new<Float>()
+    pushf(l: mut dx, v: 1.0)
+    pushf(l: mut dx, v: 2.0)
+    pushf(l: mut dx, v: 3.0)
+    let x = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sx, data: read dx)
+    // W = [[1,0],[0,1],[1,1]] (3x2)
+    local sw = shp(a: 3, b: 2)
+    local dw = List.new<Float>()
+    pushf(l: mut dw, v: 1.0)
+    pushf(l: mut dw, v: 0.0)
+    pushf(l: mut dw, v: 0.0)
+    pushf(l: mut dw, v: 1.0)
+    pushf(l: mut dw, v: 1.0)
+    pushf(l: mut dw, v: 1.0)
+    let w = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sw, data: read dw)
+    // b = [10, 20] (shape [2])
     local sb = List.new<Int>()
     pushi(l: mut sb, v: 2)
-    pushi(l: mut sb, v: 2)
     local db = List.new<Float>()
-    pushf(l: mut db, v: 5.0)
-    pushf(l: mut db, v: 6.0)
-    pushf(l: mut db, v: 7.0)
-    pushf(l: mut db, v: 8.0)
-    let B = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sb, data: read db)
-    // A @ B = [[19,22],[43,50]]
-    let C = tensor_matmul2d(cache: mut cache, a: A, b: B)
-    show(label: read "matmul", l: read eval_tensor(cache: read cache, id: C))
+    pushf(l: mut db, v: 10.0)
+    pushf(l: mut db, v: 20.0)
+    let b = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sb, data: read db)
+    // relu(x@W + b): x@W = [4,5], +b = [14,25], relu = [14,25]
+    let y = linear_forward(cache: mut cache, x: x, w: w, b: b)
+    show(label: read "linear", l: read eval_tensor(cache: read cache, id: y))   // 14 25
     return Unit
 }

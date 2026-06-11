@@ -1,0 +1,80 @@
+// 1:1 port of tinygrad/dtype.py — core DType record, the scalar dtype registry, and
+// the dtypes predicates. Vectorized/Ptr/Image dtypes are added when codegen needs them.
+// fmt None in tinygrad is represented here as the empty string "".
+features: local
+
+struct DType derives(Clone, Eq) {
+    priority: Int,
+    bitsize: Int,
+    name: String,
+    fmt: String,
+    count: Int,
+}
+
+// (self.bitsize + 7) // 8
+fn dtype_itemsize(d: read DType) -> Int {
+    return (d.bitsize + 7) / 8
+}
+
+// scalar(): self._scalar if set else self.  For count==1 scalar dtypes this is self.
+fn dtype_scalar(d: read DType) -> fresh DType {
+    return DType(priority: d.priority, bitsize: d.bitsize, name: String.copy(value: read d.name),
+                 fmt: String.copy(value: read d.fmt), count: d.count)
+}
+
+// ---- the scalar dtype registry (dtypes.*) ----
+fn dt_void()    -> fresh DType { return DType(priority: -1, bitsize: 0,   name: "void",            fmt: "",  count: 1) }
+fn dt_weakint() -> fresh DType { return DType(priority: 0,  bitsize: 800, name: "weakint",         fmt: "",  count: 1) }
+fn dt_bool()    -> fresh DType { return DType(priority: 0,  bitsize: 1,   name: "bool",            fmt: "?", count: 1) }
+fn dt_int8()    -> fresh DType { return DType(priority: 1,  bitsize: 8,   name: "signed char",     fmt: "b", count: 1) }
+fn dt_uint8()   -> fresh DType { return DType(priority: 2,  bitsize: 8,   name: "unsigned char",   fmt: "B", count: 1) }
+fn dt_int16()   -> fresh DType { return DType(priority: 3,  bitsize: 16,  name: "short",           fmt: "h", count: 1) }
+fn dt_uint16()  -> fresh DType { return DType(priority: 4,  bitsize: 16,  name: "unsigned short",  fmt: "H", count: 1) }
+fn dt_int32()   -> fresh DType { return DType(priority: 5,  bitsize: 32,  name: "int",             fmt: "i", count: 1) }
+fn dt_uint32()  -> fresh DType { return DType(priority: 6,  bitsize: 32,  name: "unsigned int",    fmt: "I", count: 1) }
+fn dt_int64()   -> fresh DType { return DType(priority: 7,  bitsize: 64,  name: "long",            fmt: "q", count: 1) }
+fn dt_uint64()  -> fresh DType { return DType(priority: 8,  bitsize: 64,  name: "unsigned long",   fmt: "Q", count: 1) }
+fn dt_fp8e4m3() -> fresh DType { return DType(priority: 9,  bitsize: 8,   name: "float8_e4m3",     fmt: "",  count: 1) }
+fn dt_fp8e5m2() -> fresh DType { return DType(priority: 10, bitsize: 8,   name: "float8_e5m2",     fmt: "",  count: 1) }
+fn dt_float16() -> fresh DType { return DType(priority: 11, bitsize: 16,  name: "half",            fmt: "e", count: 1) }
+fn dt_bfloat16()-> fresh DType { return DType(priority: 12, bitsize: 16,  name: "__bf16",          fmt: "",  count: 1) }
+fn dt_float32() -> fresh DType { return DType(priority: 13, bitsize: 32,  name: "float",           fmt: "f", count: 1) }
+fn dt_float64() -> fresh DType { return DType(priority: 14, bitsize: 64,  name: "double",          fmt: "d", count: 1) }
+
+fn dt_default_float() -> fresh DType { return dt_float32() }
+fn dt_default_int()   -> fresh DType { return dt_int32() }
+
+// ---- dtypes predicates (operate on scalar().name) ----
+fn dtype_is_float(d: read DType) -> Bool {
+    if d.name == "float" { return true }
+    if d.name == "double" { return true }
+    if d.name == "half" { return true }
+    if d.name == "__bf16" { return true }
+    if d.name == "float8_e4m3" { return true }
+    if d.name == "float8_e5m2" { return true }
+    if d.name == "float8_e4m3fnuz" { return true }
+    if d.name == "float8_e5m2fnuz" { return true }
+    return false
+}
+
+fn dtype_is_unsigned(d: read DType) -> Bool {
+    if d.name == "unsigned char" { return true }
+    if d.name == "unsigned short" { return true }
+    if d.name == "unsigned int" { return true }
+    if d.name == "unsigned long" { return true }
+    return false
+}
+
+fn dtype_is_int(d: read DType) -> Bool {
+    if d.name == "signed char" { return true }
+    if d.name == "short" { return true }
+    if d.name == "int" { return true }
+    if d.name == "long" { return true }
+    if d.name == "weakint" { return true }
+    if dtype_is_unsigned(d: read d) { return true }
+    return false
+}
+
+fn dtype_is_bool(d: read DType) -> Bool {
+    return d.name == "bool"
+}

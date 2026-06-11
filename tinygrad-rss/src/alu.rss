@@ -1,0 +1,50 @@
+// 1:1 port of tinygrad/uop/ops.py exec_alu / python_alu — integer ALU constant folding.
+// Operands are integers (symbolic shape/index arithmetic). Float folding is added with rss
+// float-math. Comparisons return 1/0 (tinygrad bools fold to 0/1 under integer truncation).
+// Helpers floordiv/floormod/cdiv/cmod come from helpers.rss (exact Python semantics).
+features: local
+
+fn imax2(a: Int, b: Int) -> Int {
+    if a > b { return a }
+    return b
+}
+
+// exec_alu(op, operands) for integer operands.  arity: unary uses x[0]; binary x[0],x[1];
+// ternary (MULACC/WHERE) x[0],x[1],x[2].
+fn exec_alu_int(op: read Ops, operands: read List<Int>) -> Int {
+    let n = List.len<Int>(list: read operands)
+    let x = List.get<Int>(list: read operands, index: 0)
+    // unary
+    if op == NEG { return 0 - x }
+    if op == TRUNC { return x }
+    // binary / ternary need the rest
+    let y = exec_alu_arg(operands: read operands, index: 1)
+    let z = exec_alu_arg(operands: read operands, index: 2)
+    if op == ADD { return x + y }
+    if op == SUB { return x - y }
+    if op == MUL { return x * y }
+    if op == MAX { return imax2(a: x, b: y) }
+    if op == CMPLT { if x < y { return 1 } return 0 }
+    if op == CMPNE { if x != y { return 1 } return 0 }
+    if op == CMPEQ { if x == y { return 1 } return 0 }
+    if op == SHL { return x << y }
+    if op == SHR { return x >> y }
+    if op == AND { return x & y }
+    if op == OR { return x | y }
+    if op == XOR { return x ^ y }
+    if op == CDIV { return cdiv(x: x, y: y) }
+    if op == CMOD { return cmod(x: x, y: y) }
+    if op == FLOORDIV { return floordiv(x: x, y: y) }
+    if op == FLOORMOD { return floormod(x: x, y: y) }
+    if op == MULACC { return x * y + z }
+    if op == WHERE { if x != 0 { return y } return z }
+    return 0
+}
+
+// safe operand fetch (returns 0 if arity is shorter — matches unary calls passing 1 operand)
+fn exec_alu_arg(operands: read List<Int>, index: Int) -> Int {
+    if index < List.len<Int>(list: read operands) {
+        return List.get<Int>(list: read operands, index: index)
+    }
+    return 0
+}

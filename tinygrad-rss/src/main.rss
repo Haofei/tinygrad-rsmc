@@ -1,0 +1,19 @@
+features: local
+fn main() -> Unit {
+    local cache = cache_new()
+    let i32 = dt_int32()
+    let sp = mk_special(cache: mut cache, dt: read i32, size: 16)
+    // SUB(x, x) -> 0  (both operands the SAME interned id)
+    let sub = mk_alu2(cache: mut cache, op: SUB, dt: read i32, x: sp, y: sp)
+    let r1 = graph_rewrite(cache: mut cache, id: sub)
+    if node_is_const(cache: read cache, id: r1) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r1))) }  // 0
+    // FLOORDIV(x, x) -> 1
+    let fd = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read i32, x: sp, y: sp)
+    let r2 = graph_rewrite(cache: mut cache, id: fd)
+    if node_is_const(cache: read cache, id: r2) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r2))) }  // 1
+    // XOR(x, x) -> 0
+    let xr = mk_alu2(cache: mut cache, op: XOR, dt: read i32, x: sp, y: sp)
+    let r3 = graph_rewrite(cache: mut cache, id: xr)
+    if node_is_const(cache: read cache, id: r3) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r3))) }  // 0
+    return Unit
+}

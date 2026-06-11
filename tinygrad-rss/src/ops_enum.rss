@@ -1,0 +1,149 @@
+// 1:1 port of tinygrad/uop/__init__.py — the Ops enum + GroupOp groupings.
+// Declaration order matches tinygrad's FastEnum auto() order so ordinals/comparisons agree.
+features: local
+
+sum Ops derives(Clone, Eq, Hash) {
+    DEFINE_VAR BIND
+    SPECIAL
+    DEFINE_LOCAL DEFINE_REG
+    NOOP REWRITE_ERROR
+    PARAM FUNCTION CALL
+    PROGRAM LINEAR SOURCE BINARY
+    SINK AFTER GROUP
+    GEP STACK
+    TUPLE GETTUPLE
+    GETADDR
+    INDEX
+    LOAD STORE
+    WMMA SHAPED_WMMA
+    CAST BITCAST EXP2 LOG2 SIN
+    SQRT RECIPROCAL NEG TRUNC
+    ADD MUL SHL SHR CDIV MAX CMOD
+    CMPLT CMPNE CMPEQ
+    XOR OR AND
+    THREEFRY SUB FDIV POW
+    FLOORDIV FLOORMOD
+    WHERE MULACC
+    BARRIER RANGE IF END ENDIF WAIT
+    CONST
+    CUSTOM CUSTOMI
+    INS
+    UNIQUE DEVICE
+    LUNIQUE
+    CONTIGUOUS CONTIGUOUS_BACKWARD DETACH
+    STAGE COPY BUFFER SLICE MSELECT MSTACK CUSTOM_FUNCTION
+    RESHAPE PERMUTE EXPAND PAD SHRINK FLIP
+    MULTI
+    REDUCE ALLREDUCE
+    UNROLL CONTRACT VCAT PTRCAT
+}
+
+// GroupOp.Unary
+fn group_unary(op: read Ops) -> Bool {
+    if op == EXP2 { return true }
+    if op == LOG2 { return true }
+    if op == SIN { return true }
+    if op == SQRT { return true }
+    if op == RECIPROCAL { return true }
+    if op == NEG { return true }
+    if op == TRUNC { return true }
+    return false
+}
+
+// GroupOp.Binary
+fn group_binary(op: read Ops) -> Bool {
+    if op == ADD { return true }
+    if op == MUL { return true }
+    if op == CDIV { return true }
+    if op == MAX { return true }
+    if op == CMOD { return true }
+    if op == CMPLT { return true }
+    if op == CMPNE { return true }
+    if op == CMPEQ { return true }
+    if op == XOR { return true }
+    if op == SHL { return true }
+    if op == SHR { return true }
+    if op == OR { return true }
+    if op == AND { return true }
+    if op == THREEFRY { return true }
+    if op == SUB { return true }
+    if op == FDIV { return true }
+    if op == POW { return true }
+    if op == FLOORDIV { return true }
+    if op == FLOORMOD { return true }
+    return false
+}
+
+// GroupOp.Ternary
+fn group_ternary(op: read Ops) -> Bool {
+    if op == WHERE { return true }
+    if op == MULACC { return true }
+    return false
+}
+
+// GroupOp.ALU = Unary | Binary | Ternary
+fn group_alu(op: read Ops) -> Bool {
+    if group_unary(op: read op) { return true }
+    if group_binary(op: read op) { return true }
+    if group_ternary(op: read op) { return true }
+    return false
+}
+
+// GroupOp.Elementwise = ALU | {CAST, BITCAST}
+fn group_elementwise(op: read Ops) -> Bool {
+    if group_alu(op: read op) { return true }
+    if op == CAST { return true }
+    if op == BITCAST { return true }
+    return false
+}
+
+// GroupOp.Commutative
+fn group_commutative(op: read Ops) -> Bool {
+    if op == ADD { return true }
+    if op == MUL { return true }
+    if op == MAX { return true }
+    if op == CMPNE { return true }
+    if op == CMPEQ { return true }
+    if op == XOR { return true }
+    if op == AND { return true }
+    if op == OR { return true }
+    return false
+}
+
+// GroupOp.Associative
+fn group_associative(op: read Ops) -> Bool {
+    if op == ADD { return true }
+    if op == MUL { return true }
+    if op == AND { return true }
+    if op == OR { return true }
+    if op == MAX { return true }
+    return false
+}
+
+// GroupOp.Comparison
+fn group_comparison(op: read Ops) -> Bool {
+    if op == CMPLT { return true }
+    if op == CMPNE { return true }
+    if op == CMPEQ { return true }
+    return false
+}
+
+// GroupOp.Movement
+fn group_movement(op: read Ops) -> Bool {
+    if op == RESHAPE { return true }
+    if op == EXPAND { return true }
+    if op == PERMUTE { return true }
+    if op == PAD { return true }
+    if op == SHRINK { return true }
+    if op == FLIP { return true }
+    return false
+}
+
+// GroupOp.Irreducible
+fn group_irreducible(op: read Ops) -> Bool {
+    if op == CONST { return true }
+    if op == DEFINE_VAR { return true }
+    if op == SPECIAL { return true }
+    if op == RANGE { return true }
+    return false
+}

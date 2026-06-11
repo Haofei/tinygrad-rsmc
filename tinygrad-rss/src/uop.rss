@@ -1,0 +1,169 @@
+// 1:1 port of tinygrad/uop/ops.py — the UOp IR node, as an INTERNED shared DAG.
+// tinygrad interns via a global UOpMetaClass cache so identical subgraphs are the same object.
+// rss has no global mutable state, so the cache is an explicit `UOpCache` struct threaded as `mut`
+// (same dedup algorithm; only the cache's location differs). src are node ids into the cache table
+// — the rss representation of tinygrad's "tuple of references to shared UOps".
+features: local
+
+sum Arg derives(Clone) {
+    ArgNone
+    ArgInt(value: Int)
+    ArgFloat(value: Float)
+    ArgBool(value: Bool)
+    ArgStr(text: String)
+}
+
+// op:Ops, dtype:DType, src:tuple[UOp,...] (child ids), arg:Any (Arg)
+struct UOp derives(Clone) {
+    op: Ops,
+    dtype: DType,
+    src: List<Int>,
+    arg: Arg,
+}
+
+// Structural identity key. Float isn't Eq/Hash, so arg is flattened (kind + int/float-as-string/str).
+struct NodeKey derives(Clone, Eq, Hash) {
+    op: Ops,
+    dtype: String,
+    src: List<Int>,
+    ak: Int,
+    ai: Int,
+    af: String,
+    sv: String,
+}
+
+struct UOpCache {
+    nodes: List<UOp>,
+    index: Map<NodeKey, Int>,
+}
+
+fn cache_new() -> fresh UOpCache {
+    local n = List.new<UOp>()
+    local ix = Map.new<NodeKey, Int>()
+    return UOpCache(nodes: take n, index: take ix)
+}
+
+fn cache_len(cache: read UOpCache) -> Int { return List.len<UOp>(list: read cache.nodes) }
+
+fn bool_to_int(b: Bool) -> Int { if b { return 1 } return 0 }
+
+fn copy_int_list(l: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read l) {
+        let v = List.get<Int>(list: read l, index: i)
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn make_key(op: Ops, dt: read DType, src: read List<Int>, arg: read Arg) -> fresh NodeKey {
+    let dtn = String.copy(value: read dt.name)
+    local s = copy_int_list(l: read src)
+    match arg {
+        ArgNone => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 0, ai: 0, af: "", sv: "") }
+        ArgInt(v) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 1, ai: v, af: "", sv: "") }
+        ArgFloat(f) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 2, ai: 0, af: Float.to_string(value: read f), sv: "") }
+        ArgBool(b) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 3, ai: bool_to_int(b: b), af: "", sv: "") }
+        ArgStr(t) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 4, ai: 0, af: "", sv: String.copy(value: read t)) }
+    }
+}
+
+// UOpMetaClass.__call__: dedup by structural key, return the (shared) node id.
+fn intern(cache: mut UOpCache, op: Ops, dt: read DType, src: take List<Int>, arg: take Arg) -> Int {
+    let key = make_key(op: op.clone(), dt: read dt, src: read src, arg: read arg)
+    match Map.get<NodeKey, Int>(map: read cache.index, key: read key) {
+        Some(id) => { return id }
+        None => {
+            let id = cache_len(cache: read cache)
+            let node = UOp(op: op, dtype: dtype_scalar(d: read dt), src: take src, arg: take arg)
+            List.push<UOp>(list: mut cache.nodes, value: read node)
+            Map.insert<NodeKey, Int>(map: mut cache.index, key: read key, value: read id)
+            return id
+        }
+    }
+}
+
+// UOp.const(dtype, int_value)
+fn mk_const_int(cache: mut UOpCache, dt: read DType, v: Int) -> Int {
+    local e = List.new<Int>()
+    local a = ArgInt(value: v)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
+}
+
+// UOp.const(dtype, float_value)
+fn mk_const_float(cache: mut UOpCache, dt: read DType, v: Float) -> Int {
+    local e = List.new<Int>()
+    local a = ArgFloat(value: v)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
+}
+
+// binary ALU: UOp(op, dtype, (x, y), None) — x,y are node ids
+fn mk_alu2(cache: mut UOpCache, op: Ops, dt: read DType, x: Int, y: Int) -> Int {
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read y)
+    local a = ArgNone
+    return intern(cache: mut cache, op: op, dt: read dt, src: take e, arg: take a)
+}
+
+// a non-const leaf (SPECIAL) whose value range is [0, size-1]: src[0] = the size CONST.
+fn mk_special(cache: mut UOpCache, dt: read DType, size: Int) -> Int {
+    let sz = mk_const_int(cache: mut cache, dt: read dt, v: size)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sz)
+    local a = ArgNone
+    return intern(cache: mut cache, op: SPECIAL, dt: read dt, src: take e, arg: take a)
+}
+
+// --- accessors over (cache, id) ---
+fn node_op(cache: read UOpCache, id: Int) -> fresh Ops {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return n.op.clone()
+}
+fn node_dtype(cache: read UOpCache, id: Int) -> fresh DType {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return dtype_scalar(d: read n.dtype)
+}
+fn node_num_src(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return List.len<Int>(list: read n.src)
+}
+fn node_src_id(cache: read UOpCache, id: Int, k: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return List.get<Int>(list: read n.src, index: k)
+}
+fn node_is_const(cache: read UOpCache, id: Int) -> Bool {
+    let o = node_op(cache: read cache, id: id)
+    return o == CONST
+}
+// integer CONST value (ArgInt), else 0
+fn node_const_int(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgInt(v) => { return v }
+        ArgNone => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+    }
+}
+fn node_is_const_int(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    if n.op == CONST {
+        match n.arg {
+            ArgInt(v) => { return true }
+            ArgNone => { return false }
+            ArgFloat(f) => { return false }
+            ArgBool(b) => { return false }
+            ArgStr(t) => { return false }
+        }
+    }
+    return false
+}
+
+fn node_arg(cache: read UOpCache, id: Int) -> fresh Arg {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return n.arg.clone()
+}

@@ -1,0 +1,125 @@
+// 1:1 port of the core math/data helpers from tinygrad/helpers.py.
+// NOTE: rss integer `/` and `%` truncate toward zero (C-style), but tinygrad relies on
+// Python floor-division/modulo. floor_div/floor_mod below reproduce Python's `//`/`%`
+// exactly, and all of tinygrad's helpers that use `//`/`%` are ported on top of them.
+features: local
+
+// Python floor division: x // y  (rounds toward -inf)
+fn floor_div(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a % b
+    if r != 0 {
+        let rneg = r < 0
+        let bneg = b < 0
+        if rneg != bneg { return q - 1 }
+    }
+    return q
+}
+
+// Python modulo: x % y  (result has sign of divisor)
+fn floor_mod(a: Int, b: Int) -> Int {
+    let r = a % b
+    if r != 0 {
+        let rneg = r < 0
+        let bneg = b < 0
+        if rneg != bneg { return r + b }
+    }
+    return r
+}
+
+fn iabs(x: Int) -> Int {
+    if x < 0 { return 0 - x }
+    return x
+}
+
+// prod(x) = functools.reduce(operator.mul, x, 1)
+fn prod(x: read List<Int>) -> Int {
+    let mut acc = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read x) {
+        acc = acc * List.get<Int>(list: read x, index: i)
+        i = i + 1
+    }
+    return acc
+}
+
+// ceildiv(num, amt) = -(num // -amt)   (int branch)
+fn ceildiv(num: Int, amt: Int) -> Int {
+    return 0 - floor_div(a: num, b: 0 - amt)
+}
+
+// round_up(num, amt) = (num+amt-1)//amt * amt
+fn round_up(num: Int, amt: Int) -> Int {
+    return floor_div(a: num + amt - 1, b: amt) * amt
+}
+
+// cdiv(x, y) = abs(x)//abs(y)*sign(x*y) if y != 0 else 0   (C-style trunc division)
+fn cdiv(x: Int, y: Int) -> Int {
+    if y == 0 { return 0 }
+    let m = iabs(x: x) / iabs(x: y)
+    if (x * y) < 0 { return 0 - m }
+    return m
+}
+
+// cmod(x, y) = x - cdiv(x,y)*y
+fn cmod(x: Int, y: Int) -> Int {
+    return x - cdiv(x: x, y: y) * y
+}
+
+// floordiv(x, y) = x // y if y != 0 else 0
+fn floordiv(x: Int, y: Int) -> Int {
+    if y == 0 { return 0 }
+    return floor_div(a: x, b: y)
+}
+
+// floormod(x, y) = x - floordiv(x,y)*y
+fn floormod(x: Int, y: Int) -> Int {
+    return x - floordiv(x: x, y: y) * y
+}
+
+// all_same(items) = all(x == items[0] for x in items)   (true for empty)
+fn all_same(items: read List<Int>) -> Bool {
+    let n = List.len<Int>(list: read items)
+    if n == 0 { return true }
+    let first = List.get<Int>(list: read items, index: 0)
+    let mut i = 1
+    while i < n {
+        if List.get<Int>(list: read items, index: i) != first { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// dedup(x) = list(dict.fromkeys(x))  (retains order)
+fn dedup(x: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read x) {
+        let v = List.get<Int>(list: read x, index: i)
+        let mut seen = false
+        let mut j = 0
+        while j < List.len<Int>(list: read out) {
+            if List.get<Int>(list: read out, index: j) == v { seen = true }
+            j = j + 1
+        }
+        if seen == false { List.push<Int>(list: mut out, value: read v) }
+        i = i + 1
+    }
+    return take out
+}
+
+// flatten(l) = [item for sublist in l for item in sublist]
+fn flatten(l: read List<List<Int>>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<List<Int>>(list: read l) {
+        let sub = List.get<List<Int>>(list: read l, index: i)
+        let mut j = 0
+        while j < List.len<Int>(list: read sub) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read sub, index: j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return take out
+}

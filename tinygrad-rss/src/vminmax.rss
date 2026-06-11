@@ -1,0 +1,71 @@
+// 1:1 port of tinygrad/uop/ops.py UOp._min_max (vmin/vmax), integer cases, over the interned DAG.
+// Operates on (cache, id): value-range inference [lo, hi] used by symbolic for bound-dependent rules.
+features: local
+
+struct VRange derives(Clone) {
+    lo: Int,
+    hi: Int,
+}
+
+fn b2i(b: Bool) -> Int { if b { return 1 } return 0 }
+fn imin2(a: Int, b: Int) -> Int { if a < b { return a } return b }
+fn imin4(a: Int, b: Int, c: Int, d: Int) -> Int { return imin2(a: imin2(a: a, b: b), b: imin2(a: c, b: d)) }
+fn imax4(a: Int, b: Int, c: Int, d: Int) -> Int { return imax2(a: imax2(a: a, b: b), b: imax2(a: c, b: d)) }
+
+// DType.min/max for integers. Signed: [-2^(n-1), 2^(n-1)-1]; unsigned: [0, 2^n-1]; 64-bit clamps to i64.
+fn dtype_imin(d: read DType) -> Int {
+    if dtype_is_unsigned(d: read d) { return 0 }
+    if d.bitsize >= 64 { return 0 - 9223372036854775807 - 1 }
+    return 0 - (1 << (d.bitsize - 1))
+}
+fn dtype_imax(d: read DType) -> Int {
+    if d.bitsize >= 64 { return 9223372036854775807 }
+    if dtype_is_unsigned(d: read d) { return (1 << d.bitsize) - 1 }
+    return (1 << (d.bitsize - 1)) - 1
+}
+
+fn uop_min_max(cache: read UOpCache, id: Int) -> fresh VRange {
+    let op = node_op(cache: read cache, id: id)
+    // CONST: exact single value
+    if op == CONST {
+        if node_is_const_int(cache: read cache, id: id) {
+            let v = node_const_int(cache: read cache, id: id)
+            return VRange(lo: v, hi: v)
+        }
+    }
+    // SPECIAL/RANGE: [0, (src[0]-1).vmax] = [0, size_max - 1]
+    if op == SPECIAL {
+        if node_num_src(cache: read cache, id: id) == 1 {
+            let szid = node_src_id(cache: read cache, id: id, k: 0)
+            let rsz = uop_min_max(cache: read cache, id: szid)
+            return VRange(lo: 0, hi: rsz.hi - 1)
+        }
+    }
+    // binary integer ops
+    if group_binary(op: read op) {
+        if node_num_src(cache: read cache, id: id) == 2 {
+            let s0 = node_src_id(cache: read cache, id: id, k: 0)
+            let s1 = node_src_id(cache: read cache, id: id, k: 1)
+            let r0 = uop_min_max(cache: read cache, id: s0)
+            let r1 = uop_min_max(cache: read cache, id: s1)
+            if op == ADD { return VRange(lo: r0.lo + r1.lo, hi: r0.hi + r1.hi) }
+            if op == SUB { return VRange(lo: r0.lo - r1.hi, hi: r0.hi - r1.lo) }
+            if op == MUL {
+                let a = r0.lo * r1.lo
+                let b = r0.lo * r1.hi
+                let c = r0.hi * r1.lo
+                let e = r0.hi * r1.hi
+                return VRange(lo: imin4(a: a, b: b, c: c, d: e), hi: imax4(a: a, b: b, c: c, d: e))
+            }
+            if op == MAX { return VRange(lo: imax2(a: r0.lo, b: r1.lo), hi: imax2(a: r0.hi, b: r1.hi)) }
+            if op == CMPLT {
+                let lt_lo = r0.hi < r1.lo
+                let lt_hi = r0.lo < r1.hi
+                return VRange(lo: b2i(b: lt_lo), hi: b2i(b: lt_hi))
+            }
+        }
+    }
+    // default: full dtype range
+    let dt = node_dtype(cache: read cache, id: id)
+    return VRange(lo: dtype_imin(d: read dt), hi: dtype_imax(d: read dt))
+}

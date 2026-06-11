@@ -11,6 +11,7 @@ sum Arg derives(Clone) {
     ArgFloat(value: Float)
     ArgBool(value: Bool)
     ArgStr(text: String)
+    ArgInts(values: List<Int>)
 }
 
 // op:Ops, dtype:DType, src:tuple[UOp,...] (child ids), arg:Any (Arg)
@@ -30,6 +31,7 @@ struct NodeKey derives(Clone, Eq, Hash) {
     ai: Int,
     af: String,
     sv: String,
+    kd: List<Int>,
 }
 
 struct UOpCache {
@@ -61,12 +63,27 @@ fn copy_int_list(l: read List<Int>) -> fresh List<Int> {
 fn make_key(op: Ops, dt: read DType, src: read List<Int>, arg: read Arg) -> fresh NodeKey {
     let dtn = String.copy(value: read dt.name)
     local s = copy_int_list(l: read src)
+    local kd0 = List.new<Int>()
     match arg {
-        ArgNone => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 0, ai: 0, af: "", sv: "") }
-        ArgInt(v) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 1, ai: v, af: "", sv: "") }
-        ArgFloat(f) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 2, ai: 0, af: Float.to_string(value: read f), sv: "") }
-        ArgBool(b) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 3, ai: bool_to_int(b: b), af: "", sv: "") }
-        ArgStr(t) => { return NodeKey(op: op, dtype: dtn, src: take s, ak: 4, ai: 0, af: "", sv: String.copy(value: read t)) }
+        ArgNone => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 0, ai: 0, af: "", sv: "", kd: take kd0)
+        }
+        ArgInt(v) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 1, ai: v, af: "", sv: "", kd: take kd0)
+        }
+        ArgFloat(f) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 2, ai: 0, af: Float.to_string(value: read f), sv: "", kd: take kd0)
+        }
+        ArgBool(b) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 3, ai: bool_to_int(b: b), af: "", sv: "", kd: take kd0)
+        }
+        ArgStr(t) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 4, ai: 0, af: "", sv: String.copy(value: read t), kd: take kd0)
+        }
+        ArgInts(vals) => {
+            local d = copy_int_list(l: read vals)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 5, ai: 0, af: "", sv: "", kd: take d)
+        }
     }
 }
 
@@ -147,6 +164,7 @@ fn node_const_int(cache: read UOpCache, id: Int) -> Int {
         ArgFloat(f) => { return 0 }
         ArgBool(b) => { return 0 }
         ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
     }
 }
 fn node_is_const_int(cache: read UOpCache, id: Int) -> Bool {
@@ -158,6 +176,7 @@ fn node_is_const_int(cache: read UOpCache, id: Int) -> Bool {
             ArgFloat(f) => { return false }
             ArgBool(b) => { return false }
             ArgStr(t) => { return false }
+            ArgInts(vals) => { return false }
         }
     }
     return false
@@ -166,4 +185,78 @@ fn node_is_const_int(cache: read UOpCache, id: Int) -> Bool {
 fn node_arg(cache: read UOpCache, id: Int) -> fresh Arg {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
     return n.arg.clone()
+}
+
+// --- shapes (this tinygrad encodes shape as a child UOp; all-int case) ---
+
+// the ArgInts payload of a vector-const node (else empty)
+fn node_argints(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    local e = List.new<Int>()
+    match n.arg {
+        ArgInts(vals) => { return copy_int_list(l: read vals) }
+        ArgNone => { return take e }
+        ArgInt(v) => { return take e }
+        ArgFloat(f) => { return take e }
+        ArgBool(b) => { return take e }
+        ArgStr(t) => { return take e }
+    }
+}
+
+// shape_to_shape_arg: encode an all-int shape as a CONST vector node (tinygrad uses weakint.vec)
+fn shape_to_shape_arg(cache: mut UOpCache, dims: read List<Int>) -> Int {
+    let i32 = dt_int32()
+    local e = List.new<Int>()
+    local d = copy_int_list(l: read dims)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: CONST, dt: read i32, src: take e, arg: take a)
+}
+
+// a BUFFER leaf carrying its shape as src[0] (a shape-const)
+fn mk_buffer(cache: mut UOpCache, dt: read DType, shape: read List<Int>) -> Int {
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take e, arg: take a)
+}
+
+// RESHAPE/EXPAND: src[1] = the target shape-const
+fn mk_reshape(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: RESHAPE, dt: read dt, src: take e, arg: take a)
+}
+fn mk_expand(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: EXPAND, dt: read dt, src: take e, arg: take a)
+}
+
+// PERMUTE/FLIP: the axis order is the arg
+fn mk_permute(cache: mut UOpCache, x: Int, perm: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read perm)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: PERMUTE, dt: read dt, src: take e, arg: take a)
+}
+
+// reduce-sum over axes: REDUCE node, arg = the axes (ArgInts). (tinygrad REDUCE_AXIS; sum = ADD-reduce.)
+fn mk_sum(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read axes)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take e, arg: take a)
 }

@@ -123,3 +123,26 @@ fn flatten(l: read List<List<Int>>) -> fresh List<Int> {
     }
     return take out
 }
+
+// strides_for_shape (tinygrad helpers.py): row-major strides; canonicalize_strides folds in
+// (stride 0 where the dim is 1). stride[i] = product(shape[i+1:]), or 0 if shape[i]==1.
+fn strides_for_shape(shape: read List<Int>) -> fresh List<Int> {
+    let n = List.len<Int>(list: read shape)
+    local strides = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        let mut prod = 1
+        let mut j = i + 1
+        while j < n {
+            let d = List.get<Int>(list: read shape, index: j)
+            prod = prod * d
+            j = j + 1
+        }
+        let s = List.get<Int>(list: read shape, index: i)
+        let mut sv = prod
+        if s == 1 { sv = 0 }
+        List.push<Int>(list: mut strides, value: read sv)
+        i = i + 1
+    }
+    return take strides
+}

@@ -1,0 +1,23 @@
+// Tensor surface over the interned UOp graph. A "tensor" is a node id in the cache; ops build graph.
+// (tinygrad Tensor wraps a UOp; here the cache is threaded explicitly.) Broadcasting binary op.
+features: local
+
+// _broadcast_to: reshape x to align its ndims (left-pad 1s), then EXPAND to the target shape.
+fn broadcast_to(cache: mut UOpCache, x: Int, target: read List<Int>) -> Int {
+    local xs = uop_shape(cache: read cache, id: x)
+    let nt = List.len<Int>(list: read target)
+    local aligned = align_left(s: read xs, max_dim: nt)
+    let r = mk_reshape(cache: mut cache, x: x, new_shape: read aligned)
+    return mk_expand(cache: mut cache, x: r, new_shape: read target)
+}
+
+// broadcasting binary op (tinygrad Tensor._apply_uop with _broadcast_to on both operands).
+fn tensor_binary(cache: mut UOpCache, op: Ops, a: Int, b: Int) -> Int {
+    local sa = uop_shape(cache: read cache, id: a)
+    local sb = uop_shape(cache: read cache, id: b)
+    local bshape = broadcast_shape(s1: read sa, s2: read sb)
+    let a2 = broadcast_to(cache: mut cache, x: a, target: read bshape)
+    let b2 = broadcast_to(cache: mut cache, x: b, target: read bshape)
+    let dt = node_dtype(cache: read cache, id: a2)
+    return mk_alu2(cache: mut cache, op: op, dt: read dt, x: a2, y: b2)
+}

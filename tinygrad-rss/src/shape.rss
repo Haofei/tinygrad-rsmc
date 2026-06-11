@@ -1,0 +1,103 @@
+// UOp.shape inference (this tinygrad folds ShapeTracker into the graph: shape is a UOp property).
+// All-int slice: BUFFER carries its shape (src[0]); RESHAPE/EXPAND take it from src[1]; PERMUTE
+// permutes src[0].shape by its arg; elementwise/binary propagate src[0].shape; CONST is scalar.
+features: local
+
+fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op == BUFFER {
+        let sh = node_src_id(cache: read cache, id: id, k: 0)
+        return node_argints(cache: read cache, id: sh)
+    }
+    if op == RESHAPE {
+        let sh = node_src_id(cache: read cache, id: id, k: 1)
+        return node_argints(cache: read cache, id: sh)
+    }
+    if op == EXPAND {
+        let sh = node_src_id(cache: read cache, id: id, k: 1)
+        return node_argints(cache: read cache, id: sh)
+    }
+    if op == PERMUTE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local base = uop_shape(cache: read cache, id: x)
+        local perm = node_argints(cache: read cache, id: id)
+        local out = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read perm) {
+            let axis = List.get<Int>(list: read perm, index: i)
+            let d = List.get<Int>(list: read base, index: axis)
+            List.push<Int>(list: mut out, value: read d)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == REDUCE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local base = uop_shape(cache: read cache, id: x)
+        local axes = node_argints(cache: read cache, id: id)
+        local out = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read base) {
+            let mut d = List.get<Int>(list: read base, index: i)
+            let mut j = 0
+            while j < List.len<Int>(list: read axes) {
+                let ax = List.get<Int>(list: read axes, index: j)
+                if ax == i { d = 1 }
+                j = j + 1
+            }
+            List.push<Int>(list: mut out, value: read d)
+            i = i + 1
+        }
+        return take out
+    }
+    // elementwise / binary: shape of src[0]
+    if group_binary(op: read op) {
+        if node_num_src(cache: read cache, id: id) >= 1 {
+            let x = node_src_id(cache: read cache, id: id, k: 0)
+            return uop_shape(cache: read cache, id: x)
+        }
+    }
+    // CONST / scalar / unhandled: empty shape
+    local empty = List.new<Int>()
+    return take empty
+}
+
+// _align_left (tinygrad uop/ops.py): left-pad a shape with 1s to max_dim (right-aligned broadcast)
+fn align_left(s: read List<Int>, max_dim: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let pad = max_dim - List.len<Int>(list: read s)
+    let mut i = 0
+    while i < pad {
+        let one = 1
+        List.push<Int>(list: mut out, value: read one)
+        i = i + 1
+    }
+    let mut j = 0
+    while j < List.len<Int>(list: read s) {
+        let v = List.get<Int>(list: read s, index: j)
+        List.push<Int>(list: mut out, value: read v)
+        j = j + 1
+    }
+    return take out
+}
+
+// _broadcast_shape (binary): per-dim 0 if any 0, else max; shapes right-aligned.
+fn broadcast_shape(s1: read List<Int>, s2: read List<Int>) -> fresh List<Int> {
+    let n1 = List.len<Int>(list: read s1)
+    let n2 = List.len<Int>(list: read s2)
+    let md = imax2(a: n1, b: n2)
+    local a1 = align_left(s: read s1, max_dim: md)
+    local a2 = align_left(s: read s2, max_dim: md)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < md {
+        let d1 = List.get<Int>(list: read a1, index: i)
+        let d2 = List.get<Int>(list: read a2, index: i)
+        let mut r = imax2(a: d1, b: d2)
+        if d1 == 0 { r = 0 }
+        if d2 == 0 { r = 0 }
+        List.push<Int>(list: mut out, value: read r)
+        i = i + 1
+    }
+    return take out
+}

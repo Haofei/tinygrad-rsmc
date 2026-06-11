@@ -1,19 +1,33 @@
 features: local
+fn lit3(a: Int, b: Int, c: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push<Int>(list: mut l, value: read a)
+    List.push<Int>(list: mut l, value: read b)
+    List.push<Int>(list: mut l, value: read c)
+    return take l
+}
+fn lit1(a: Int) -> fresh List<Int> {
+    local l = List.new<Int>()
+    List.push<Int>(list: mut l, value: read a)
+    return take l
+}
+fn show(label: read String, l: read List<Int>) -> Unit {
+    Log.write(message: read label)
+    let mut i = 0
+    while i < List.len<Int>(list: read l) {
+        Log.write(message: read String.from_int(value: List.get<Int>(list: read l, index: i)))
+        i = i + 1
+    }
+    return Unit
+}
 fn main() -> Unit {
     local cache = cache_new()
-    let i32 = dt_int32()
-    let sp = mk_special(cache: mut cache, dt: read i32, size: 16)
-    // SUB(x, x) -> 0  (both operands the SAME interned id)
-    let sub = mk_alu2(cache: mut cache, op: SUB, dt: read i32, x: sp, y: sp)
-    let r1 = graph_rewrite(cache: mut cache, id: sub)
-    if node_is_const(cache: read cache, id: r1) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r1))) }  // 0
-    // FLOORDIV(x, x) -> 1
-    let fd = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read i32, x: sp, y: sp)
-    let r2 = graph_rewrite(cache: mut cache, id: fd)
-    if node_is_const(cache: read cache, id: r2) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r2))) }  // 1
-    // XOR(x, x) -> 0
-    let xr = mk_alu2(cache: mut cache, op: XOR, dt: read i32, x: sp, y: sp)
-    let r3 = graph_rewrite(cache: mut cache, id: xr)
-    if node_is_const(cache: read cache, id: r3) { Log.write(message: read String.from_int(value: node_const_int(cache: read cache, id: r3))) }  // 0
+    let f32 = dt_float32()
+    local sh = lit3(a: 2, b: 3, c: 4)
+    let buf = mk_buffer(cache: mut cache, dt: read f32, shape: read sh)
+    // sum over axis 1 -> [2,1,4]
+    local ax = lit1(a: 1)
+    let s = mk_sum(cache: mut cache, x: buf, axes: read ax)
+    show(label: read "sum", l: read uop_shape(cache: read cache, id: s))   // 2 1 4
     return Unit
 }

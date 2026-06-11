@@ -37,12 +37,14 @@ struct NodeKey derives(Clone, Eq, Hash) {
 struct UOpCache {
     nodes: List<UOp>,
     index: Map<NodeKey, Int>,
+    datas: List<List<Float>>,
 }
 
 fn cache_new() -> fresh UOpCache {
     local n = List.new<UOp>()
     local ix = Map.new<NodeKey, Int>()
-    return UOpCache(nodes: take n, index: take ix)
+    local d = List.new<List<Float>>()
+    return UOpCache(nodes: take n, index: take ix, datas: take d)
 }
 
 fn cache_len(cache: read UOpCache) -> Int { return List.len<UOp>(list: read cache.nodes) }
@@ -260,3 +262,29 @@ fn mk_sum(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
     local a = ArgInts(values: take d)
     return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take e, arg: take a)
 }
+
+// float CONST value (ArgFloat), else 0.0
+fn node_const_float(cache: read UOpCache, id: Int) -> Float {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgFloat(v) => { return v }
+        ArgNone => { return 0.0 }
+        ArgInt(v) => { return 0.0 }
+        ArgBool(b) => { return 0.0 }
+        ArgStr(t) => { return 0.0 }
+        ArgInts(vals) => { return 0.0 }
+    }
+}
+
+// a data-carrying BUFFER leaf: data stored in cache.datas[idx], arg = ArgInt(idx), src[0] = shape.
+// (idx makes each buffer unique, so they aren't deduped by data — matches tinygrad's UNIQUE buffers.)
+fn mk_data_tensor(cache: mut UOpCache, dt: read DType, shape: read List<Int>, data: read List<Float>) -> Int {
+    let di = List.len<List<Float>>(list: read cache.datas)
+    List.push<List<Float>>(list: mut cache.datas, value: read data)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgInt(value: di)
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take e, arg: take a)
+}
+fn node_data_idx(cache: read UOpCache, id: Int) -> Int { return node_const_int(cache: read cache, id: id) }

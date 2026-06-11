@@ -1,28 +1,46 @@
 features: local
-fn lit2(a: Int, b: Int) -> fresh List<Int> {
-    local l = List.new<Int>()
-    List.push<Int>(list: mut l, value: read a)
-    List.push<Int>(list: mut l, value: read b)
-    return take l
-}
-fn show(label: read String, l: read List<Int>) -> Unit {
+fn show(label: read String, l: read List<Float>) -> Unit {
     Log.write(message: read label)
     let mut i = 0
-    while i < List.len<Int>(list: read l) {
-        Log.write(message: read String.from_int(value: List.get<Int>(list: read l, index: i)))
+    while i < List.len<Float>(list: read l) {
+        Log.write(message: read Float.to_string(value: read List.get<Float>(list: read l, index: i)))
         i = i + 1
     }
+    return Unit
+}
+fn pushf(l: mut List<Float>, v: Float) -> Unit {
+    List.push<Float>(list: mut l, value: read v)
+    return Unit
+}
+fn pushi(l: mut List<Int>, v: Int) -> Unit {
+    List.push<Int>(list: mut l, value: read v)
     return Unit
 }
 fn main() -> Unit {
     local cache = cache_new()
     let f32 = dt_float32()
-    local sa = lit2(a: 2, b: 3)
-    local sb = lit2(a: 3, b: 4)
-    let a = mk_buffer(cache: mut cache, dt: read f32, shape: read sa)
-    let b = mk_buffer(cache: mut cache, dt: read f32, shape: read sb)
-    let c = tensor_matmul2d(cache: mut cache, a: a, b: b)   // [2,3]@[3,4] -> [2,4]
-    show(label: read "matmul", l: read uop_shape(cache: read cache, id: c))   // 2 4
-    Log.write(message: read String.from_int(value: cache_len(cache: read cache)))
+    // A = [[1,2],[3,4]]  (2x2)
+    local sa = List.new<Int>()
+    pushi(l: mut sa, v: 2)
+    pushi(l: mut sa, v: 2)
+    local da = List.new<Float>()
+    pushf(l: mut da, v: 1.0)
+    pushf(l: mut da, v: 2.0)
+    pushf(l: mut da, v: 3.0)
+    pushf(l: mut da, v: 4.0)
+    let A = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sa, data: read da)
+    // B = [[5,6],[7,8]]  (2x2)
+    local sb = List.new<Int>()
+    pushi(l: mut sb, v: 2)
+    pushi(l: mut sb, v: 2)
+    local db = List.new<Float>()
+    pushf(l: mut db, v: 5.0)
+    pushf(l: mut db, v: 6.0)
+    pushf(l: mut db, v: 7.0)
+    pushf(l: mut db, v: 8.0)
+    let B = mk_data_tensor(cache: mut cache, dt: read f32, shape: read sb, data: read db)
+    // A @ B = [[19,22],[43,50]]
+    let C = tensor_matmul2d(cache: mut cache, a: A, b: B)
+    show(label: read "matmul", l: read eval_tensor(cache: read cache, id: C))
     return Unit
 }

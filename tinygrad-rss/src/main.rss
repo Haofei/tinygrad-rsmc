@@ -1,14 +1,8 @@
 features: local
-fn lit3(a: Int, b: Int, c: Int) -> fresh List<Int> {
+fn lit2(a: Int, b: Int) -> fresh List<Int> {
     local l = List.new<Int>()
     List.push<Int>(list: mut l, value: read a)
     List.push<Int>(list: mut l, value: read b)
-    List.push<Int>(list: mut l, value: read c)
-    return take l
-}
-fn lit1(a: Int) -> fresh List<Int> {
-    local l = List.new<Int>()
-    List.push<Int>(list: mut l, value: read a)
     return take l
 }
 fn show(label: read String, l: read List<Int>) -> Unit {
@@ -23,11 +17,12 @@ fn show(label: read String, l: read List<Int>) -> Unit {
 fn main() -> Unit {
     local cache = cache_new()
     let f32 = dt_float32()
-    local sh = lit3(a: 2, b: 3, c: 4)
-    let buf = mk_buffer(cache: mut cache, dt: read f32, shape: read sh)
-    // sum over axis 1 -> [2,1,4]
-    local ax = lit1(a: 1)
-    let s = mk_sum(cache: mut cache, x: buf, axes: read ax)
-    show(label: read "sum", l: read uop_shape(cache: read cache, id: s))   // 2 1 4
+    local sa = lit2(a: 2, b: 3)
+    local sb = lit2(a: 3, b: 4)
+    let a = mk_buffer(cache: mut cache, dt: read f32, shape: read sa)
+    let b = mk_buffer(cache: mut cache, dt: read f32, shape: read sb)
+    let c = tensor_matmul2d(cache: mut cache, a: a, b: b)   // [2,3]@[3,4] -> [2,4]
+    show(label: read "matmul", l: read uop_shape(cache: read cache, id: c))   // 2 4
+    Log.write(message: read String.from_int(value: cache_len(cache: read cache)))
     return Unit
 }

@@ -21,3 +21,45 @@ fn tensor_binary(cache: mut UOpCache, op: Ops, a: Int, b: Int) -> Int {
     let dt = node_dtype(cache: read cache, id: a2)
     return mk_alu2(cache: mut cache, op: op, dt: read dt, x: a2, y: b2)
 }
+
+fn push1(l: mut List<Int>, a: Int) -> Unit {
+    List.push<Int>(list: mut l, value: read a)
+    return Unit
+}
+
+// 2D matmul A[m,k] @ B[k,n] -> [m,n], built from movement + broadcast-mul + sum (tinygrad dot).
+// A.reshape(m,1,k) * B.T.reshape(1,n,k) -> [m,n,k], sum axis 2 -> [m,n,1], reshape -> [m,n].
+fn tensor_matmul2d(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    local sa = uop_shape(cache: read cache, id: a)
+    local sb = uop_shape(cache: read cache, id: b)
+    let m = List.get<Int>(list: read sa, index: 0)
+    let k = List.get<Int>(list: read sa, index: 1)
+    let n = List.get<Int>(list: read sb, index: 1)
+    // Ar = A.reshape(m, 1, k)
+    local sar = List.new<Int>()
+    push1(l: mut sar, a: m)
+    push1(l: mut sar, a: 1)
+    push1(l: mut sar, a: k)
+    let ar = mk_reshape(cache: mut cache, x: a, new_shape: read sar)
+    // Bt = B.permute([1,0]).reshape(1, n, k)
+    local perm = List.new<Int>()
+    push1(l: mut perm, a: 1)
+    push1(l: mut perm, a: 0)
+    let bt0 = mk_permute(cache: mut cache, x: b, perm: read perm)
+    local sbt = List.new<Int>()
+    push1(l: mut sbt, a: 1)
+    push1(l: mut sbt, a: n)
+    push1(l: mut sbt, a: k)
+    let bt = mk_reshape(cache: mut cache, x: bt0, new_shape: read sbt)
+    // prod = Ar * Bt -> [m,n,k]
+    let prod = tensor_binary(cache: mut cache, op: MUL, a: ar, b: bt)
+    // sum over contraction axis 2 -> [m,n,1]
+    local ax = List.new<Int>()
+    push1(l: mut ax, a: 2)
+    let summed = mk_sum(cache: mut cache, x: prod, axes: read ax)
+    // reshape -> [m,n]
+    local smn = List.new<Int>()
+    push1(l: mut smn, a: m)
+    push1(l: mut smn, a: n)
+    return mk_reshape(cache: mut cache, x: summed, new_shape: read smn)
+}

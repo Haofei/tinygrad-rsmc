@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,673 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,719 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 78/106 symbols, `mixin/__init__.py` 79/82 symbols,
-    `uop/ops.py` 204/221 symbols; 361/409 total rough symbols covered.
+  - result: `tensor.py` 79/106 symbols, `mixin/__init__.py` 79/82 symbols,
+    `uop/ops.py` 215/221 symbols; 373/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -111,6 +111,7 @@ Integrated pieces:
   and `do_unbind`; these are grounded in the current interned-DAG helpers, but tag metadata is
   still not represented, `key`/`tuplize` are structural strings rather than Python bytes/tuples,
   and contiguous-view offset only proves the conservative zero-offset cases,
+  `custom_kernel` forwarding to the existing `CUSTOM` function node constructor,
   source-aligned `contiguous` no-op behavior and `bufferize` as `STAGE`, concrete `as_shape`, source-shaped movement wrappers
   `reshape`/`expand`/`permute`/`flip`/`shrink`/`pad`,
   high-level `call` lowering to `CALL` or `FUNCTION` and `set` lowering to `STORE`/`END`/`AFTER`,
@@ -125,8 +126,11 @@ Integrated pieces:
   `named`, `or_casted`, `or_after`, `cvar`, `sink`, `index`, `gep`, `load`, `store`, `reduce`,
   `broadcast`, `after`, `end`, and modulo patterns. It also exposes source-compatible rewrite
   driver wrappers for `rewrite`, `pm_rewrite`, `cached_bpm_rewrite`, `walk_rewrite`, and
-  `unified_rewrite` over the current `PatternRule` engine; Python callable deconstruction,
-  deferred UPat compilation, and trace/profile collection are still not represented.
+  `unified_rewrite` over the current `PatternRule` engine, plus UPat compatibility hooks for
+  `match`, `_check_dtype`, `_ensure_float`, reverse floordiv construction, callable
+  deconstruction/interpret/deferred-compile placeholders, and non-tracing `add_trace_group`,
+  `track_rewrites`, and `profile_matches`; Python callable bytecode reconstruction, real deferred
+  UPat compilation, and trace/profile collection are still not represented.
 - `uop/spec.rss`: first integrated interned-graph verifier for the shared core currently built by
   the package: CONST/SPECIAL/RANGE, `DEFINE_VAR`/`BIND`, `PARAM`, `DEFINE_LOCAL`/`DEFINE_REG`,
   upstream-shaped device/buffer/copy/multi-device graph nodes, ALU dtype rules, same-itemsize `BITCAST`, WHERE/MULACC, buffers, movement

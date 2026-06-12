@@ -1754,6 +1754,10 @@ fn uop_reduce(cache: mut UOpCache, id: Int, op: Ops, axes: read List<Int>) -> In
     return uop_rop(cache: mut cache, id: id, op: op, axes: read axes)
 }
 
+fn custom_kernel(cache: mut UOpCache, srcs: read List<Int>, name: read String, dt: read DType) -> Int {
+    return mk_custom_function(cache: mut cache, name: read name, dt: read dt, srcs: read srcs)
+}
+
 fn split_uop(cache: read UOpCache, id: Int, sep: Ops) -> fresh List<Int> {
     return uop_split_by_op(cache: read cache, id: id, sep: sep)
 }

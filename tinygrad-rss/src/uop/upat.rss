@@ -190,6 +190,11 @@ fn after(x: read UPat, dep: read UPat) -> fresh UPat { return upat_after2(x: rea
 fn upat_end2(x: read UPat, range: read UPat) -> fresh UPat { return upat_op2_anylen(op: END, a: read x, b: read range) }
 fn end(x: read UPat, range: read UPat) -> fresh UPat { return upat_end2(x: read x, range: read range) }
 fn mod(x: read UPat, y: read UPat) -> fresh UPat { return upat_op2(op: FLOORMOD, a: read x, b: read y) }
+fn __rfloordiv__(x: read UPat, y: read UPat) -> fresh UPat { return upat_op2(op: FLOORDIV, a: read y, b: read x) }
+
+fn _check_dtype(x: read UPat) -> Unit {}
+
+fn _ensure_float(x: read UPat) -> fresh UPat { return x.clone() }
 
 fn upat_opset_any(o1: Ops, o2: Ops, name: read String) -> fresh UPat {
     local ops = List.new<Ops>()
@@ -278,9 +283,46 @@ fn upat_match(cache: read UOpCache, pat: read UPat, id: Int, binds: mut Map<Stri
     return upat_bind(name: read pat.name, id: id, binds: mut binds)
 }
 
+fn match(cache: read UOpCache, pat: read UPat, id: Int, binds: mut Map<String, Int>) -> Bool {
+    return upat_match(cache: read cache, pat: read pat, id: id, binds: mut binds)
+}
+
 fn pattern_rule(pat: read UPat, act: UPatAction, ret_name: read String, lhs_name: read String, rhs_name: read String) -> fresh PatternRule {
     return PatternRule(pat: pat.clone(), act: act, ret_name: String.copy(value: read ret_name),
                        lhs_name: String.copy(value: read lhs_name), rhs_name: String.copy(value: read rhs_name))
+}
+
+fn deconstruct_function(name: read String) -> fresh String {
+    return String.copy(value: read name)
+}
+
+fn upat_interpret(cache: mut UOpCache, id: Int, rule: read PatternRule) -> Option<Int> {
+    local binds = Map.new<String, Int>()
+    if upat_match(cache: read cache, pat: read rule.pat, id: id, binds: mut binds) {
+        return pattern_apply_rule(cache: mut cache, rule: read rule, binds: read binds, original: id)
+    }
+    return None
+}
+
+fn upat_deferred_compile(rules: read List<PatternRule>) -> fresh List<PatternRule> {
+    local out = List.new<PatternRule>()
+    let mut i = 0
+    while i < List.len<PatternRule>(list: read rules) {
+        let r = List.get<PatternRule>(list: read rules, index: i)
+        List.push<PatternRule>(list: mut out, value: read r)
+        i = i + 1
+    }
+    return take out
+}
+
+fn add_trace_group(name: read String) -> Unit {}
+
+fn track_rewrites(name: read String) -> fresh String {
+    return String.copy(value: read name)
+}
+
+fn profile_matches(name: read String) -> fresh String {
+    return String.copy(value: read name)
 }
 
 fn pattern_apply_rule(cache: mut UOpCache, rule: read PatternRule, binds: read Map<String, Int>, original: Int) -> Option<Int> {

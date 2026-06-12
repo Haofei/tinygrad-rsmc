@@ -239,16 +239,19 @@ Integrated pieces:
   condition onto the load/store gate, supplies a zero-like load fallback, combines an existing
   store gate with the moved index gate, and folds `WHERE` around gated loads into the load alt
   value for direct and inverted gate forms.
-- `codegen/late/expander.rss`: first integrated source-shaped `tinygrad/codegen/late/expander.py`
-  slice, covering axis-size choice/index helpers and the compact normalization rewrites for
+- `codegen/late/expander.rss`: integrated source-shaped `tinygrad/codegen/late/expander.py`
+  slice, covering the upstream entry point names `_expand_arg_to_idx`, `_choices_from_args`,
+  `_swizzle_args`, `do_expand`, `do_contract`, `end_unrolls`, `fix_reduce_unroll`,
+  `fix_store_unroll`, and conservative `fix_group_for_reduce`. It ports axis-size
+  choice/index helpers and the compact normalization rewrites for
   `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. It also has the common
   same/mixed-axis `do_expand` path for non-WMMA roots, including `UNROLL` source stripping,
   mixed-axis `GEP` swizzles, scalar broadcast, vector `VCAT` repetition, range-arg passthrough,
   and `GEP` arg expansion. It also has the first `pm_pre_expander` slice: `UNROLL`/`UPCAST`
   ranges become `UNROLL` constants, and `REDUCE`/`STORE` nodes carrying `UNROLL` tails are
-  contracted before later expansion. WMMA,
-  register-pointer special-casing, group-for-reduce, and BufferizeOpts-local
-  rewrites remain later expander slices.
+  contracted before later expansion. WMMA, register-pointer special-casing, and the
+  BufferizeOpts-local `GROUP_REDUCE` rewrite behind `fix_group_for_reduce` remain later
+  expander slices.
 - `codegen/late/devectorizer.rss`: first integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
   rule for vector ALU, `CAST`, `BITCAST`, and the local flat-metadata `WMMA` shape: vector operations are rebuilt as scalar lane
@@ -722,7 +725,8 @@ Current integrated demo:
   `LOAD` and `STORE` are rewritten to plain indexes plus gates, optional casted pointers are
   preserved, an existing store gate is combined with the moved validity gate, and `WHERE`
   around direct/inverted gated loads is folded into the load alt value.
-- validates the first expander slice: scalar `CONTRACT` lowers to `STACK`, `CONTRACT` of
+- validates the expander slice: source-shaped helper names are callable, scalar `CONTRACT`
+  lowers to `STACK`, `CONTRACT` of
   `UNROLL` lowers to indexed `GEP`, empty `UNROLL` unwraps, double `UNROLL` merges axes,
   `END` consumes `UNROLL` axes through `CONTRACT`, same-axis elementwise `UNROLL` sources are
   expanded, mixed-axis `UNROLL` sources are swizzled through `GEP`, scalar non-unroll sources

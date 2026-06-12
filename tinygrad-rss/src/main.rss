@@ -929,6 +929,22 @@ fn main() -> Unit {
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)
     showb(label: read "codegen.expander swizzles mixed unroll axes = ", v: mex_expand_mixed_ok)
+    let mex_source_idx_ok = _expand_arg_to_idx(args: read maxis_pairs, choice_pairs: read maxis_pairs, choice: 3) == 3
+    let mex_source_choices = _choices_from_args(args: read mex_pair0_2)
+    local mex_source_exclude = List.new<Int>()
+    let mex_source_swizzle = _swizzle_args(cargs: read mex_pair0_2, eargs: read mex_pair0_2, exclude_args: read mex_source_exclude)
+    let mex_source_shapes_ok = List.len<Int>(list: read mex_source_choices) == 4 && List.len<Int>(list: read mex_source_swizzle) == 2 && List.get<Int>(list: read mex_source_swizzle, index: 1) == 1
+    let mut mex_source_do_expand_ok = false
+    match do_expand(root: mut mcache, id: mex_add_unroll) {
+        Some(r) => { mex_source_do_expand_ok = node_op(cache: read mcache, id: r) == UNROLL }
+        None => {}
+    }
+    let mut mex_source_do_contract_ok = false
+    match do_contract(con: mut mcache, id: mex_contract_unroll) {
+        Some(r) => { mex_source_do_contract_ok = node_op(cache: read mcache, id: r) == GEP }
+        None => {}
+    }
+    showb(label: read "codegen.expander source-shaped helpers = ", v: mex_source_idx_ok && mex_source_shapes_ok && mex_source_do_expand_ok && mex_source_do_contract_ok)
     let mmulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: m3, z: m4)
     let mf_codegen = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let mbad_mulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: mf_codegen, z: m4)

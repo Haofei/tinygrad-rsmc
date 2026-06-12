@@ -1,9 +1,9 @@
 // Integrated source-shaped slice of tinygrad/codegen/late/expander.py.
 //
 // This slice ports the axis-size choice/index helpers, the compact
-// CONTRACT/UNROLL/END normalization rules, and the first pm_pre_expander
-// rewrites. WMMA, group-for-reduce, and BufferizeOpts-local rewrites remain
-// later slices.
+// CONTRACT/UNROLL/END normalization rules, the common do_expand path, and the
+// first pm_pre_expander rewrites. WMMA, register-pointer INDEX special-casing,
+// and BufferizeOpts-local group-for-reduce rewrites remain later slices.
 features: local
 
 fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
@@ -150,6 +150,15 @@ fn expander_choice_value(pairs: read List<Int>, choice: Int, axis: Int) -> Int {
     return 0
 }
 
+fn expander_axes_contains(axes: read List<Int>, axis: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read axes) {
+        if List.get<Int>(list: read axes, index: i) == axis { return true }
+        i = i + 1
+    }
+    return false
+}
+
 fn expander_expand_arg_to_idx(args: read List<Int>, choice_pairs: read List<Int>, choice: Int) -> Int {
     let mut idx = 0
     let mut mul = 1
@@ -162,6 +171,57 @@ fn expander_expand_arg_to_idx(args: read List<Int>, choice_pairs: read List<Int>
         i = i - 2
     }
     return idx
+}
+
+fn expander_expand_arg_to_idx_excluding(args: read List<Int>, choice_pairs: read List<Int>, choice: Int, exclude_args: read List<Int>) -> Int {
+    let mut idx = 0
+    let mut mul = 1
+    let mut i = List.len<Int>(list: read args) - 2
+    while i >= 0 {
+        let axis = List.get<Int>(list: read args, index: i)
+        let size = List.get<Int>(list: read args, index: i + 1)
+        let mut value = 0
+        if expander_axes_contains(axes: read exclude_args, axis: axis) == false {
+            value = expander_choice_value(pairs: read choice_pairs, choice: choice, axis: axis)
+        }
+        idx = idx + value * mul
+        mul = mul * size
+        i = i - 2
+    }
+    return idx
+}
+
+fn _expand_arg_to_idx(args: read List<Int>, choice_pairs: read List<Int>, choice: Int) -> Int {
+    return expander_expand_arg_to_idx(args: read args, choice_pairs: read choice_pairs, choice: choice)
+}
+
+fn _choices_from_args(args: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let total = expander_choice_count(pairs: read args)
+    let mut choice = 0
+    while choice < total {
+        let mut i = 0
+        while i + 1 < List.len<Int>(list: read args) {
+            let axis = List.get<Int>(list: read args, index: i)
+            List.push<Int>(list: mut out, value: read axis)
+            List.push<Int>(list: mut out, value: read expander_choice_value(pairs: read args, choice: choice, axis: axis))
+            i = i + 2
+        }
+        choice = choice + 1
+    }
+    return take out
+}
+
+fn _swizzle_args(cargs: read List<Int>, eargs: read List<Int>, exclude_args: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let total = expander_choice_count(pairs: read cargs)
+    let mut choice = 0
+    while choice < total {
+        let idx = expander_expand_arg_to_idx_excluding(args: read eargs, choice_pairs: read cargs, choice: choice, exclude_args: read exclude_args)
+        List.push<Int>(list: mut out, value: read idx)
+        choice = choice + 1
+    }
+    return take out
 }
 
 fn expander_contract_indices(ex_pairs: read List<Int>, con_pairs: read List<Int>, new_pairs: read List<Int>) -> fresh List<Int> {
@@ -521,5 +581,33 @@ fn expander_pre_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
+    return None
+}
+
+fn do_expand(root: mut UOpCache, id: Int) -> Option<Int> {
+    return expander_do_expand(cache: mut root, id: id)
+}
+
+fn do_contract(con: mut UOpCache, id: Int) -> Option<Int> {
+    return expander_do_contract(cache: mut con, id: id)
+}
+
+fn end_unrolls(u: mut UOpCache, id: Int) -> Option<Int> {
+    return expander_end_unrolls(cache: mut u, id: id)
+}
+
+fn fix_reduce_unroll(x: mut UOpCache, id: Int) -> Option<Int> {
+    return expander_pre_reduce_unroll(cache: mut x, id: id)
+}
+
+fn fix_store_unroll(x: mut UOpCache, id: Int) -> Option<Int> {
+    return expander_pre_store_unroll(cache: mut x, id: id)
+}
+
+fn fix_group_for_reduce(x: mut UOpCache, id: Int) -> Option<Int> {
+    // The upstream rewrite lowers GROUP_REDUCE ranges through local BufferizeOpts.
+    // This port still lacks that local-memory bufferize path, so keep the
+    // source-shaped entry point conservative until rangeify/gpudims land.
+    if node_op(cache: read x, id: id) != REDUCE { return None }
     return None
 }

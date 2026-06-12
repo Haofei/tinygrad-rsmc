@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,040 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,270 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
   - result: `tensor.py` 68/106 symbols, `mixin/__init__.py` 78/82 symbols,
-    `uop/ops.py` 124/221 symbols; 270/409 total rough symbols covered.
+    `uop/ops.py` 160/221 symbols; 306/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -100,6 +100,11 @@ Integrated pieces:
   `srender`, `range_str`, `multirange_str`, `smax`, `smin`, `resolve`, `vmin`/`vmax`,
   `overflows`, `backward_slice_with_self`, `topovisit`, `argstr`, and `ins`, mapping to the
   existing graph rewrite, render, min/max, range, traversal, and `INS` primitives,
+  construction/program-helper wrappers for `sym_infer`, `consumer_map_from_toposort`, `sintify`,
+  scalar eval coercions, generic `f`, `index`, `contract`, `range`, `special`, `reduce`/`_rop`,
+  register definition, `bounds`, `metadata`, `sgep`, `marg`, `gcd`, `_suop`, ProgramInfo-shaped
+  `function_name`/`runtimevars`/`launch_dims`/`vals`/`from_sink`, and integer `safe_exp2`,
+  `safe_pow`, `exec_alu`, `bitcast`, and `get_location` compatibility helpers,
   source-aligned `contiguous` no-op behavior and `bufferize` as `STAGE`, concrete `as_shape`, source-shaped movement wrappers
   `reshape`/`expand`/`permute`/`flip`/`shrink`/`pad`,
   high-level `call` lowering to `CALL` or `FUNCTION` and `set` lowering to `STORE`/`END`/`AFTER`,

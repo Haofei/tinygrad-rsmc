@@ -15,6 +15,11 @@ struct UOpUnbindAllResult derives(Clone) {
     bindings: List<UOpBindValue>,
 }
 
+struct UOpConsumerEntry derives(Clone) {
+    id: Int,
+    consumers: List<Int>,
+}
+
 fn uop_string_compare(a: read String, b: read String) -> Int {
     let alen = String.len(value: read a)
     let blen = String.len(value: read b)
@@ -1617,4 +1622,229 @@ fn uop_ins(cache: mut UOpCache, id: Int, name: read String) -> Int {
 
 fn ins(cache: mut UOpCache, id: Int, name: read String) -> Int {
     return uop_ins(cache: mut cache, id: id, name: read name)
+}
+
+fn uop_consumer_entry_index(entries: read List<UOpConsumerEntry>, id: Int) -> Int {
+    let mut i = 0
+    while i < List.len<UOpConsumerEntry>(list: read entries) {
+        let e = List.get<UOpConsumerEntry>(list: read entries, index: i)
+        if e.id == id { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn consumer_map_from_toposort(cache: read UOpCache, order: read List<Int>) -> fresh List<UOpConsumerEntry> {
+    local entries = List.new<UOpConsumerEntry>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        local consumers = List.new<Int>()
+        List.push<UOpConsumerEntry>(list: mut entries, value: read UOpConsumerEntry(id: id, consumers: take consumers))
+        i = i + 1
+    }
+    i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        let mut sidx = 0
+        while sidx < node_num_src(cache: read cache, id: id) {
+            let src = node_src_id(cache: read cache, id: id, k: sidx)
+            let ei = uop_consumer_entry_index(entries: read entries, id: src)
+            if ei >= 0 {
+                local e = List.get<UOpConsumerEntry>(list: read entries, index: ei)
+                uop_push_unique(vals: mut e.consumers, v: id)
+                List.set<UOpConsumerEntry>(list: mut entries, index: ei, value: read (manage e))
+            }
+            sidx = sidx + 1
+        }
+        i = i + 1
+    }
+    return take entries
+}
+
+fn uop_sym_infer(cache: read UOpCache, id: Int, var_vals: read Map<String, Int>) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if node_is_const_int(cache: read cache, id: id) { return node_const_int(cache: read cache, id: id) }
+    if op == DEFINE_VAR {
+        let name = node_var_name(cache: read cache, id: id)
+        match Map.get<String, Int>(map: read var_vals, key: read name) {
+            Some(v) => { return v }
+            None => { return node_var_min(cache: read cache, id: id) }
+        }
+    }
+    if op == BIND && node_num_src(cache: read cache, id: id) > 1 {
+        return uop_sym_infer(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1), var_vals: read var_vals)
+    }
+    local vals = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let v = uop_sym_infer(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), var_vals: read var_vals)
+        List.push<Int>(list: mut vals, value: read v)
+        i = i + 1
+    }
+    if op == NEG || op == ADD || op == SUB || op == MUL || op == MAX || op == CMPLT || op == CMPNE || op == CMPEQ ||
+       op == SHL || op == SHR || op == AND || op == OR || op == XOR || op == CDIV || op == CMOD ||
+       op == FLOORDIV || op == FLOORMOD || op == MULACC || op == WHERE {
+        return exec_alu_int(op: read op, operands: read vals)
+    }
+    local vr = uop_min_max(cache: read cache, id: id)
+    if vr.lo == vr.hi { return vr.lo }
+    return vr.lo
+}
+
+fn sym_infer(cache: read UOpCache, id: Int, var_vals: read Map<String, Int>) -> Int {
+    return uop_sym_infer(cache: read cache, id: id, var_vals: read var_vals)
+}
+
+fn uop_sintify(cache: read UOpCache, id: Int) -> Int {
+    if node_is_const_int(cache: read cache, id: id) { return node_const_int(cache: read cache, id: id) }
+    return id
+}
+
+fn sintify(cache: read UOpCache, id: Int) -> Int {
+    return uop_sintify(cache: read cache, id: id)
+}
+
+fn uop_eval(cache: read UOpCache, id: Int) -> Int {
+    local empty = Map.new<String, Int>()
+    return uop_sym_infer(cache: read cache, id: id, var_vals: read empty)
+}
+
+fn uop_bool(cache: read UOpCache, id: Int) -> Bool { return uop_eval(cache: read cache, id: id) != 0 }
+fn uop_int(cache: read UOpCache, id: Int) -> Int { return uop_eval(cache: read cache, id: id) }
+fn uop_float(cache: read UOpCache, id: Int) -> Float { return Int.to_float(value: read uop_eval(cache: read cache, id: id)) }
+fn uop_index_value(cache: read UOpCache, id: Int) -> Int { return uop_int(cache: read cache, id: id) }
+
+fn uop_f(cache: mut UOpCache, id: Int, op: Ops) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read id)
+    local arg = ArgNone
+    return intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
+}
+
+fn f(cache: mut UOpCache, id: Int, op: Ops) -> Int {
+    return uop_f(cache: mut cache, id: id, op: op)
+}
+
+fn uop_index(cache: mut UOpCache, base: Int, srcs: read List<Int>, ptr: Bool) -> Int {
+    return mk_index(cache: mut cache, base: base, srcs: read srcs, ptr: ptr)
+}
+
+fn uop_contract(cache: mut UOpCache, id: Int, pairs: read List<Int>) -> Int {
+    return mk_contract(cache: mut cache, x: id, pairs: read pairs)
+}
+
+fn uop_range(cache: mut UOpCache, end: Int, axis_id: Int, axis_type: read AxisType, dt: read DType) -> Int {
+    local extra = List.new<Int>()
+    return mk_range(cache: mut cache, end: end, axis_id: axis_id, axis_type: read axis_type, extra_axes: read extra, dt: read dt)
+}
+
+fn uop_special(cache: mut UOpCache, end: Int, name: read String, dt: read DType) -> Int {
+    return mk_special_named(cache: mut cache, dt: read dt, size: end, name: read name)
+}
+
+fn uop_rop(cache: mut UOpCache, id: Int, op: Ops, axes: read List<Int>) -> Int {
+    if op == ADD { return mk_sum(cache: mut cache, x: id, axes: read axes) }
+    if op == MUL { return mk_prod_reduce(cache: mut cache, x: id, axes: read axes) }
+    return mk_max_reduce(cache: mut cache, x: id, axes: read axes)
+}
+
+fn uop_reduce(cache: mut UOpCache, id: Int, op: Ops, axes: read List<Int>) -> Int {
+    return uop_rop(cache: mut cache, id: id, op: op, axes: read axes)
+}
+
+fn uop_reg(cache: mut UOpCache, id: Int, slot: Int) -> Int {
+    local sh = uop_shape(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return mk_define_reg(cache: mut cache, slot: slot, dt: read dt, shape: read sh)
+}
+
+fn uop_bounds(cache: read UOpCache, id: Int) -> fresh VRange {
+    return uop_min_max(cache: read cache, id: id)
+}
+
+fn uop_metadata(cache: read UOpCache, id: Int) -> fresh String {
+    return String.copy(value: read "")
+}
+
+fn uop_sgep(cache: mut UOpCache, id: Int, idx: Int) -> Int {
+    return uop_gep_int(cache: mut cache, id: id, idx: idx)
+}
+
+fn uop_marg(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_movement_arg(cache: read cache, id: id)
+}
+
+fn uop_gcd(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return uop_gcd2(cache: mut cache, a: a, b: b)
+}
+
+fn _suop(cache: mut UOpCache, vals: read List<Int>, op: Ops) -> Int {
+    if List.len<Int>(list: read vals) == 0 {
+        return mk_const_int(cache: mut cache, dt: read dt_int32(), v: identity_element(op: read op))
+    }
+    let mut out = List.get<Int>(list: read vals, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read vals) {
+        let v = List.get<Int>(list: read vals, index: i)
+        if op == MAX { out = uop_smax(cache: mut cache, a: out, b: v) }
+        else { if op == MUL { out = mk_alu2(cache: mut cache, op: MUL, dt: read node_full_dtype(cache: read cache, id: out), x: out, y: v) }
+        else { out = mk_alu2(cache: mut cache, op: ADD, dt: read node_full_dtype(cache: read cache, id: out), x: out, y: v) } }
+        i = i + 1
+    }
+    return uop_simplify(cache: mut cache, id: out)
+}
+
+fn program_info_function_name(arg: read ProgramArg) -> fresh String {
+    return String.copy(value: read arg.name)
+}
+
+fn function_name(arg: read ProgramArg) -> fresh String {
+    return program_info_function_name(arg: read arg)
+}
+
+fn runtimevars(cache: read UOpCache, arg: read ProgramArg) -> fresh List<Int> {
+    return program_arg_runtimevar_indices(cache: read cache, arg: read arg)
+}
+
+fn launch_dims(arg: read ProgramArg) -> fresh ProgramLaunchDims {
+    return program_arg_launch_dims(arg: read arg)
+}
+
+fn vals(cache: read UOpCache, arg: read ProgramArg, var_vals: read Map<String, Int>) -> fresh ProgramVals {
+    return program_arg_vals(cache: read cache, arg: read arg, var_vals: read var_vals)
+}
+
+fn from_sink(cache: read UOpCache, sink: Int, name: read String) -> fresh ProgramArg {
+    return codegen_program_arg_from_sink(cache: read cache, sink: sink, name: read name)
+}
+
+fn safe_exp2(x: Int) -> Int {
+    if x < 0 { return 0 }
+    if x >= 62 { return 4611686018427387904 }
+    return 1 << x
+}
+
+fn safe_pow(x: Int, y: Int) -> Int {
+    if y < 0 { return 0 }
+    let mut out = 1
+    let mut i = 0
+    while i < y {
+        out = out * x
+        i = i + 1
+    }
+    return out
+}
+
+fn exec_alu(op: read Ops, operands: read List<Int>) -> Int {
+    return exec_alu_int(op: read op, operands: read operands)
+}
+
+fn bitcast(x: Int, in_dtype: read DType, out_dtype: read DType) -> Int {
+    return x
+}
+
+fn get_location() -> fresh String {
+    return String.copy(value: read "")
 }

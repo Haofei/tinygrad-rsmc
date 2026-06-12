@@ -1486,3 +1486,135 @@ fn uop_render(cache: read UOpCache, id: Int) -> fresh String {
     }
     return String.concat(left: read out, right: read "]")
 }
+
+fn identity_element(op: read Ops) -> Int {
+    return uop_identity_element(op: read op)
+}
+
+fn uop_simplify(cache: mut UOpCache, id: Int) -> Int {
+    return graph_rewrite(cache: mut cache, id: id)
+}
+
+fn uop_ssimplify(cache: mut UOpCache, id: Int) -> Int {
+    return uop_simplify(cache: mut cache, id: id)
+}
+
+fn ssimplify(cache: mut UOpCache, id: Int) -> Int {
+    return uop_ssimplify(cache: mut cache, id: id)
+}
+
+fn uop_srender(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_render_expr(cache: read cache, id: id)
+}
+
+fn srender(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_srender(cache: read cache, id: id)
+}
+
+fn range_str(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_range_str(cache: read cache, id: id)
+}
+
+fn uop_multirange_str(cache: read UOpCache, ranges: read List<Int>) -> fresh String {
+    let mut s = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        if i > 0 { s = String.concat(left: read s, right: read ",") }
+        s = String.concat(left: read s, right: read uop_range_str(cache: read cache, id: List.get<Int>(list: read ranges, index: i)))
+        i = i + 1
+    }
+    return String.copy(value: read s)
+}
+
+fn multirange_str(cache: read UOpCache, ranges: read List<Int>) -> fresh String {
+    return uop_multirange_str(cache: read cache, ranges: read ranges)
+}
+
+fn uop_smax(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: MAX, dt: read dt, x: a, y: b)
+}
+
+fn smax(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return uop_smax(cache: mut cache, a: a, b: b)
+}
+
+fn uop_smin(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    let na = mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: a)
+    let nb = mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: b)
+    let mx = mk_alu2(cache: mut cache, op: MAX, dt: read dt, x: na, y: nb)
+    return mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: mx)
+}
+
+fn smin(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return uop_smin(cache: mut cache, a: a, b: b)
+}
+
+fn uop_resolve(cache: mut UOpCache, id: Int, default: Bool) -> Bool {
+    let simple = uop_simplify(cache: mut cache, id: id)
+    if node_is_const_int(cache: read cache, id: simple) {
+        return node_const_int(cache: read cache, id: simple) != 0
+    }
+    local vr = uop_min_max(cache: read cache, id: simple)
+    if vr.lo == vr.hi { return vr.lo != 0 }
+    return default
+}
+
+fn resolve(cache: mut UOpCache, id: Int, default: Bool) -> Bool {
+    return uop_resolve(cache: mut cache, id: id, default: default)
+}
+
+fn uop_vmin(cache: read UOpCache, id: Int) -> Int {
+    local vr = uop_min_max(cache: read cache, id: id)
+    return vr.lo
+}
+
+fn uop_vmax(cache: read UOpCache, id: Int) -> Int {
+    local vr = uop_min_max(cache: read cache, id: id)
+    return vr.hi
+}
+
+fn uop_overflows(cache: read UOpCache, id: Int) -> Bool {
+    local vr = uop_min_max(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    return vr.lo < dtype_imin(d: read dt) || vr.hi > dtype_imax(d: read dt)
+}
+
+fn uop_backward_slice_with_self(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = uop_backward_slice(cache: read cache, id: id)
+    uop_push_unique(vals: mut out, v: id)
+    return take out
+}
+
+fn backward_slice_with_self(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_backward_slice_with_self(cache: read cache, id: id)
+}
+
+fn uop_topovisit(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_toposort(cache: read cache, id: id)
+}
+
+fn topovisit(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_topovisit(cache: read cache, id: id)
+}
+
+fn uop_argstr(cache: read UOpCache, id: Int) -> fresh String {
+    local arg = node_arg(cache: read cache, id: id)
+    return uop_arg_to_string(arg: read arg)
+}
+
+fn argstr(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_argstr(cache: read cache, id: id)
+}
+
+fn uop_ins(cache: mut UOpCache, id: Int, name: read String) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return mk_ins(cache: mut cache, name: read name, dt: read dt, srcs: read srcs)
+}
+
+fn ins(cache: mut UOpCache, id: Int, name: read String) -> Int {
+    return uop_ins(cache: mut cache, id: id, name: read name)
+}

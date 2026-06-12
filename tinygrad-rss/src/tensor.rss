@@ -7,6 +7,11 @@ struct SortResult derives(Clone) {
     indices: Int,
 }
 
+struct TensorPair derives(Clone) {
+    first: Int,
+    second: Int,
+}
+
 // _broadcast_to: reshape x to align its ndims (left-pad 1s), then EXPAND to the target shape.
 fn broadcast_to(cache: mut UOpCache, x: Int, target: read List<Int>) -> Int {
     local xs = uop_shape(cache: read cache, id: x)
@@ -3842,6 +3847,24 @@ fn tensor_var_all(cache: mut UOpCache, x: Int, correction: Float) -> Int {
     return tensor_div(cache: mut cache, a: reduced, b: denom_pos)
 }
 
+fn tensor_var_mean_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> fresh TensorPair {
+    let v = tensor_var_axis(cache: mut cache, x: x, axis: axis, correction: correction)
+    let m = tensor_mean_axis(cache: mut cache, x: x, axis: axis)
+    return TensorPair(first: v, second: m)
+}
+
+fn tensor_var_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> fresh TensorPair {
+    let v = tensor_var_axes(cache: mut cache, x: x, axes: read axes, correction: correction)
+    let m = tensor_mean_axes(cache: mut cache, x: x, axes: read axes)
+    return TensorPair(first: v, second: m)
+}
+
+fn tensor_var_mean_all(cache: mut UOpCache, x: Int, correction: Float) -> fresh TensorPair {
+    let v = tensor_var_all(cache: mut cache, x: x, correction: correction)
+    let m = tensor_mean_all(cache: mut cache, x: x)
+    return TensorPair(first: v, second: m)
+}
+
 fn tensor_std_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> Int {
     let v = tensor_var_axis(cache: mut cache, x: x, axis: axis, correction: correction)
     return tensor_sqrt(cache: mut cache, x: v)
@@ -3850,6 +3873,29 @@ fn tensor_std_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) ->
 fn tensor_std_all(cache: mut UOpCache, x: Int, correction: Float) -> Int {
     let v = tensor_var_all(cache: mut cache, x: x, correction: correction)
     return tensor_sqrt(cache: mut cache, x: v)
+}
+
+fn tensor_std_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> Int {
+    let v = tensor_var_axes(cache: mut cache, x: x, axes: read axes, correction: correction)
+    return tensor_sqrt(cache: mut cache, x: v)
+}
+
+fn tensor_std_mean_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> fresh TensorPair {
+    let s = tensor_std_axis(cache: mut cache, x: x, axis: axis, correction: correction)
+    let m = tensor_mean_axis(cache: mut cache, x: x, axis: axis)
+    return TensorPair(first: s, second: m)
+}
+
+fn tensor_std_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> fresh TensorPair {
+    let s = tensor_std_axes(cache: mut cache, x: x, axes: read axes, correction: correction)
+    let m = tensor_mean_axes(cache: mut cache, x: x, axes: read axes)
+    return TensorPair(first: s, second: m)
+}
+
+fn tensor_std_mean_all(cache: mut UOpCache, x: Int, correction: Float) -> fresh TensorPair {
+    let s = tensor_std_all(cache: mut cache, x: x, correction: correction)
+    let m = tensor_mean_all(cache: mut cache, x: x)
+    return TensorPair(first: s, second: m)
 }
 
 fn tensor_normalize(cache: mut UOpCache, x: Int, p: Float, dim: Int, eps: Float) -> Int {

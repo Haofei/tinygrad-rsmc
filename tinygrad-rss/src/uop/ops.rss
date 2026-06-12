@@ -69,6 +69,12 @@ struct BufferizeArg derives(Clone) {
     removable: Bool,
 }
 
+struct Estimates derives(Clone) {
+    ops: Int,
+    lds: Int,
+    mem: Int,
+}
+
 struct ProgramArg derives(Clone) {
     name: String,
     global_size: List<Int>,
@@ -78,6 +84,10 @@ struct ProgramArg derives(Clone) {
     globals: List<Int>,
     outs: List<Int>,
     ins: List<Int>,
+    has_estimates: Bool,
+    estimate_ops: Int,
+    estimate_lds: Int,
+    estimate_mem: Int,
 }
 
 struct CallArg derives(Clone) {
@@ -462,6 +472,10 @@ fn make_key(op: Ops, dt: read DType, src: read List<Int>, arg: read Arg) -> fres
             append_ints(dst: mut d, src: read p.globals)
             append_ints(dst: mut d, src: read p.outs)
             append_ints(dst: mut d, src: read p.ins)
+            List.push<Int>(list: mut d, value: read bool_to_int(b: p.has_estimates))
+            List.push<Int>(list: mut d, value: read p.estimate_ops)
+            List.push<Int>(list: mut d, value: read p.estimate_lds)
+            List.push<Int>(list: mut d, value: read p.estimate_mem)
             return NodeKey(op: op, dtype: dtn, src: take s, ak: 14, ai: 0, af: "", sv: String.copy(value: read p.name), kd: take d)
         }
         ArgCall(c) => {
@@ -809,7 +823,26 @@ fn mk_program_arg(name: read String, global_size: read List<Int>, has_local_size
     return ProgramArg(name: String.copy(value: read name), global_size: copy_int_list(l: read global_size),
                       has_local_size: has_local_size, local_size: copy_int_list(l: read local_size),
                       vars: copy_int_list(l: read vars), globals: copy_int_list(l: read globals),
-                      outs: copy_int_list(l: read outs), ins: copy_int_list(l: read ins))
+                      outs: copy_int_list(l: read outs), ins: copy_int_list(l: read ins),
+                      has_estimates: false, estimate_ops: 0, estimate_lds: 0, estimate_mem: 0)
+}
+
+fn program_arg_copy(arg: read ProgramArg) -> fresh ProgramArg {
+    return ProgramArg(name: String.copy(value: read arg.name), global_size: copy_int_list(l: read arg.global_size),
+                      has_local_size: arg.has_local_size, local_size: copy_int_list(l: read arg.local_size),
+                      vars: copy_int_list(l: read arg.vars), globals: copy_int_list(l: read arg.globals),
+                      outs: copy_int_list(l: read arg.outs), ins: copy_int_list(l: read arg.ins),
+                      has_estimates: arg.has_estimates, estimate_ops: arg.estimate_ops,
+                      estimate_lds: arg.estimate_lds, estimate_mem: arg.estimate_mem)
+}
+
+fn program_arg_with_estimates(arg: read ProgramArg, estimates: read Estimates) -> fresh ProgramArg {
+    return ProgramArg(name: String.copy(value: read arg.name), global_size: copy_int_list(l: read arg.global_size),
+                      has_local_size: arg.has_local_size, local_size: copy_int_list(l: read arg.local_size),
+                      vars: copy_int_list(l: read arg.vars), globals: copy_int_list(l: read arg.globals),
+                      outs: copy_int_list(l: read arg.outs), ins: copy_int_list(l: read arg.ins),
+                      has_estimates: true, estimate_ops: estimates.ops,
+                      estimate_lds: estimates.lds, estimate_mem: estimates.mem)
 }
 
 fn mk_program(cache: mut UOpCache, sink: Int, device: Int, extra: read List<Int>, arg: read ProgramArg) -> Int {
@@ -822,7 +855,8 @@ fn mk_program(cache: mut UOpCache, sink: Int, device: Int, extra: read List<Int>
         List.push<Int>(list: mut src, value: read e)
         i = i + 1
     }
-    local a = ArgProgram(value: arg.clone())
+    local pa = program_arg_copy(arg: read arg)
+    local a = ArgProgram(value: take pa)
     let vdt = dt_void()
     return intern(cache: mut cache, op: PROGRAM, dt: read vdt, src: take src, arg: take a)
 }
@@ -1513,6 +1547,113 @@ fn node_program_name(cache: read UOpCache, id: Int) -> fresh String {
         ArgBufferize(b) => { return "" }
         ArgCall(c) => { return "" }
     }
+}
+
+fn node_program_arg(cache: read UOpCache, id: Int) -> fresh ProgramArg {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgProgram(p) => { return program_arg_copy(arg: read p) }
+        ArgNone => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgInt(v) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgFloat(f) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgBool(b) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgStr(t) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgInts(vals) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgReduce(r) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgVar(v) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgRange(r) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgParam(p) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgAxisSizes(a) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgDevice(dv) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgOp(o) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgBufferize(b) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+        ArgCall(c) => {
+            local empty = List.new<Int>()
+            return mk_program_arg(name: read "", global_size: read empty, has_local_size: false,
+                                  local_size: read empty, vars: read empty, globals: read empty,
+                                  outs: read empty, ins: read empty)
+        }
+    }
+}
+
+fn node_program_has_estimates(cache: read UOpCache, id: Int) -> Bool {
+    let p = node_program_arg(cache: read cache, id: id)
+    return p.has_estimates
+}
+
+fn node_program_estimates(cache: read UOpCache, id: Int) -> fresh Estimates {
+    let p = node_program_arg(cache: read cache, id: id)
+    return Estimates(ops: p.estimate_ops, lds: p.estimate_lds, mem: p.estimate_mem)
 }
 
 fn node_arg(cache: read UOpCache, id: Int) -> fresh Arg {

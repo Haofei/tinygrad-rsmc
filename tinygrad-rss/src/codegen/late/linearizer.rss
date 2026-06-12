@@ -348,6 +348,7 @@ fn linearizer_do_linearize(cache: mut UOpCache, prg: Int) -> Int {
     }
     List.push<Int>(list: mut src, value: read lin)
     let dt = node_full_dtype(cache: read cache, id: prg)
-    local arg = node_arg(cache: read cache, id: prg)
+    local prog = node_program_arg(cache: read cache, id: prg)
+    local arg = ArgProgram(value: take prog)
     return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
 }

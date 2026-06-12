@@ -83,6 +83,30 @@ fn tensor_is_param(t: read TensorState) -> Bool {
     return t.is_param
 }
 
+fn tensor_state_has_grad(t: read TensorState) -> Bool {
+    return t.has_grad
+}
+
+fn tensor_state_grad(t: read TensorState) -> Int {
+    return t.grad
+}
+
+fn tensor_state_clear_grad(t: read TensorState) -> fresh TensorState {
+    return TensorState(uop: t.uop, is_param: t.is_param, has_grad: false, grad: 0 - 1)
+}
+
+fn tensor_state_set_grad(t: read TensorState, grad: Int) -> fresh TensorState {
+    return TensorState(uop: t.uop, is_param: t.is_param, has_grad: true, grad: grad)
+}
+
+fn tensor_state_accumulate_grad(cache: mut UOpCache, t: read TensorState, grad: Int) -> fresh TensorState {
+    if t.has_grad == false { return tensor_state_set_grad(t: read t, grad: grad) }
+    let dev = tensor_device(cache: read cache, x: t.grad)
+    let moved = tensor_to(cache: mut cache, x: grad, device: read dev)
+    let summed = tensor_add(cache: mut cache, a: t.grad, b: moved)
+    return tensor_state_set_grad(t: read t, grad: summed)
+}
+
 fn tensor_shape(cache: read UOpCache, x: Int) -> fresh List<Int> {
     return uop_shape(cache: read cache, id: x)
 }
@@ -1036,12 +1060,54 @@ fn tensor_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>) -> f
     return take out
 }
 
+fn tensor_gradient_with_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>, gradient: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read targets) {
+        let target = List.get<Int>(list: read targets, index: i)
+        let grad = grad_wrt_with_gradient(cache: mut cache, root: root, target: target, gradient: gradient)
+        push1(l: mut out, a: grad)
+        i = i + 1
+    }
+    return take out
+}
+
 fn backward(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {
     return tensor_gradient(cache: mut cache, root: root, targets: read targets)
 }
 
 fn tensor_backward(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {
     return backward(cache: mut cache, root: root, targets: read targets)
+}
+
+fn tensor_backward_with_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>, gradient: Int) -> fresh List<Int> {
+    return tensor_gradient_with_gradient(cache: mut cache, root: root, targets: read targets, gradient: gradient)
+}
+
+fn tensor_states_backward(cache: mut UOpCache, root: read TensorState, targets: read List<TensorState>) -> fresh List<TensorState> {
+    local out = List.new<TensorState>()
+    let mut i = 0
+    while i < List.len<TensorState>(list: read targets) {
+        local t = List.get<TensorState>(list: read targets, index: i)
+        let grad = grad_wrt(cache: mut cache, root: root.uop, target: t.uop)
+        local updated = tensor_state_accumulate_grad(cache: mut cache, t: read t, grad: grad)
+        List.push<TensorState>(list: mut out, value: read (manage updated))
+        i = i + 1
+    }
+    return take out
+}
+
+fn tensor_states_backward_with_gradient(cache: mut UOpCache, root: read TensorState, targets: read List<TensorState>, gradient: read TensorState) -> fresh List<TensorState> {
+    local out = List.new<TensorState>()
+    let mut i = 0
+    while i < List.len<TensorState>(list: read targets) {
+        local t = List.get<TensorState>(list: read targets, index: i)
+        let grad = grad_wrt_with_gradient(cache: mut cache, root: root.uop, target: t.uop, gradient: gradient.uop)
+        local updated = tensor_state_accumulate_grad(cache: mut cache, t: read t, grad: grad)
+        List.push<TensorState>(list: mut out, value: read (manage updated))
+        i = i + 1
+    }
+    return take out
 }
 
 fn _rop(cache: mut UOpCache, x: Int, op: Ops, axes: read List<Int>) -> Int {

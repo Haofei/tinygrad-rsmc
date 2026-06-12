@@ -382,3 +382,8 @@ fn grad_wrt(cache: mut UOpCache, root: Int, target: Int) -> Int {
     let raw = grad_wrt_inner(cache: mut cache, node: root, g: one, target: target)
     return graph_rewrite(cache: mut cache, id: raw)
 }
+
+fn grad_wrt_with_gradient(cache: mut UOpCache, root: Int, target: Int, gradient: Int) -> Int {
+    let raw = grad_wrt_inner(cache: mut cache, node: root, g: gradient, target: target)
+    return graph_rewrite(cache: mut cache, id: raw)
+}

@@ -430,12 +430,13 @@ Integrated pieces:
   with duplicate last-wins masked merge, `scatter_reduce` for sum/prod/mean/amax/amin,
   scalar `scatter(..., reduce="add"/"multiply")`, upstream-shaped wrappers for `_pre_scatter`,
   `_masked_merge`, `scatter_reduce`, `_tri`, `_ufix_keep_dtype`, constrained materialized
-  `__getitem__`/`_getitem`, implicit-scalar `gradient`/`backward` wrappers over the integrated
-  `grad_wrt` slice, `_apply_uop` dispatch for movement/reduce/unary/binary/where graph
+  `__getitem__`/`_getitem`, implicit-scalar and explicit-incoming-gradient `gradient`/`backward`
+  wrappers over the integrated `grad_wrt` slice, `_apply_uop` dispatch for movement/reduce/unary/binary/where graph
   construction, Tensor `_rop` reduce forwarding, source-shaped `sequential` over graph function
   UOps, plus boundary wrappers for `alu`, scalar `ufix`, `contiguous`, and `to` over existing UOp
-  graph primitives. The RSS `backward` wrapper returns gradients for explicit target UOps; it does
-  not yet mutate Python Tensor `.grad` fields or discover targets through a weakref registry,
+  graph primitives. The RSS `backward` wrapper returns gradients for explicit target UOps and has
+  explicit-state `TensorState` helpers to set, clear, discover, and accumulate `.grad`; it does
+  not yet mutate Python Tensor objects in place or discover targets through a weakref registry,
   constrained object-state helpers for `__hash__`, `get`/`set`-style state access,
   whole-tensor and indexed `__setitem__` graph assignment over the existing `assign`/`getitem`
   helpers, `__delitem__` rejection as a false/unsupported result, and a metadata-state wrapper
@@ -446,6 +447,8 @@ Integrated pieces:
   exception, weakref, or context-frame metadata semantics,
   a first graph-level `TensorState` lifecycle spine with `uop`/param/grad flags, state
   `replace`/`as_param` helpers, graph-backed `shape`/`dtype`/`device`/`numel`/`nbytes`,
+  `grad`/`has_grad`/`clear_grad`/`set_grad`/accumulate helpers and batch state `backward`
+  wrappers that update explicit RSS `TensorState` lists,
   `empty`/`empty_like` over UOp buffer construction, no-op-aware same-device `to`, single-tensor
   `realize` through the integrated scheduler/runtime path, and narrow evaluator-backed
   `data`/`item`/`tolist` helpers for supported CPU/value graphs,
@@ -836,6 +839,9 @@ Current integrated demo:
   and gradient wrt a broadcasted `[1,3]` input accumulates to `[2,2,2]`.
 - validates Tensor gradients through graph-backed `SHRINK` slicing against real tinygrad:
   `sum(x[0:2,1:3])` routes gradients back to the source as `[0,1,1,0,1,1]` using a `PAD` VJP.
+- validates explicit incoming-gradient routing for that slice by seeding the scalar backward pass
+  with `3`, and validates explicit RSS `TensorState` backward helpers that set `.grad`, accumulate
+  repeated backward calls, and use supplied gradient state.
 - validates Tensor gradients through graph-backed `FLIP` against real tinygrad with a weighted
   sum, routing gradients back to the source as `[100,10,1,200,20,2]`.
 - validates Tensor gradients through graph-backed `PAD` against real tinygrad:
@@ -917,10 +923,10 @@ Major missing integrated work:
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and
   selected unary/math VJPs. `tensor_gradient` now wraps the supported implicit scalar-gradient
-  path for a list of target UOps and `backward` forwards to that explicit-target path, but full
-  Function-style APIs, explicit incoming-gradient handling, complete VJP coverage,
-  gradient accumulation APIs, Python Tensor `.grad` mutation/discovery, and exact tinygrad gradient
-  semantics are still missing.
+  and explicit incoming-gradient paths for a list of target UOps, `backward` forwards to those
+  explicit-target paths, and RSS `TensorState` helpers model `.grad` discovery/set/clear/accumulation
+  for explicit state lists, but full Function-style APIs, complete VJP coverage, Python weakref-driven
+  Tensor discovery and in-place Python object mutation, and exact tinygrad gradient semantics are still missing.
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a broader method-helper/alias slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, exact symbolic shape

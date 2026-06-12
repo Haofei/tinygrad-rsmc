@@ -1296,6 +1296,14 @@ fn mk_special(cache: mut UOpCache, dt: read DType, size: Int) -> Int {
     return intern(cache: mut cache, op: SPECIAL, dt: read dt, src: take e, arg: take a)
 }
 
+fn mk_special_named(cache: mut UOpCache, dt: read DType, size: Int, name: read String) -> Int {
+    let sz = mk_const_int(cache: mut cache, dt: read dt, v: size)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sz)
+    local a = ArgStr(text: String.copy(value: read name))
+    return intern(cache: mut cache, op: SPECIAL, dt: read dt, src: take e, arg: take a)
+}
+
 // --- accessors over (cache, id) ---
 fn node_op(cache: read UOpCache, id: Int) -> fresh Ops {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
@@ -1431,6 +1439,28 @@ fn node_arg_str_len(cache: read UOpCache, id: Int) -> Int {
         ArgBufferize(b) => { return 0 }
         ArgProgram(p) => { return 0 }
         ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_special_name(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgStr(t) => { return String.copy(value: read t) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
     }
 }
 

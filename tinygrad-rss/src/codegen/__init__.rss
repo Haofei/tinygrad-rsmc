@@ -45,12 +45,35 @@ fn codegen_index_param_slot(cache: read UOpCache, ptr: Int) -> Int {
     return node_param_slot(cache: read cache, id: base)
 }
 
+fn codegen_special_axis(name: read String) -> Int {
+    let n = String.len(value: read name)
+    if n == 0 { return 0 - 1 }
+    match String.parse_int(value: read String.slice(value: read name, start: n - 1, len: 1)) {
+        Some(v) => { return v }
+        None => { return 0 - 1 }
+    }
+}
+
+fn codegen_special_size(cache: read UOpCache, id: Int) -> Int {
+    if node_num_src(cache: read cache, id: id) == 0 { return 1 }
+    let size = node_src_id(cache: read cache, id: id, k: 0)
+    if node_is_const_int(cache: read cache, id: size) { return node_const_int(cache: read cache, id: size) }
+    return 1
+}
+
+fn codegen_set_dim(vals: mut List<Int>, axis: Int, value: Int) -> Unit {
+    if axis < 0 { return Unit }
+    if axis >= List.len<Int>(list: read vals) { return Unit }
+    List.set<Int>(list: mut vals, index: axis, value: read value)
+    return Unit
+}
+
 fn codegen_program_arg_from_sink(cache: read UOpCache, sink: Int, name: read String) -> fresh ProgramArg {
     local global_size = List.new<Int>()
     List.push<Int>(list: mut global_size, value: read 1)
     List.push<Int>(list: mut global_size, value: read 1)
     List.push<Int>(list: mut global_size, value: read 1)
-    local local_size = List.new<Int>()
+    let mut local_size = List.new<Int>()
     List.push<Int>(list: mut local_size, value: read 1)
     List.push<Int>(list: mut local_size, value: read 1)
     List.push<Int>(list: mut local_size, value: read 1)
@@ -72,6 +95,23 @@ fn codegen_program_arg_from_sink(cache: read UOpCache, sink: Int, name: read Str
         if op == PARAM {
             codegen_push_sorted_unique_int(vals: mut globals, v: node_param_slot(cache: read cache, id: u))
         }
+        if op == SPECIAL {
+            let sname = node_special_name(cache: read cache, id: u)
+            let axis = codegen_special_axis(name: read sname)
+            let size = codegen_special_size(cache: read cache, id: u)
+            if String.starts_with(value: read sname, prefix: read "i") {
+                codegen_set_dim(vals: mut global_size, axis: axis, value: size)
+                local_size = List.new<Int>()
+            } else {
+                if String.starts_with(value: read sname, prefix: read "l") {
+                    codegen_set_dim(vals: mut local_size, axis: axis, value: size)
+                } else {
+                    if String.starts_with(value: read sname, prefix: read "g") {
+                        codegen_set_dim(vals: mut global_size, axis: axis, value: size)
+                    }
+                }
+            }
+        }
         if op == LOAD || op == STORE {
             if node_num_src(cache: read cache, id: u) > 0 {
                 let slot = codegen_index_param_slot(cache: read cache, ptr: node_src_id(cache: read cache, id: u, k: 0))
@@ -86,7 +126,7 @@ fn codegen_program_arg_from_sink(cache: read UOpCache, sink: Int, name: read Str
         }
         i = i + 1
     }
-    return mk_program_arg(name: read name, global_size: read global_size, has_local_size: true,
+    return mk_program_arg(name: read name, global_size: read global_size, has_local_size: List.len<Int>(list: read local_size) > 0,
                           local_size: read local_size, vars: read vars, globals: read globals,
                           outs: read outs, ins: read ins)
 }

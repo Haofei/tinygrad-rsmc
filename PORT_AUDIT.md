@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 21 RSS files, 16,116 LOC.
+  - integrated `tinygrad-rss/src`: 21 RSS files, 16,202 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -142,12 +142,12 @@ Integrated pieces:
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
   metadata for the current interned UOps (`ops`, load/store bytes, and unique capped buffer memory),
-  derives first `ProgramInfo.from_sink`-style program metadata (`vars`, `globals`, `outs`, `ins`)
-  for the current lowered sink shape, then appends a `SOURCE` child with the rendered kernel text. It also has the first
+  derives first `ProgramInfo.from_sink`-style program metadata (`vars`, `globals`, `outs`, `ins`,
+  and integer `SPECIAL` launch dimensions for `g*`, `l*`, and `i*` names) for the current lowered
+  sink shape, then appends a `SOURCE` child with the rendered kernel text. It also has the first
   `to_program`-style orchestration for the supported C-style path:
   `do_linearize -> do_estimates -> do_render_cstyle`. Full symbolic `sint` estimates,
-  exact `SPECIAL` launch-size extraction, aux metadata, compile/binary materialization, and full
-  schedule/device rewrite orchestration remain unported.
+  aux metadata, compile/binary materialization, and full schedule/device rewrite orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -508,7 +508,7 @@ Major missing integrated work:
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
-  first `ProgramInfo.from_sink` metadata derivation, and
+  first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
   IF rejection, late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.

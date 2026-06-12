@@ -316,7 +316,12 @@ Integrated pieces:
   and buffer-to-`SLICE` rewrite for planned `LINEAR` calls. Exact TLSF lifetime reuse remains
   unported; the current integrated planner uses monotonic lane offsets. Source-shaped `_collect_bufs`
   and `_can_plan` delegate to the integrated planner checks.
-- `schedule/indexing.rss`: first integrated source-shaped `tinygrad/schedule/indexing.py` slice:
+- `schedule/indexing.rss`: integrated source-shaped `tinygrad/schedule/indexing.py` slice:
+  exposes the upstream entry point names `realize`, `realize_srcs`, `realize_store_after_src`,
+  `new_range`, `create_bufferize_and_index_based_on_ranges`,
+  `convert_pad_to_where_to_keep_behavior_local`, `convert_reduce_to_reduce_with_ranges`,
+  `remove_movement_op_after_rangeify`, `_apply_reshape`, `apply_movement_op`,
+  `run_rangeify`, and `render_ranges` over the cache-backed RSS IR. It covers
   `ALWAYS_CONTIGUOUS` classification, realize-map generation for `COPY`/`CONTIGUOUS`/`STORE`,
   non-contiguous source realization for `COPY`/`MSELECT`/`MSTACK`, direct `COPY`/`SLICE` store-source
   cleanup, simple store self-dependency hazard detection, range-context allocation with size-1
@@ -574,9 +579,9 @@ Current integrated demo:
   accounting for direct host execution and scheduled PROGRAM execution with a `BIND`.
 - validates the first source-shaped scheduler memory planner slice: compute/copy lane separation,
   int8 arena `SLICE` rewrites that pass the integrated spec verifier, and held-buffer exclusion.
-- validates the first source-shaped scheduler indexing slice: `ALWAYS_CONTIGUOUS` classification,
-  unconditional realize ops, non-contiguous copy-source realization, direct copy-store cleanup, and
-  self-store source realization.
+- validates the source-shaped scheduler indexing slice: upstream facade names are callable,
+  `ALWAYS_CONTIGUOUS` classification, unconditional realize ops, non-contiguous copy-source
+  realization, direct copy-store cleanup, and self-store source realization.
 - validates scheduler indexing range/movement helpers: size-1 range folding, sequential range ids,
   `SHRINK`/`PERMUTE`/`FLIP`/`EXPAND` index mapping, validity-guarded `PAD` index mapping,
   and row-major `RESHAPE` div/mod index mapping plus identity simplification.
@@ -584,8 +589,9 @@ Current integrated demo:
   chains, `PERMUTE` input-range swizzling, same-index multi-consumer range merging without
   unnecessary staging, EXPAND-triggered ending-range realization, and `REDUCE` `AXIS_REDUCE`
   injection.
-- validates scheduler indexing rangeify graph rewrite for movement removal through `INDEX` and
-  `REDUCE` metadata-to-range-source conversion, plus PAD-to-`WHERE` locality wrapping and
+- validates scheduler indexing rangeify graph rewrite and source-shaped facade wrappers for
+  movement removal through `INDEX`, `REDUCE` metadata-to-range-source conversion, source `INDEX`
+  insertion, PAD-to-`WHERE` locality wrapping, and
   device-carrying full-global `STAGE` option propagation.
 - validates scheduler indexing rangeify `STAGE` option selection for full global staging,
   partial local staging, and upstream removable rules for always-contiguous vs non-contiguous children.

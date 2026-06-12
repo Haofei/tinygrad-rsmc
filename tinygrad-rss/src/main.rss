@@ -3499,6 +3499,17 @@ fn main() -> Unit {
     local idx_ctx = indexing_context_new()
     local idx_shape_123 = shp3(a: 1, b: 2, c: 3)
     local idx_ranges = indexing_ranges_for_shape(cache: mut mcache, ctx: mut idx_ctx, shape: read idx_shape_123, axis_type: read AXIS_LOOP)
+    local idx_source_ctx = indexing_context_new()
+    let idx_source_range = new_range(cache: mut mcache, ctx: mut idx_source_ctx, size: 2, axistype: read AXIS_LOOP)
+    local idx_source_realize = List.new<Int>()
+    realize(ctx: mut idx_source_realize, tr: idx_store)
+    realize_srcs(cache: read mcache, ctx: mut idx_source_realize, rb: idx_copy_group)
+    realize_store_after_src(cache: read mcache, ctx: mut idx_source_realize, store: idx_self_store)
+    local idx_source_render_realized = List.new<Int>()
+    List.push<Int>(list: mut idx_source_render_realized, value: read 0)
+    local idx_source_render_ranges = List.new<Int>()
+    List.push<Int>(list: mut idx_source_render_ranges, value: read idx_source_range)
+    let idx_source_rendered = render_ranges(cache: read mcache, rngs: read idx_source_render_ranges, realized: read idx_source_render_realized)
     let idx_ctx_after_initial_ranges = idx_ctx.next_range
     local idx_shape_234 = shp3(a: 2, b: 3, c: 4)
     local idx_starts = shp3(a: 1, b: 0, c: 2)
@@ -3531,8 +3542,12 @@ fn main() -> Unit {
     local idx_reshape_same_shape = shp(a: 2, b: 3)
     local idx_reshape_same_rngs = indexing_ranges_for_shape(cache: mut mcache, ctx: mut idx_ctx, shape: read idx_reshape_same_shape, axis_type: read AXIS_LOOP)
     local idx_reshape_same = indexing_apply_movement_op(cache: mut mcache, op: read RESHAPE, in_shape: read idx_reshape_same_shape, arg: read idx_reshape_same_shape, rngs: read idx_reshape_same_rngs)
+    local idx_source_movement = apply_movement_op(cache: mut mcache, op: read PERMUTE, in_shape: read idx_shape_234, arg: read idx_perm_arg, rngs: read idx_ranges)
+    local idx_source_reshape = _apply_reshape(cache: mut mcache, in_shape: read idx_reshape_in, out_shape: read idx_reshape_out, urngs: read idx_reshape_rngs)
     showb(label: read "schedule.indexing new_range folds size1 = ", v: node_op(cache: read mcache, id: List.get<Int>(list: read idx_ranges, index: 0)) == CONST && node_op(cache: read mcache, id: List.get<Int>(list: read idx_ranges, index: 1)) == RANGE && node_op(cache: read mcache, id: List.get<Int>(list: read idx_ranges, index: 2)) == RANGE && idx_ctx_after_initial_ranges == 2)
+    showb(label: read "schedule.indexing source-shaped basics = ", v: node_op(cache: read mcache, id: idx_source_range) == RANGE && indexing_list_contains(items: read idx_source_realize, value: idx_store) && String.len(value: read idx_source_rendered) > 0)
     showb(label: read "schedule.indexing movement shrink maps offsets = ", v: node_op(cache: read mcache, id: List.get<Int>(list: read idx_shrink, index: 0)) == ADD && List.get<Int>(list: read idx_shrink, index: 1) == List.get<Int>(list: read idx_ranges, index: 1) && node_op(cache: read mcache, id: List.get<Int>(list: read idx_shrink, index: 2)) == ADD)
+    showb(label: read "schedule.indexing source-shaped movement = ", v: List.get<Int>(list: read idx_source_movement, index: 0) == List.get<Int>(list: read idx_ranges, index: 2) && List.len<Int>(list: read idx_source_reshape) == 2)
     showb(label: read "schedule.indexing movement permute maps axes = ", v: List.get<Int>(list: read idx_perm, index: 0) == List.get<Int>(list: read idx_ranges, index: 2) && List.get<Int>(list: read idx_perm, index: 1) == List.get<Int>(list: read idx_ranges, index: 0) && List.get<Int>(list: read idx_perm, index: 2) == List.get<Int>(list: read idx_ranges, index: 1))
     showb(label: read "schedule.indexing movement flip maps axis = ", v: List.get<Int>(list: read idx_flip, index: 0) == List.get<Int>(list: read idx_ranges, index: 0) && node_op(cache: read mcache, id: List.get<Int>(list: read idx_flip, index: 1)) == SUB && List.get<Int>(list: read idx_flip, index: 2) == List.get<Int>(list: read idx_ranges, index: 2))
     showb(label: read "schedule.indexing movement expand zeros broadcast axes = ", v: node_is_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 0)) && node_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 0)) == 0 && node_is_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 1)) && node_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 1)) == 0 && node_is_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 2)) && node_const_int(cache: read mcache, id: List.get<Int>(list: read idx_expand, index: 2)) == 0)
@@ -3571,6 +3586,22 @@ fn main() -> Unit {
     let idx_rf_reduce_rewritten = indexing_apply_rangeify_rewrite(cache: mut mcache, root: idx_rf_reduce_contig, analysis: read idx_rf_reduce_result)
     let idx_rf_reduce_rewritten_src = node_src_id(cache: read mcache, id: idx_rf_reduce_rewritten, k: 0)
     let idx_rf_reduce_rewritten_range = node_src_id(cache: read mcache, id: idx_rf_reduce_rewritten_src, k: 1)
+    local idx_rf_source_run = run_rangeify(cache: mut mcache, tsink: idx_rf_contig, debug: false)
+    let mut idx_rf_source_index_ok = false
+    match create_bufferize_and_index_based_on_ranges(cache: mut mcache, analysis: read idx_rf, parent: idx_rf_perm, child: idx_rf_buf, child_rewritten: idx_rf_buf) {
+        Some(r) => { idx_rf_source_index_ok = node_op(cache: read mcache, id: r) == INDEX }
+        None => {}
+    }
+    let mut idx_rf_source_reduce_ok = false
+    match convert_reduce_to_reduce_with_ranges(cache: mut mcache, analysis: read idx_rf_reduce_result, x: idx_rf_reduce, src0: idx_rf_reduce_buf) {
+        Some(r) => { idx_rf_source_reduce_ok = node_op(cache: read mcache, id: r) == REDUCE && node_num_src(cache: read mcache, id: r) == 2 }
+        None => {}
+    }
+    let mut idx_rf_source_remove_ok = false
+    match remove_movement_op_after_rangeify(cache: read mcache, analysis: read idx_rf, x: idx_rf_perm) {
+        Some(r) => { idx_rf_source_remove_ok = r == idx_rf_buf }
+        None => {}
+    }
     local idx_rf_pad_before = shp(a: 1, b: 0)
     local idx_rf_pad_after = shp(a: 0, b: 1)
     let idx_rf_pad_buf = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
@@ -3581,6 +3612,11 @@ fn main() -> Unit {
     let idx_rf_pad_where = node_src_id(cache: read mcache, id: idx_rf_pad_rewritten, k: 0)
     let idx_rf_pad_where_cond = node_src_id(cache: read mcache, id: idx_rf_pad_where, k: 0)
     let idx_rf_pad_where_tval = node_src_id(cache: read mcache, id: idx_rf_pad_where, k: 1)
+    let mut idx_rf_source_pad_ok = false
+    match convert_pad_to_where_to_keep_behavior_local(cache: mut mcache, analysis: read idx_rf_pad_result, x: idx_rf_pad, value: idx_rf_pad_buf) {
+        Some(r) => { idx_rf_source_pad_ok = node_op(cache: read mcache, id: r) == WHERE }
+        None => {}
+    }
     let idx_rf_pad_where_fval = node_src_id(cache: read mcache, id: idx_rf_pad_where, k: 2)
     let idx_rf_stage_buf0 = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
     let idx_rf_stage_buf1 = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
@@ -3632,6 +3668,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify realizes root axes = ", v: List.len<IndexingRealizeAxisRecord>(list: read idx_rf.realize_axes) == 1 && List.len<Int>(list: read idx_rf_contig_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify permute swizzles inputs = ", v: List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1) && List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 1) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0) && List.get<Int>(list: read idx_rf_buf_rec.out_ranges, index: 0) == List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0))
     showb(label: read "schedule.indexing rangeify reduce injects axis = ", v: node_op(cache: read mcache, id: idx_rf_reduce_axis) == RANGE && node_range_type(cache: read mcache, id: idx_rf_reduce_axis) == AXIS_REDUCE && node_op(cache: read mcache, id: idx_rf_reduce_out_axis) == CONST)
+    showb(label: read "schedule.indexing source-shaped rangeify facades = ", v: idx_rf_source_run.ok && idx_rf_source_index_ok && idx_rf_source_reduce_ok && idx_rf_source_remove_ok && idx_rf_source_pad_ok)
     showb(label: read "schedule.indexing rangeify rewrite removes movement = ", v: node_op(cache: read mcache, id: idx_rf_rewritten) == CONTIGUOUS && node_op(cache: read mcache, id: idx_rf_rewritten_src) == INDEX && node_src_id(cache: read mcache, id: idx_rf_rewritten_src, k: 0) == idx_rf_buf)
     showb(label: read "schedule.indexing rangeify rewrite reduce ranges = ", v: node_op(cache: read mcache, id: idx_rf_reduce_rewritten_src) == REDUCE && node_num_src(cache: read mcache, id: idx_rf_reduce_rewritten_src) == 2 && List.len<Int>(list: read node_argints(cache: read mcache, id: idx_rf_reduce_rewritten_src)) == 0 && node_range_type(cache: read mcache, id: idx_rf_reduce_rewritten_range) == AXIS_REDUCE)
     showb(label: read "schedule.indexing rangeify rewrite pad where = ", v: node_op(cache: read mcache, id: idx_rf_pad_where) == WHERE && node_op(cache: read mcache, id: idx_rf_pad_where_cond) == AND && node_op(cache: read mcache, id: idx_rf_pad_where_tval) == INDEX && node_const_float(cache: read mcache, id: idx_rf_pad_where_fval) == 0.0)

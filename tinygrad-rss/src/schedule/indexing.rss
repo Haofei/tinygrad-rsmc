@@ -1,9 +1,7 @@
-// First integrated slice of tinygrad/schedule/indexing.py.
+// Integrated slice of tinygrad/schedule/indexing.py.
 //
-// This ports the source-shaped realize-map generation rules used before rangeify:
-// ALWAYS_CONTIGUOUS classification, unconditional realization of COPY/CONTIGUOUS/STORE,
-// realization of non-contiguous sources of COPY/MSELECT/MSTACK, direct STORE source cleanup for
-// COPY/SLICE outputs, and simple write-after-read hazard detection for STORE sources.
+// This ports the source-shaped realize-map generation rules used before rangeify,
+// range creation, movement/range rewrites, and a cache-backed run_rangeify facade.
 features: local
 
 struct IndexingRealizeResult derives(Clone) {
@@ -155,12 +153,31 @@ fn indexing_generate_realize_map(cache: read UOpCache, root: Int) -> fresh Index
     return IndexingRealizeResult(nodes: take realize)
 }
 
+fn realize(ctx: mut List<Int>, tr: Int) -> Unit {
+    indexing_add_unique(items: mut ctx, value: tr)
+    return Unit
+}
+
+fn realize_srcs(cache: read UOpCache, ctx: mut List<Int>, rb: Int) -> Unit {
+    indexing_realize_srcs(cache: read cache, realize: mut ctx, rb: rb)
+    return Unit
+}
+
+fn realize_store_after_src(cache: read UOpCache, ctx: mut List<Int>, store: Int) -> Unit {
+    indexing_realize_store_after_src(cache: read cache, realize: mut ctx, store: store)
+    return Unit
+}
+
 fn indexing_new_range(cache: mut UOpCache, ctx: mut IndexingContext, size: Int, axis_type: read AxisType) -> Int {
     let dt = dt_weakint()
     if size == 1 { return mk_const_int(cache: mut cache, dt: read dt, v: 0) }
     let axis = ctx.next_range
     ctx.next_range = ctx.next_range + 1
     return mk_range_int(cache: mut cache, end: size, axis_id: axis, axis_type: read axis_type, dt: read dt)
+}
+
+fn new_range(cache: mut UOpCache, ctx: mut IndexingContext, size: Int, axistype: read AxisType) -> Int {
+    return indexing_new_range(cache: mut cache, ctx: mut ctx, size: size, axis_type: read axistype)
 }
 
 fn indexing_ranges_for_shape(cache: mut UOpCache, ctx: mut IndexingContext, shape: read List<Int>, axis_type: read AxisType) -> fresh List<Int> {
@@ -366,6 +383,10 @@ fn indexing_apply_reshape(cache: mut UOpCache, rngs: read List<Int>, in_shape: r
     return take out
 }
 
+fn _apply_reshape(cache: mut UOpCache, in_shape: read List<Int>, out_shape: read List<Int>, urngs: read List<Int>) -> fresh List<Int> {
+    return indexing_apply_reshape(cache: mut cache, rngs: read urngs, in_shape: read in_shape, out_shape: read out_shape)
+}
+
 fn indexing_apply_movement_op(cache: mut UOpCache, op: read Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
     if op == SHRINK {
         local starts = List.new<Int>()
@@ -389,6 +410,10 @@ fn indexing_apply_movement_op(cache: mut UOpCache, op: read Ops, in_shape: read 
         j = j + 1
     }
     return take out
+}
+
+fn apply_movement_op(cache: mut UOpCache, op: read Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
+    return indexing_apply_movement_op(cache: mut cache, op: read op, in_shape: read in_shape, arg: read arg, rngs: read rngs)
 }
 
 fn indexing_record_index(records: read List<IndexingRangeRecord>, node: Int) -> Int {
@@ -887,4 +912,66 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
         oi = oi - 1
     }
     return IndexingRangeifyResult(records: take records, realize_axes: take realize_axes, ok: true)
+}
+
+fn create_bufferize_and_index_based_on_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, parent: Int, child: Int, child_rewritten: Int) -> Option<Int> {
+    let parent_rec_i = indexing_record_index(records: read analysis.records, node: parent)
+    let adjusted = indexing_rewrite_child_for_ranges(cache: mut cache, analysis: read analysis, parent_orig: parent, parent_rec_i: parent_rec_i, child_orig: child, child_rewritten: child_rewritten)
+    if adjusted == child_rewritten { return None }
+    return Some(adjusted)
+}
+
+fn convert_pad_to_where_to_keep_behavior_local(cache: mut UOpCache, analysis: read IndexingRangeifyResult, x: Int, value: Int) -> Option<Int> {
+    let rec_i = indexing_record_index(records: read analysis.records, node: x)
+    if rec_i < 0 { return None }
+    let rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: rec_i)
+    let valid = indexing_valid_product(cache: mut cache, ranges: read rec.in_ranges)
+    let zero = indexing_zero_like(cache: mut cache, like: value)
+    return Some(mk_where(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: value), cond: valid, tval: value, fval: zero))
+}
+
+fn convert_reduce_to_reduce_with_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, x: Int, src0: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != REDUCE { return None }
+    if List.len<Int>(list: read node_argints(cache: read cache, id: x)) == 0 { return None }
+    let rec_i = indexing_record_index(records: read analysis.records, node: x)
+    if rec_i < 0 { return None }
+    let rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: rec_i)
+    local axes = node_argints(cache: read cache, id: x)
+    local reduce_ranges = indexing_select_axes(items: read rec.in_ranges, axes: read axes)
+    return Some(indexing_reduce_with_ranges(cache: mut cache, id: x, src0: src0, ranges: read reduce_ranges))
+}
+
+fn remove_movement_op_after_rangeify(cache: read UOpCache, analysis: read IndexingRangeifyResult, x: Int) -> Option<Int> {
+    let rec_i = indexing_record_index(records: read analysis.records, node: x)
+    if rec_i < 0 { return None }
+    let op = node_op(cache: read cache, id: x)
+    if group_movement(op: read op) == false { return None }
+    if node_num_src(cache: read cache, id: x) <= 0 { return None }
+    return Some(node_src_id(cache: read cache, id: x, k: 0))
+}
+
+fn run_rangeify(cache: mut UOpCache, tsink: Int, debug: Bool) -> fresh IndexingRangeifyResult {
+    if debug {
+        if node_num_src(cache: read cache, id: tsink) < 0 { return indexing_run_rangeify_analysis(cache: mut cache, root: tsink) }
+    }
+    return indexing_run_rangeify_analysis(cache: mut cache, root: tsink)
+}
+
+fn render_ranges(cache: read UOpCache, rngs: read List<Int>, realized: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read rngs) {
+        let r = List.get<Int>(list: read rngs, index: i)
+        out = String.concat(left: read out, right: read "[")
+        if indexing_list_contains(items: read realized, value: i) {
+            out = String.concat(left: read out, right: read "*")
+        }
+        out = String.concat(left: read out, right: read uop_render_expr(cache: read cache, id: r))
+        if indexing_list_contains(items: read realized, value: i) {
+            out = String.concat(left: read out, right: read "*")
+        }
+        out = String.concat(left: read out, right: read "]")
+        i = i + 1
+    }
+    return String.copy(value: read out)
 }

@@ -205,6 +205,10 @@ fn cstyle_render_statement(cache: read UOpCache, id: Int) -> fresh String {
         let p8 = cstyle_cat(a: read p7, b: read name)
         return cstyle_cat(a: read p8, b: read "++) {")
     }
+    if op == IF {
+        let gate = cstyle_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return cstyle_cat(a: read "if (", b: read cstyle_cat(a: read gate, b: read ") {"))
+    }
     if op == END || op == ENDIF { return "}" }
     return cstyle_render_expr(cache: read cache, id: id)
 }
@@ -358,6 +362,10 @@ fn cstyle_render_statement_ctx(cache: read UOpCache, names: read Map<Int, String
         let p8 = cstyle_cat(a: read p7, b: read name)
         return cstyle_cat(a: read p8, b: read "++) {")
     }
+    if op == IF {
+        let gate = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        return cstyle_cat(a: read "if (", b: read cstyle_cat(a: read gate, b: read ") {"))
+    }
     return cstyle_render_node_expr_ctx(cache: read cache, names: read names, id: id)
 }
 
@@ -399,9 +407,14 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
             Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
             if int_contains(items: read params, v: id) == false { List.push<Int>(list: mut params, value: read id) }
         } else {
-            if op == RANGE {
+            if op == AFTER {
+                let src = node_src_id(cache: read cache, id: id, k: 0)
+                let alias = cstyle_operand(cache: read cache, names: read names, id: src)
+                Map.insert<Int, String>(map: mut names, key: read id, value: read alias)
+            } else {
+            if op == RANGE || op == IF {
                 let nm = cstyle_cat(a: read "r", b: read uop_range_str(cache: read cache, id: id))
-                Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
+                if op == RANGE { Map.insert<Int, String>(map: mut names, key: read id, value: read nm) }
                 let line = cstyle_render_statement_ctx(cache: read cache, names: read names, id: id)
                 List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read line))
                 depth = depth + 1
@@ -428,6 +441,7 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
                         }
                     }
                 }
+            }
             }
         }
         i = i + 1

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 19,086 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 19,332 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -206,7 +206,9 @@ Integrated pieces:
   constant-times-sum distribution, exact min/max constantization, bound-proven `MAX` folding,
   associative constant-chain folding, comparison threshold normalization, chained floor-div
   folding, constant-last reordering, range/end division folding, cast-chain folding,
-  `AFTER` dependency cleanup, vector `STACK(CONST...)` folding, inverted-condition `WHERE` folding, simple `WHERE` folding,
+  `AFTER` dependency cleanup, `GROUP`/`SINK` flattening, vectorized binary ALU lane splitting,
+  `CAST(WHERE(...))` pushdown, reciprocal and weakint distribution algebra,
+  vector `STACK(CONST...)` folding, inverted-condition `WHERE` folding, simple `WHERE` folding,
   constant-exponent `POW` simplification for integer exponents,
   monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
@@ -332,6 +334,10 @@ Current integrated demo:
   `RANGE//end -> 0`, lossless cast-chain collapse, range-proven integer cast-chain collapse,
   `AFTER` dependency flattening, and vector `STACK(CONST...) -> CONST` folding while preserving
   full vector dtype through `graph_rewrite` and `pattern_graph_rewrite`.
+- validates a grouped upstream symbolic phase-three batch: singleton `GROUP` collapse,
+  `SINK(GROUP(...))` flattening, vectorized binary ALU lane splitting,
+  `CAST(WHERE(...)) -> WHERE(CAST(...), CAST(...))`, `x/(1+x) -> 1-(1/(1+x))`,
+  `1/(x*x) -> (1/x)*(1/x)`, and weakint `(x+y)*c -> x*c+y*c`.
 - validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
   constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

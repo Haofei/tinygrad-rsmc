@@ -43,6 +43,15 @@ fn decomp_const_power_exp(cache: read UOpCache, id: Int) -> Option<Int> {
     return decomp_power_of_two_exp(v: node_const_int(cache: read cache, id: id))
 }
 
+struct DecompPair derives(Clone) {
+    lo: Int,
+    hi: Int,
+}
+
+fn decomp_pair(lo: Int, hi: Int) -> fresh DecompPair {
+    return DecompPair(lo: lo, hi: hi)
+}
+
 fn decomp_is_true_const(cache: read UOpCache, id: Int) -> Bool {
     if node_is_const_int(cache: read cache, id: id) == false { return false }
     let dt = node_dtype(cache: read cache, id: id)
@@ -132,6 +141,88 @@ fn decomp_cmod_nonnegative_to_sub(cache: mut UOpCache, id: Int) -> Option<Int> {
     let q = mk_alu2(cache: mut cache, op: CDIV, dt: read dt, x: a, y: b)
     let dq = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: b, y: q)
     return Some(mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a, y: dq))
+}
+
+fn decomp_u32_const(cache: mut UOpCache, v: Int) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dt_uint32(), v: v)
+}
+
+fn decomp_u64_const(cache: mut UOpCache, v: Int) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dt_uint64(), v: v)
+}
+
+fn decomp_threefry_mix(cache: mut UOpCache, x0: Int, x1: Int, rot: Int) -> fresh DecompPair {
+    let u32 = dt_uint32()
+    let r = decomp_u32_const(cache: mut cache, v: rot)
+    let rr = decomp_u32_const(cache: mut cache, v: 32 - rot)
+    let nx0 = mk_alu2(cache: mut cache, op: ADD, dt: read u32, x: x0, y: x1)
+    let left = mk_alu2(cache: mut cache, op: SHL, dt: read u32, x: x1, y: r)
+    let right = mk_alu2(cache: mut cache, op: SHR, dt: read u32, x: x1, y: rr)
+    let roted = mk_alu2(cache: mut cache, op: ADD, dt: read u32, x: left, y: right)
+    let nx1 = mk_alu2(cache: mut cache, op: XOR, dt: read u32, x: nx0, y: roted)
+    return decomp_pair(lo: nx0, hi: nx1)
+}
+
+fn decomp_threefry_key(cache: mut UOpCache, k0: Int, k1: Int, idx: Int) -> Int {
+    if idx == 0 { return k1 }
+    if idx == 1 {
+        let xor = mk_alu2(cache: mut cache, op: XOR, dt: read dt_uint32(), x: k0, y: k1)
+        let c = decomp_u32_const(cache: mut cache, v: 466688986)
+        return mk_alu2(cache: mut cache, op: XOR, dt: read dt_uint32(), x: xor, y: c)
+    }
+    return k0
+}
+
+fn decomp_threefry_round(cache: mut UOpCache, p: read DecompPair, k0: Int, k1: Int, round: Int, r0: Int, r1: Int, r2: Int, r3: Int) -> fresh DecompPair {
+    local p0 = decomp_threefry_mix(cache: mut cache, x0: p.lo, x1: p.hi, rot: r0)
+    local p1 = decomp_threefry_mix(cache: mut cache, x0: p0.lo, x1: p0.hi, rot: r1)
+    local p2 = decomp_threefry_mix(cache: mut cache, x0: p1.lo, x1: p1.hi, rot: r2)
+    local p3 = decomp_threefry_mix(cache: mut cache, x0: p2.lo, x1: p2.hi, rot: r3)
+    let ki0 = round % 3
+    let ki1 = (round + 1) % 3
+    let add0 = decomp_threefry_key(cache: mut cache, k0: k0, k1: k1, idx: ki0)
+    let add1_key = decomp_threefry_key(cache: mut cache, k0: k0, k1: k1, idx: ki1)
+    let add1_round = decomp_u32_const(cache: mut cache, v: round + 1)
+    let add1 = mk_alu2(cache: mut cache, op: ADD, dt: read dt_uint32(), x: add1_key, y: add1_round)
+    let nx0 = mk_alu2(cache: mut cache, op: ADD, dt: read dt_uint32(), x: p3.lo, y: add0)
+    let nx1 = mk_alu2(cache: mut cache, op: ADD, dt: read dt_uint32(), x: p3.hi, y: add1)
+    return decomp_pair(lo: nx0, hi: nx1)
+}
+
+fn decomp_threefry2x32(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != THREEFRY { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let x = node_src_id(cache: read cache, id: id, k: 0)
+    let key = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let sdt = dtype_scalar(d: read dt)
+    if sdt.name != "unsigned long" { return None }
+    let u32 = dt_uint32()
+    let u64 = dt_uint64()
+    let mask = decomp_u64_const(cache: mut cache, v: 4294967295)
+    let shift32 = decomp_u64_const(cache: mut cache, v: 32)
+    let xlo64 = mk_alu2(cache: mut cache, op: AND, dt: read u64, x: x, y: mask)
+    let xhi_shift = mk_alu2(cache: mut cache, op: SHR, dt: read u64, x: x, y: shift32)
+    let xhi64 = mk_alu2(cache: mut cache, op: AND, dt: read u64, x: xhi_shift, y: mask)
+    let keylo64 = mk_alu2(cache: mut cache, op: AND, dt: read u64, x: key, y: mask)
+    let keyhi_shift = mk_alu2(cache: mut cache, op: SHR, dt: read u64, x: key, y: shift32)
+    let keyhi64 = mk_alu2(cache: mut cache, op: AND, dt: read u64, x: keyhi_shift, y: mask)
+    let x0 = mk_cast(cache: mut cache, x: xlo64, dt: read u32)
+    let x1 = mk_cast(cache: mut cache, x: xhi64, dt: read u32)
+    let key0 = mk_cast(cache: mut cache, x: keylo64, dt: read u32)
+    let key1 = mk_cast(cache: mut cache, x: keyhi64, dt: read u32)
+    let k2 = decomp_threefry_key(cache: mut cache, k0: key0, k1: key1, idx: 1)
+    let mut p = decomp_pair(lo: mk_alu2(cache: mut cache, op: ADD, dt: read u32, x: x0, y: k2),
+                            hi: mk_alu2(cache: mut cache, op: ADD, dt: read u32, x: x1, y: key1))
+    p = decomp_threefry_round(cache: mut cache, p: read p, k0: key0, k1: key1, round: 0, r0: 13, r1: 15, r2: 26, r3: 6)
+    p = decomp_threefry_round(cache: mut cache, p: read p, k0: key0, k1: key1, round: 1, r0: 17, r1: 29, r2: 16, r3: 24)
+    p = decomp_threefry_round(cache: mut cache, p: read p, k0: key0, k1: key1, round: 2, r0: 13, r1: 15, r2: 26, r3: 6)
+    p = decomp_threefry_round(cache: mut cache, p: read p, k0: key0, k1: key1, round: 3, r0: 17, r1: 29, r2: 16, r3: 24)
+    p = decomp_threefry_round(cache: mut cache, p: read p, k0: key0, k1: key1, round: 4, r0: 13, r1: 15, r2: 26, r3: 6)
+    let hi64 = mk_cast(cache: mut cache, x: p.hi, dt: read u64)
+    let lo64 = mk_cast(cache: mut cache, x: p.lo, dt: read u64)
+    let hi_shift = mk_alu2(cache: mut cache, op: SHL, dt: read u64, x: hi64, y: shift32)
+    return Some(mk_alu2(cache: mut cache, op: OR, dt: read u64, x: hi_shift, y: lo64))
 }
 
 fn decomp_max_to_where(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -393,6 +484,10 @@ fn decomp_mul_recip_to_fdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
 }
 
 fn decomp_late_basic(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match decomp_threefry2x32(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match decomp_floordiv_to_cdiv(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

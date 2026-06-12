@@ -970,6 +970,10 @@ fn main() -> Unit {
     let dc_recip = decomp_late_basic(cache: mut mcache, id: dc_recip_raw)
     let dc_mul_recip_raw = mk_alu2(cache: mut mcache, op: MUL, dt: read dt_float32(), x: dc_fa, y: dc_recip_raw)
     let dc_mul_recip = decomp_late_basic(cache: mut mcache, id: dc_mul_recip_raw)
+    let dc_rng_x = mk_define_var(cache: mut mcache, name: read "rngx", min_val: 0, max_val: 1024, dt: read dt_uint64())
+    let dc_rng_key = mk_define_var(cache: mut mcache, name: read "rngk", min_val: 0, max_val: 1024, dt: read dt_uint64())
+    let dc_threefry_raw = mk_alu2(cache: mut mcache, op: THREEFRY, dt: read dt_uint64(), x: dc_rng_x, y: dc_rng_key)
+    let dc_threefry = decomp_late_basic(cache: mut mcache, id: dc_threefry_raw)
     match dc_floor_pos {
         Some(r) => { showstr(label: read "uop.decomp floordiv same-sign = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
         None => { Log.write(message: read "uop.decomp floordiv same-sign = None") }
@@ -993,6 +997,14 @@ fn main() -> Unit {
     match dc_mul_recip {
         Some(r) => { showstr(label: read "uop.decomp mul reciprocal = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
         None => { Log.write(message: read "uop.decomp mul reciprocal = None") }
+    }
+    match dc_threefry {
+        Some(r) => { showop(label: read "uop.decomp threefry op = ", op: read node_op(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp threefry op = None") }
+    }
+    match dc_threefry {
+        Some(r) => { showi(label: read "uop.decomp threefry deps = ", v: node_num_src(cache: read mcache, id: r)) }
+        None => { showi(label: read "uop.decomp threefry deps = ", v: 0) }
     }
     match dc_floor_pos {
         Some(r) => { showb(label: read "uop.spec valid decomp same-sign div = ", v: spec_type_verify(cache: read mcache, id: r)) }

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 19,332 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 19,439 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -115,7 +115,8 @@ Integrated pieces:
   power-of-two multiply/divide to shifts, `x*-1` to `NEG`, `x+(-y)` to `SUB`, and
   multiply/shift-plus-add to `MULACC`, non-negative `CMOD` to `x-d*CDIV(x,d)`, selected signed
   comparison canonicalizations, tight integer range to `CMPEQ`, and logical-not-of-`CMPNE` to
-  `CMPEQ`. The large transcendental, long-integer, dtype, fast-idiv, broader boolean/comparison
+  `CMPEQ`, plus `THREEFRY(uint64,uint64)` lowering to primitive uint32/uint64 add/xor/shift/cast/or
+  nodes for RNG support. The large transcendental, long-integer, dtype, fast-idiv, broader boolean/comparison
   normalization, and target-op-availability rewrite machinery remains unported.
 - `renderer/cstyle.rss`: first integrated source-shaped `tinygrad/renderer/cstyle.py` slice over
   interned UOp ids, covering C-style dtype names, constants, casts, `__builtin_bit_cast`, core
@@ -348,7 +349,8 @@ Current integrated demo:
   division/modulo, `MAX` to `WHERE`, reciprocal to `FDIV`, and multiply-by-reciprocal to `FDIV`,
   plus power-of-two floor-mod/multiply/divide, `NEG`, `SUB`, and `MULACC` lowering, with verifier
   acceptance for each emitted graph. It also validates non-negative `CMOD` lowering, selected
-  signed comparison canonicalizations, tight-range equality, and logical-not-of-`CMPNE` lowering.
+  signed comparison canonicalizations, tight-range equality, logical-not-of-`CMPNE` lowering, and
+  structural `THREEFRY` lowering to a primitive two-source `OR` root.
 - validates the integrated C-style renderer slice for arithmetic expressions, `WHERE`, `MULACC`,
   casts, bitcasts, pointer-style indexed loads, and stores, producing strings such as
   `((dp+3)*4)`, `((dp<4)?dp:3)`, `__builtin_bit_cast(unsigned int, (int)(dp))`,

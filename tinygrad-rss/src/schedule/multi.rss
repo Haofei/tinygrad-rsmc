@@ -352,9 +352,6 @@ fn multi_reshape(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
     local payload_shape = uop_shape(cache: read cache, id: payload)
     local new_shape = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 1))
-    if prod(x: read payload_shape) != prod(x: read new_shape) {
-        return MultiRewrite(result: fallback, changed: false, ok: false)
-    }
     let new_axis = uop_axis(cache: read cache, id: root)
     if new_axis >= 0 && new_axis < List.len<Int>(list: read new_shape) {
         let multi = node_src_id(cache: read cache, id: root, k: 0)
@@ -363,6 +360,9 @@ fn multi_reshape(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
             let dim = List.get<Int>(list: read new_shape, index: new_axis)
             List.set<Int>(list: mut new_shape, index: new_axis, value: read (dim / dcount))
         }
+    }
+    if prod(x: read payload_shape) != prod(x: read new_shape) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
     }
     let reshaped = mk_reshape(cache: mut cache, x: payload, new_shape: read new_shape)
     let out = mk_multi(cache: mut cache, x: reshaped, axis: new_axis)
@@ -430,28 +430,37 @@ fn multi_shrink(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
         let axis_end = List.get<Int>(list: read ends, index: axis)
         let shard_dim = List.get<Int>(list: read payload_shape, index: axis)
         let dcount = node_effective_device_count(cache: read cache, id: multi)
-        if dcount > 1 && shard_dim > 0 && axis_end > axis_start && axis_start % shard_dim == 0 && axis_end - axis_start == shard_dim {
-            let shard_index = axis_start / shard_dim
-            if shard_index > 0 && shard_index < dcount {
+        if dcount > 1 && shard_dim > 0 {
+            let global_dim = shard_dim * dcount
+            if axis_start == 0 && axis_end == global_dim {
                 List.set<Int>(list: mut starts, index: axis, value: read 0)
                 List.set<Int>(list: mut ends, index: axis, value: read shard_dim)
-                let selected = mk_mselect(cache: mut cache, x: payload, index: shard_index)
-                let dev = multi_effective_device_node(cache: mut cache, id: multi)
-                local copy_src = List.new<Int>()
-                List.push<Int>(list: mut copy_src, value: read selected)
-                List.push<Int>(list: mut copy_src, value: read dev)
-                local dt = node_full_dtype(cache: read cache, id: selected)
-                local copy_arg = ArgNone
-                let copied = intern(cache: mut cache, op: COPY, dt: read dt, src: take copy_src, arg: take copy_arg)
-                let shrunk = mk_shrink(cache: mut cache, x: copied, starts: read starts, ends: read ends)
-                return MultiRewrite(result: shrunk, changed: true, ok: true)
+            } else {
+                if axis_end > axis_start && axis_start % shard_dim == 0 && axis_end - axis_start == shard_dim {
+                    let shard_index = axis_start / shard_dim
+                    if shard_index >= 0 && shard_index < dcount {
+                        List.set<Int>(list: mut starts, index: axis, value: read 0)
+                        List.set<Int>(list: mut ends, index: axis, value: read shard_dim)
+                        let selected = mk_mselect(cache: mut cache, x: payload, index: shard_index)
+                        let dev = multi_effective_device_node(cache: mut cache, id: multi)
+                        local copy_src = List.new<Int>()
+                        List.push<Int>(list: mut copy_src, value: read selected)
+                        List.push<Int>(list: mut copy_src, value: read dev)
+                        local dt = node_full_dtype(cache: read cache, id: selected)
+                        local copy_arg = ArgNone
+                        let copied = intern(cache: mut cache, op: COPY, dt: read dt, src: take copy_src, arg: take copy_arg)
+                        let shrunk = mk_shrink(cache: mut cache, x: copied, starts: read starts, ends: read ends)
+                        return MultiRewrite(result: shrunk, changed: true, ok: true)
+                    }
+                }
+                return MultiRewrite(result: fallback, changed: false, ok: false)
             }
-        }
-        if axis_start != 0 || axis_end != shard_dim {
+        } else if axis_start != 0 || axis_end != shard_dim {
             return MultiRewrite(result: fallback, changed: false, ok: false)
+        } else {
+            List.set<Int>(list: mut starts, index: axis, value: read 0)
+            List.set<Int>(list: mut ends, index: axis, value: read shard_dim)
         }
-        List.set<Int>(list: mut starts, index: axis, value: read 0)
-        List.set<Int>(list: mut ends, index: axis, value: read shard_dim)
     }
     let shrunk = mk_shrink(cache: mut cache, x: payload, starts: read starts, ends: read ends)
     let out = mk_multi(cache: mut cache, x: shrunk, axis: axis)

@@ -20,7 +20,15 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
     }
     if op == MULTI {
         if node_num_src(cache: read cache, id: id) > 0 {
-            return uop_shape(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+            let src = node_src_id(cache: read cache, id: id, k: 0)
+            local out = uop_shape(cache: read cache, id: src)
+            let axis = node_const_int(cache: read cache, id: id)
+            let dcount = node_effective_device_count(cache: read cache, id: id)
+            if axis >= 0 && axis < List.len<Int>(list: read out) && dcount > 1 {
+                let dim = List.get<Int>(list: read out, index: axis)
+                List.set<Int>(list: mut out, index: axis, value: read (dim * dcount))
+            }
+            return take out
         }
         local out = List.new<Int>()
         return take out

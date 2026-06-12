@@ -188,6 +188,57 @@ fn realize_estimate_uop(cache: read UOpCache, call: Int) -> fresh Estimates {
     return Estimates(ops: 0, lds: 0, mem: 0)
 }
 
+fn get_call_arg_uops(cache: read UOpCache, call: Int) -> fresh List<Int> {
+    return realize_get_call_arg_uops(cache: read cache, call: call)
+}
+
+fn get_call_outs_ins(cache: read UOpCache, call: Int) -> fresh RealizeCallIO {
+    return realize_get_call_outs_ins(cache: read cache, call: call)
+}
+
+fn get_call_name(cache: read UOpCache, call: Int) -> fresh String {
+    if node_op(cache: read cache, id: call) != CALL { return String.copy(value: read "") }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    let op = node_op(cache: read cache, id: ast)
+    if op == PROGRAM { return node_program_name(cache: read cache, id: ast) }
+    if op == SLICE { return String.copy(value: read "view") }
+    if op == COPY { return String.copy(value: read "copy") }
+    if op == CUSTOM_FUNCTION {
+        local nm = realize_custom_function_name(cache: read cache, id: ast)
+        if nm == "encdec" { return String.copy(value: read "enc/dec") }
+        if nm == "graph" { return String.copy(value: read "batched") }
+    }
+    return String.copy(value: read "")
+}
+
+fn estimate_uop(cache: read UOpCache, call: Int) -> fresh Estimates {
+    return realize_estimate_uop(cache: read cache, call: call)
+}
+
+fn track_stats(cache: read UOpCache, call: Int) -> Bool {
+    return node_op(cache: read cache, id: call) == CALL
+}
+
+fn optimize_local_size(cache: read UOpCache, call: Int, prg: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: call) != CALL { return None }
+    if node_op(cache: read cache, id: prg) != PROGRAM { return None }
+    return None
+}
+
+fn get_runtime(cache: read UOpCache, ctx: mut RealizeExecContext, device: read String, ast: Int) -> Int {
+    if node_op(cache: read cache, id: ast) != PROGRAM { return 0 }
+    local function_name = node_program_name(cache: read cache, id: ast)
+    let source = realize_program_source_id(cache: read cache, ast: ast)
+    let source_len = realize_program_source_len(cache: read cache, ast: ast)
+    return realize_runtime_cache_get_or_insert(ctx: mut ctx, function_name: read function_name, source_id: source, source_len: source_len)
+}
+
+fn get_graph_runtime(cache: read UOpCache, ast: Int) -> Int {
+    if node_op(cache: read cache, id: ast) != CUSTOM_FUNCTION { return 0 }
+    if realize_custom_function_name(cache: read cache, id: ast) == "graph" { return 0 }
+    return 0
+}
+
 fn realize_resolve_param_id(cache: read UOpCache, id: Int, inputs: read List<Int>) -> Int {
     let op = node_op(cache: read cache, id: id)
     if op == PARAM {
@@ -218,6 +269,14 @@ fn realize_resolve_params(cache: read UOpCache, call: Int, inputs: read List<Int
         i = i + 1
     }
     return take out
+}
+
+fn resolve_params(cache: read UOpCache, call: Int, inputs: read List<Int>) -> fresh List<Int> {
+    return realize_resolve_params(cache: read cache, call: call, inputs: read inputs)
+}
+
+fn unwrap_multi(cache: read UOpCache, call: Int, resolved: read List<Int>) -> fresh List<Int> {
+    return copy_int_list(l: read resolved)
 }
 
 fn realize_exec_copy(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Unit {
@@ -253,6 +312,18 @@ fn realize_exec_view(cache: read UOpCache, ctx: mut RealizeExecContext, call: In
     realize_exec_context_set_buffer(ctx: mut ctx, index: 0, buf: read view)
     realize_exec_context_set_buffer(ctx: mut ctx, index: 1, buf: read src)
     return Unit
+}
+
+fn exec_view(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> Bool {
+    if node_op(cache: read cache, id: ast) != SLICE { return false }
+    realize_exec_view(cache: read cache, ctx: mut ctx, call: call)
+    return true
+}
+
+fn exec_copy(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> Bool {
+    if node_op(cache: read cache, id: ast) != COPY { return false }
+    realize_exec_copy(cache: read cache, ctx: mut ctx, call: call)
+    return true
 }
 
 fn realize_exec_copy_indices(ctx: mut RealizeExecContext, dest_idx: Int, src_idx: Int) -> Unit {
@@ -554,6 +625,32 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
     return realize_exec_program_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read vals)
 }
 
+fn exec_kernel(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> fresh RealizeProgramExec {
+    if node_op(cache: read cache, id: ast) != PROGRAM {
+        local empty_slots = List.new<Int>()
+        local empty_indices = List.new<Int>()
+        return RealizeProgramExec(ok: false, function_name: "", global_count: 0,
+                                  global_slots: take empty_slots, buffer_indices: take empty_indices,
+                                  allocated_count: 0, source_id: 0 - 1, source_len: 0,
+                                  global_dim_count: 0, has_local_size: false, local_dim_count: 0,
+                                  val_count: 0, val_known_count: 0, val_runtime_count: 0,
+                                  runtime_cache_hit: false, runtime_handle: 0)
+    }
+    return realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
+}
+
+fn exec_validate(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> Bool {
+    return node_op(cache: read cache, id: call) == CALL && node_op(cache: read cache, id: ast) == CUSTOM_FUNCTION && realize_custom_function_name(cache: read cache, id: ast) == "validate"
+}
+
+fn exec_encdec(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> Bool {
+    return node_op(cache: read cache, id: call) == CALL && node_op(cache: read cache, id: ast) == CUSTOM_FUNCTION && realize_custom_function_name(cache: read cache, id: ast) == "encdec"
+}
+
+fn exec_graph(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, ast: Int) -> Bool {
+    return node_op(cache: read cache, id: call) == CALL && node_op(cache: read cache, id: ast) == CUSTOM_FUNCTION && realize_custom_function_name(cache: read cache, id: ast) == "graph"
+}
+
 fn realize_exec_program_host_scalar_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
                                               c_path_text: read String, exe_path_text: read String,
                                               var_vals: read Map<String, Int>) -> fresh RealizeHostProgramExec {
@@ -776,9 +873,31 @@ fn realize_exec_call_resolved_with_vars(cache: read UOpCache, ctx: mut RealizeEx
     return false
 }
 
+fn _validate(cache: read UOpCache, call: Int, sink: Int) -> Int {
+    if node_op(cache: read cache, id: call) == CALL && node_op(cache: read cache, id: sink) == SINK { return call }
+    return call
+}
+
+fn exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
+    return realize_exec_call_resolved(cache: read cache, ctx: mut ctx, call: call)
+}
+
+fn compile_linear(cache: read UOpCache, linear: Int, beam: read Option<Int>, validate: Bool) -> Int {
+    return linear
+}
+
 fn realize_run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int) -> Int {
     local vals = realize_empty_var_vals()
     return realize_run_linear_with_vars(cache: read cache, ctx: mut ctx, linear: linear, var_vals: read vals)
+}
+
+fn run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int) -> Int {
+    return realize_run_linear(cache: read cache, ctx: mut ctx, linear: linear)
+}
+
+fn time_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Int {
+    if realize_exec_call_resolved(cache: read cache, ctx: mut ctx, call: call) { return 0 }
+    return 0 - 1
 }
 
 fn realize_run_linear_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int, var_vals: read Map<String, Int>) -> Int {

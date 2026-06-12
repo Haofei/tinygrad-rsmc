@@ -354,10 +354,18 @@ Integrated pieces:
   sinks by calling `schedule_create_linear_with_vars` and then `run_linear`; resolved concrete
   buffer arguments fall back to their call-argument position when no `PARAM` slot remapping is
   needed. Extracted scheduled `var_vals` are threaded into PROGRAM staging, where ProgramArg
-  values now record total, known-bound, and runtime-var counts. Local-size optimization,
-  dynamic symbolic launch dimension evaluation, general compiled numeric kernel invocation,
-  validation execution, graph execution, full multi-buffer/device remapping, and dynamic-library
-  runtime plumbing remain unported.
+  values now record total, known-bound, and runtime-var counts. The source-shaped public wrapper
+  names from `engine/realize.py` are now present: `get_call_arg_uops`, `get_call_outs_ins`,
+  `get_call_name`, `estimate_uop`, `resolve_params`, `unwrap_multi`, `exec_view`, `exec_copy`,
+  `exec_kernel`, `exec_encdec`, `exec_validate`, `exec_graph`, `_validate`, `compile_linear`,
+  `run_linear`, `time_call`, `track_stats`, `optimize_local_size`, `get_runtime`, and
+  `get_graph_runtime`. These wrappers delegate to real implemented behavior where available
+  (call metadata, estimates, parameter resolution, COPY/SLICE byte execution, PROGRAM staging,
+  hosted PROGRAM execution through `run_linear`, and per-context runtime-cache handles); profiling
+  stats, local-size optimization, validation execution, and graph runtime remain explicit
+  metadata/no-op placeholders. Dynamic symbolic launch dimension evaluation, general compiled
+  numeric kernel invocation, validation execution, graph execution, full multi-buffer/device
+  remapping, and dynamic-library runtime plumbing remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream

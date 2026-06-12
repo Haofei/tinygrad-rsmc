@@ -408,6 +408,126 @@ fn _apply_winograd_matrix(cache: mut UOpCache, mat: read List<Float>, rows: Int,
     return t
 }
 
+fn tensor_data_uints_slice(data: read List<Float>, start: Int, len: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < len {
+        let v = trunc_float_to_int(v: List.get<Float>(list: read data, index: start + i))
+        push1(l: mut out, a: v & 255)
+        i = i + 1
+    }
+    return take out
+}
+
+fn tensor_uints_to_floats(values: read List<Int>) -> fresh List<Float> {
+    local out = List.new<Float>()
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        pushf1(l: mut out, a: Int.to_float(value: read List.get<Int>(list: read values, index: i)))
+        i = i + 1
+    }
+    return take out
+}
+
+fn tensor_hash_bytes_to_tensor(cache: mut UOpCache, bytes: read Bytes, out_shape: read List<Int>) -> Int {
+    local ints = Bytes.to_uints(value: read bytes)
+    local data = tensor_uints_to_floats(values: read ints)
+    return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read out_shape, data: read data)
+}
+
+fn keccak(cache: mut UOpCache, x: Int, cfg: read String) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read shape)
+    let msg_len = List.get<Int>(list: read shape, index: ndim - 1)
+    let rows = numel(shape: read shape) / msg_len
+    let mut out_len = 32
+    if cfg == "sha3_224" { out_len = 28 }
+    if cfg == "shake_128" { out_len = 16 }
+    local out_shape = List.new<Int>()
+    let mut si = 0
+    while si < ndim - 1 {
+        push1(l: mut out_shape, a: List.get<Int>(list: read shape, index: si))
+        si = si + 1
+    }
+    push1(l: mut out_shape, a: out_len)
+    local src = tensor_data(cache: read cache, x: x)
+    local out_data = List.new<Float>()
+    let mut row = 0
+    while row < rows {
+        local msg_ints = tensor_data_uints_slice(data: read src, start: row * msg_len, len: msg_len)
+        let msg = Bytes.from_uints(values: read msg_ints)
+        if cfg == "shake_128" {
+            local digest = Hash.shake128_bytes(value: read msg, out_len: out_len)
+            local dint = Bytes.to_uints(value: read digest)
+            let mut i = 0
+            while i < List.len<Int>(list: read dint) {
+                pushf1(l: mut out_data, a: Int.to_float(value: read List.get<Int>(list: read dint, index: i)))
+                i = i + 1
+            }
+        } else {
+            if cfg == "sha3_224" {
+                local digest = Hash.sha3_224_bytes(value: read msg)
+                local dint = Bytes.to_uints(value: read digest)
+                let mut i = 0
+                while i < List.len<Int>(list: read dint) {
+                    pushf1(l: mut out_data, a: Int.to_float(value: read List.get<Int>(list: read dint, index: i)))
+                    i = i + 1
+                }
+            } else {
+                local digest = Hash.sha3_256_bytes(value: read msg)
+                local dint = Bytes.to_uints(value: read digest)
+                let mut i = 0
+                while i < List.len<Int>(list: read dint) {
+                    pushf1(l: mut out_data, a: Int.to_float(value: read List.get<Int>(list: read dint, index: i)))
+                    i = i + 1
+                }
+            }
+        }
+        row = row + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read out_shape, data: read out_data)
+}
+
+fn _hash_1mb(cache: mut UOpCache, x: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let rows = List.get<Int>(list: read shape, index: 0)
+    let msg_len = List.get<Int>(list: read shape, index: 1)
+    local out_shape = List.new<Int>()
+    push1(l: mut out_shape, a: rows)
+    push1(l: mut out_shape, a: 16)
+    local src = tensor_data(cache: read cache, x: x)
+    local out_data = List.new<Float>()
+    let mut row = 0
+    while row < rows {
+        local level = List.new<Int>()
+        let mut off = 0
+        while off < msg_len {
+            let mut chunk_len = 4096
+            if off + chunk_len > msg_len { chunk_len = msg_len - off }
+            local chunk_ints = tensor_data_uints_slice(data: read src, start: row * msg_len + off, len: chunk_len)
+            let chunk = Bytes.from_uints(values: read chunk_ints)
+            local d0 = Hash.shake128_bytes(value: read chunk, out_len: 16)
+            local d0i = Bytes.to_uints(value: read d0)
+            let mut di = 0
+            while di < List.len<Int>(list: read d0i) {
+                push1(l: mut level, a: List.get<Int>(list: read d0i, index: di))
+                di = di + 1
+            }
+            off = off + 4096
+        }
+        let level_bytes = Bytes.from_uints(values: read level)
+        local d1 = Hash.shake128_bytes(value: read level_bytes, out_len: 16)
+        local d1i = Bytes.to_uints(value: read d1)
+        let mut oi = 0
+        while oi < List.len<Int>(list: read d1i) {
+            pushf1(l: mut out_data, a: Int.to_float(value: read List.get<Int>(list: read d1i, index: oi)))
+            oi = oi + 1
+        }
+        row = row + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read out_shape, data: read out_data)
+}
+
 fn tensor_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {
     local dev = canonicalize_device(device: read device)
     return uop_empty_like(cache: mut cache, id: x, dt: read dt, device: read dev, num: num)

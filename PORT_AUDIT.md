@@ -14,21 +14,22 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 
 - `tinygrad-rss` runs today:
   - command: `RSSCRIPT_RUNTIME_PATH=/home/zoe/rsscript/crates/runtime /home/zoe/rsscript/target/release/rss run tinygrad-rss`
-  - output: `linear`, `14`, `25`
+  - current validation gate also runs `oracle/roundtrip.py`, clang syntax checks for the generated
+    two-output C files, the generated executable smoke, and `git diff --check`.
 - every retained standalone `port-rss/*.rss` file runs today:
   - 55/55 RSS files passed with a 25s per-file timeout. The removed MNIST demo also passed,
     but was deleted because it was not a source-shaped tinygrad port.
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 28,392 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 28,524 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 96/106 symbols, `mixin/__init__.py` 82/82 symbols,
-    `uop/ops.py` 216/221 symbols; 394/409 total rough symbols covered.
+  - result: `tensor.py` 98/106 symbols, `mixin/__init__.py` 82/82 symbols,
+    `uop/ops.py` 216/221 symbols; 396/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -43,6 +44,10 @@ Toolchain changes made to simplify the next port slices:
 - Modern-C has `std/vec.mc`, a fixed-lane `f32x4` helper surface over arrays for generated kernels
   (`load`, `store`, `add`, `mul`, `max`, `sum`, and lane-wise bit reinterpretation). This is a
   scalar C-emitted abstraction today, not target SIMD.
+- RSScript now exposes byte/list conversion and byte-oriented SHA3/SHAKE helpers
+  (`Bytes.from_uints`, `Bytes.to_uints`, `Hash.sha3_224_bytes`, `Hash.sha3_256_bytes`, and
+  `Hash.shake128_bytes`) across stdlib interfaces, runtime ABI, reg VM, and REIR capability
+  classification for tensor hash parity work.
 
 ## What Is Actually Integrated
 
@@ -449,6 +454,8 @@ Integrated pieces:
   Tensor boundary helpers for invalid-sentinel creation (`invalids` over `uop_invalid`), shape/dtype/device
   `repr`, scalar-shape `len` rejection via sentinel return, bool rejection flag, contiguous-buffer graph
   boundary, and list-backed `numpy`/host-data materialization over the current evaluator,
+  materialized `keccak` for row-wise `sha3_224`, `sha3_256`, and `shake_128` byte tensors plus
+  a materialized `_hash_1mb` SHAKE-128 chunk/reduce helper over the current evaluator byte path,
   explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
   compaction,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
@@ -884,6 +891,7 @@ Major missing integrated work:
   weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact global
   seed/counter APIs, broader distribution helpers,
   full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
+  exact lazy hash graph semantics and strict `_hash_1mb` size enforcement,
   real packed image convolution kernels and lazy Winograd convolution integration rather than the
   current direct-conv fallback,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend

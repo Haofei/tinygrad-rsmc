@@ -350,3 +350,33 @@ fn multi_reduce(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let out = mk_multi(cache: mut cache, x: local_reduce, axis: axis)
     return MultiRewrite(result: out, changed: true, ok: true)
 }
+
+fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    let op = node_op(cache: read cache, id: root)
+    if group_alu(op: read op) == false || node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let axis = uop_axis(cache: read cache, id: root)
+    if axis < 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local srcs = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        if node_op(cache: read cache, id: child) != MULTI || node_num_src(cache: read cache, id: child) == 0 {
+            return MultiRewrite(result: fallback, changed: false, ok: false)
+        }
+        if node_const_int(cache: read cache, id: child) != axis {
+            return MultiRewrite(result: fallback, changed: false, ok: false)
+        }
+        List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
+        i = i + 1
+    }
+    local dt = node_full_dtype(cache: read cache, id: root)
+    local arg = node_arg(cache: read cache, id: root)
+    let local_alu = intern(cache: mut cache, op: op, dt: read dt, src: take srcs, arg: take arg)
+    let out = mk_multi(cache: mut cache, x: local_alu, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}

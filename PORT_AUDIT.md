@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 17,748 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 17,852 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -176,7 +176,8 @@ Integrated pieces:
   name, source id/length, launch metadata, declared global slots, and resolved buffer indices.
   It also includes the first per-context runtime cache keyed by function/source metadata, returning
   stable runtime handles with hit/miss reporting. The first hosted CPU numeric program execution
-  path is now integrated for supported one-output/multi-input `float32` shapes: raw RSS byte buffers are
+  path is now integrated for supported one-output/multi-input 4-byte scalar shapes (`float32`,
+  `int32`, and `uint32`): raw RSS byte buffers are
   marshalled into a generated C harness, the rendered `SOURCE` is compiled and run through
   `Path`/`Process`, stdout decimal bytes are parsed, and the output bytes are copied back into the
   existing `TGBuffer` store. `run_linear` now tries this hosted path for supported `PROGRAM` calls

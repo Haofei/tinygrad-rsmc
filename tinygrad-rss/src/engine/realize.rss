@@ -347,12 +347,30 @@ fn realize_parse_decimal_bytes(text: read String) -> fresh List<Int> {
     return take out
 }
 
-fn realize_host_f32_oneout_main(function_name: read String, input_inits: read List<String>, input_nbytes: Int, output_nbytes: Int, n: Int) -> fresh String {
+fn realize_host_c_scalar_type(dt: read DType) -> fresh String {
+    let s = dtype_scalar(d: read dt)
+    if s.name == "bool" { return String.copy(value: read "_Bool") }
+    return String.copy(value: read s.name)
+}
+
+fn realize_host_dtype_supported(dt: read DType) -> Bool {
+    let s = dtype_scalar(d: read dt)
+    if DType.itemsize(self: read s) != 4 { return false }
+    if s.name == "float" { return true }
+    if s.name == "int" { return true }
+    if s.name == "unsigned int" { return true }
+    return false
+}
+
+fn realize_host_oneout_main(function_name: read String, output_type: read String, input_types: read List<String>,
+                            input_inits: read List<String>, input_nbytes: Int, output_nbytes: Int, n: Int) -> fresh String {
     let mut s = String.copy(value: read "int main(void) {\n")
     s = String.concat(left: read s, right: read "  unsigned char out_bytes[")
     s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
     s = String.concat(left: read s, right: read "] = {0};\n")
-    s = String.concat(left: read s, right: read "  float out_vals[")
+    s = String.concat(left: read s, right: read "  ")
+    s = String.concat(left: read s, right: read output_type)
+    s = String.concat(left: read s, right: read " out_vals[")
     s = String.concat(left: read s, right: read Int.to_string(value: read n))
     s = String.concat(left: read s, right: read "] = {0};\n")
     let mut i = 0
@@ -365,7 +383,9 @@ fn realize_host_f32_oneout_main(function_name: read String, input_inits: read Li
         s = String.concat(left: read s, right: read "] = {")
         s = String.concat(left: read s, right: read List.get<String>(list: read input_inits, index: i))
         s = String.concat(left: read s, right: read "};\n")
-        s = String.concat(left: read s, right: read "  float in")
+        s = String.concat(left: read s, right: read "  ")
+        s = String.concat(left: read s, right: read List.get<String>(list: read input_types, index: i))
+        s = String.concat(left: read s, right: read " in")
         s = String.concat(left: read s, right: read idx)
         s = String.concat(left: read s, right: read "_vals[")
         s = String.concat(left: read s, right: read Int.to_string(value: read n))
@@ -459,8 +479,8 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                               runtime_cache_hit: cache_hit, runtime_handle: runtime_handle)
 }
 
-fn realize_exec_program_host_f32_oneout(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
-                                        c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
+fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
+                                          c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
     local staged = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
     if staged.ok == false { return realize_empty_host_exec(staged: read staged, compile_status: 0 - 1, run_status: 0 - 1, stderr_len: 0) }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
@@ -481,9 +501,10 @@ fn realize_exec_program_host_f32_oneout(cache: read UOpCache, ctx: mut RealizeEx
     }
     let out_idx = realize_exec_context_get_slot(ctx: read ctx, slot: out_slot)
     let out0 = realize_exec_context_get_buffer(ctx: read ctx, index: out_idx)
-    if dtype_scalar(d: read out0.dtype).name != "float" {
+    if realize_host_dtype_supported(dt: read out0.dtype) == false {
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
     }
+    let output_type = realize_host_c_scalar_type(dt: read out0.dtype)
     let mut out_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read out0)
     let out_nbytes = buffer_nbytes(buf: read out_buf)
     if out_nbytes <= 0 || out_nbytes % 4 != 0 {
@@ -491,15 +512,17 @@ fn realize_exec_program_host_f32_oneout(cache: read UOpCache, ctx: mut RealizeEx
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
     }
     local input_inits = List.new<String>()
+    local input_types = List.new<String>()
     let mut ii = 0
     while ii < List.len<Int>(list: read prog.ins) {
         let in_slot = List.get<Int>(list: read prog.ins, index: ii)
         let in_idx = realize_exec_context_get_slot(ctx: read ctx, slot: in_slot)
         let in0 = realize_exec_context_get_buffer(ctx: read ctx, index: in_idx)
-        if dtype_scalar(d: read in0.dtype).name != "float" {
+        if realize_host_dtype_supported(dt: read in0.dtype) == false {
             realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
         }
+        List.push<String>(list: mut input_types, value: read realize_host_c_scalar_type(dt: read in0.dtype))
         local in_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read in0)
         let in_nbytes = buffer_nbytes(buf: read in_buf)
         if in_nbytes != out_nbytes {
@@ -514,7 +537,9 @@ fn realize_exec_program_host_f32_oneout(cache: read UOpCache, ctx: mut RealizeEx
     }
     let n = out_nbytes / 4
     let source = uop_arg_to_string(arg: read node_arg(cache: read cache, id: staged.source_id))
-    let harness = realize_host_f32_oneout_main(function_name: read staged.function_name, input_inits: read input_inits, input_nbytes: out_nbytes, output_nbytes: out_nbytes, n: n)
+    let harness = realize_host_oneout_main(function_name: read staged.function_name, output_type: read output_type,
+                                           input_types: read input_types, input_inits: read input_inits,
+                                           input_nbytes: out_nbytes, output_nbytes: out_nbytes, n: n)
     let combined = ["#include <stdio.h>\n#include <string.h>\n", source, "\n", harness].join("")
     let c_path = Path.from_string(value: read c_path_text)
     match Path.write_string(path: read c_path, text: read combined) {
@@ -566,9 +591,9 @@ fn realize_exec_program_host_f32_oneout(cache: read UOpCache, ctx: mut RealizeEx
 }
 
 fn realize_exec_program_host_default(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeHostProgramExec {
-    return realize_exec_program_host_f32_oneout(cache: read cache, ctx: mut ctx, call: call,
-                                               c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
-                                               exe_path_text: read "/tmp/tinygrad-rss-realize-program")
+    return realize_exec_program_host_oneout_4byte(cache: read cache, ctx: mut ctx, call: call,
+                                                 c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
+                                                 exe_path_text: read "/tmp/tinygrad-rss-realize-program")
 }
 
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {

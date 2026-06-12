@@ -252,3 +252,78 @@ fn linearizer_split_end(cache: mut UOpCache, id: Int) -> Int {
     }
     return ret
 }
+
+fn linearizer_remap_id(repls: read Map<Int, Int>, id: Int) -> Int {
+    match Map.get<Int, Int>(map: read repls, key: read id) {
+        Some(v) => { return v }
+        None => { return id }
+    }
+}
+
+fn linearizer_rewrite_sources(cache: mut UOpCache, id: Int, repls: read Map<Int, Int>) -> Int {
+    local src = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let old = node_src_id(cache: read cache, id: id, k: i)
+        let new_id = linearizer_remap_id(repls: read repls, id: old)
+        if new_id != old { changed = true }
+        List.push<Int>(list: mut src, value: read new_id)
+        i = i + 1
+    }
+    if changed == false { return id }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
+}
+
+fn linearizer_line_rewrite_cleanups(cache: mut UOpCache, order: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local repls = Map.new<Int, Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let old = List.get<Int>(list: read order, index: i)
+        let id = linearizer_rewrite_sources(cache: mut cache, id: old, repls: read repls)
+        let op = node_op(cache: read cache, id: id)
+        if op == STORE && node_num_src(cache: read cache, id: id) == 3 {
+            let ptr = node_src_id(cache: read cache, id: id, k: 0)
+            let value = node_src_id(cache: read cache, id: id, k: 1)
+            let gate = node_src_id(cache: read cache, id: id, k: 2)
+            let mif = mk_if(cache: mut cache, gate: gate, anchor: ptr)
+            let st = mk_store(cache: mut cache, ptr: ptr, value: value, gate: read None)
+            let mend = mk_endif(cache: mut cache, if_id: mif)
+            Map.insert<Int, Int>(map: mut repls, key: read old, value: read st)
+            Map.insert<Int, Int>(map: mut repls, key: read id, value: read st)
+            List.push<Int>(list: mut out, value: read mif)
+            List.push<Int>(list: mut out, value: read st)
+            List.push<Int>(list: mut out, value: read mend)
+        } else {
+            Map.insert<Int, Int>(map: mut repls, key: read old, value: read id)
+            List.push<Int>(list: mut out, value: read id)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn linearizer_count_op(cache: read UOpCache, order: read List<Int>, want: Ops) -> Int {
+    let mut out = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: id) == want { out = out + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn linearizer_has_gated_store(cache: read UOpCache, order: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: id) == STORE && node_num_src(cache: read cache, id: id) == 3 { return true }
+        i = i + 1
+    }
+    return false
+}

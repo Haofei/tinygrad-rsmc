@@ -462,6 +462,8 @@ fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
         let off = node_src_id(cache: read cache, id: id, k: 1)
         if node_is_const_int(cache: read cache, id: off) == false { return false }
         if node_const_int(cache: read cache, id: off) < 0 { return false }
+        let xdt = node_dtype(cache: read cache, id: x)
+        if xdt.name == "int8" || xdt.name == "signed char" { return true }
         return spec_same_dtype(cache: read cache, a: id, b: x)
     }
     if op == LINEAR {

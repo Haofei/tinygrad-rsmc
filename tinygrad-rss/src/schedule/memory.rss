@@ -1,0 +1,208 @@
+// First integrated slice of tinygrad/schedule/memory.py.
+//
+// This ports the memory planner structure over interned UOp ids: collect buffers from LINEAR
+// calls, reject held/disk/tinyfs buffers, track first/last appearances, split copy buffers into
+// a separate lane, create per-device/per-lane int8 arenas, and rewrite planned buffers to SLICEs.
+// It intentionally uses monotonic lane offsets for now; TLSF lifetime reuse remains future work.
+features: local
+
+struct MemoryPlanResult derives(Clone) {
+    linear: Int,
+    planned: Int,
+    arenas: Int,
+    ok: Bool,
+}
+
+fn memory_list_contains(items: read List<Int>, value: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn memory_find_buffer(buffers: read List<Int>, b: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read buffers) {
+        if List.get<Int>(list: read buffers, index: i) == b { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn memory_device_plannable(cache: read UOpCache, b: Int) -> Bool {
+    let cnt = node_effective_device_count(cache: read cache, id: b)
+    if cnt == 0 { return false }
+    let mut i = 0
+    while i < cnt {
+        let dev = node_effective_device_name(cache: read cache, id: b, index: i)
+        if String.starts_with(value: read dev, prefix: read "DISK") { return false }
+        if String.starts_with(value: read dev, prefix: read "TINYFS") { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn memory_can_plan(cache: read UOpCache, b: Int, held: read List<Int>) -> Bool {
+    if memory_list_contains(items: read held, value: b) { return false }
+    if node_op(cache: read cache, id: b) != BUFFER { return false }
+    if node_arg_is_int(cache: read cache, id: b) == false { return false }
+    return memory_device_plannable(cache: read cache, b: b)
+}
+
+fn memory_record_buffer(buffers: mut List<Int>, firsts: mut List<Int>, lasts: mut List<Int>, copy_flags: mut List<Int>, b: Int, step: Int, is_copy_lane: Bool) -> Unit {
+    let idx = memory_find_buffer(buffers: read buffers, b: b)
+    let mut cf = 0
+    if is_copy_lane { cf = 1 }
+    if idx < 0 {
+        List.push<Int>(list: mut buffers, value: read b)
+        List.push<Int>(list: mut firsts, value: read step)
+        List.push<Int>(list: mut lasts, value: read step)
+        List.push<Int>(list: mut copy_flags, value: read cf)
+        return Unit
+    }
+    List.set<Int>(list: mut lasts, index: idx, value: read step)
+    if cf == 1 { List.set<Int>(list: mut copy_flags, index: idx, value: read 1) }
+    return Unit
+}
+
+fn memory_collect_bufs(cache: read UOpCache, id: Int, held: read List<Int>, buffers: mut List<Int>, firsts: mut List<Int>, lasts: mut List<Int>, copy_flags: mut List<Int>, step: Int, is_copy_lane: Bool) -> Unit {
+    let op = node_op(cache: read cache, id: id)
+    if op == BUFFER {
+        if memory_can_plan(cache: read cache, b: id, held: read held) {
+            memory_record_buffer(buffers: mut buffers, firsts: mut firsts, lasts: mut lasts, copy_flags: mut copy_flags, b: id, step: step, is_copy_lane: is_copy_lane)
+        }
+        return Unit
+    }
+    if op == MSELECT || op == MSTACK {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let s = node_src_id(cache: read cache, id: id, k: i)
+            memory_collect_bufs(cache: read cache, id: s, held: read held, buffers: mut buffers, firsts: mut firsts, lasts: mut lasts, copy_flags: mut copy_flags, step: step, is_copy_lane: is_copy_lane)
+            i = i + 1
+        }
+    }
+    return Unit
+}
+
+fn memory_lane_index(devices: read List<String>, lanes: read List<Int>, dev: read String, lane: Int) -> Int {
+    let mut i = 0
+    while i < List.len<String>(list: read devices) {
+        if List.get<String>(list: read devices, index: i) == dev && List.get<Int>(list: read lanes, index: i) == lane { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn memory_buffer_nbytes(cache: read UOpCache, b: Int, block_size: Int) -> Int {
+    let size = node_const_int(cache: read cache, id: b)
+    let dt = node_full_dtype(cache: read cache, id: b)
+    return round_up(num: size * DType.itemsize(self: read dt), amt: block_size)
+}
+
+fn memory_replace_many(cache: mut UOpCache, id: Int, olds: read List<Int>, news: read List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read olds) {
+        if id == List.get<Int>(list: read olds, index: i) { return List.get<Int>(list: read news, index: i) }
+        i = i + 1
+    }
+    local new_src = List.new<Int>()
+    let mut j = 0
+    while j < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: j)
+        let repl = memory_replace_many(cache: mut cache, id: child, olds: read olds, news: read news)
+        List.push<Int>(list: mut new_src, value: read repl)
+        j = j + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+}
+
+fn memory_plan_rewrite(cache: mut UOpCache, linear: Int, held: read List<Int>) -> fresh MemoryPlanResult {
+    if node_op(cache: read cache, id: linear) != LINEAR {
+        return MemoryPlanResult(linear: linear, planned: 0, arenas: 0, ok: false)
+    }
+    local buffers = List.new<Int>()
+    local firsts = List.new<Int>()
+    local lasts = List.new<Int>()
+    local copy_flags = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        let si = node_src_id(cache: read cache, id: linear, k: i)
+        let mut is_copy_lane = false
+        if node_op(cache: read cache, id: si) == CALL && node_num_src(cache: read cache, id: si) > 0 {
+            let body = node_src_id(cache: read cache, id: si, k: 0)
+            if node_op(cache: read cache, id: body) == COPY { is_copy_lane = true }
+        }
+        if node_op(cache: read cache, id: si) == CALL {
+            let mut j = 1
+            while j < node_num_src(cache: read cache, id: si) {
+                let src = node_src_id(cache: read cache, id: si, k: j)
+                memory_collect_bufs(cache: read cache, id: src, held: read held, buffers: mut buffers, firsts: mut firsts, lasts: mut lasts, copy_flags: mut copy_flags, step: i, is_copy_lane: is_copy_lane)
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read buffers) == 0 {
+        return MemoryPlanResult(linear: linear, planned: 0, arenas: 0, ok: true)
+    }
+
+    let block_size = 256
+    local lane_devices = List.new<String>()
+    local lane_kinds = List.new<Int>()
+    local lane_sizes = List.new<Int>()
+    local buf_lane = List.new<Int>()
+    local buf_offset = List.new<Int>()
+    let mut bi = 0
+    while bi < List.len<Int>(list: read buffers) {
+        let b = List.get<Int>(list: read buffers, index: bi)
+        let mut dev = node_effective_device_name(cache: read cache, id: b, index: 0)
+        if String.len(value: read dev) == 0 { dev = "CPU" }
+        let lane = List.get<Int>(list: read copy_flags, index: bi)
+        let mut li = memory_lane_index(devices: read lane_devices, lanes: read lane_kinds, dev: read dev, lane: lane)
+        if li < 0 {
+            List.push<String>(list: mut lane_devices, value: read dev)
+            List.push<Int>(list: mut lane_kinds, value: read lane)
+            List.push<Int>(list: mut lane_sizes, value: read 0)
+            li = List.len<String>(list: read lane_devices) - 1
+        }
+        let off = List.get<Int>(list: read lane_sizes, index: li)
+        let nb = memory_buffer_nbytes(cache: read cache, b: b, block_size: block_size)
+        List.set<Int>(list: mut lane_sizes, index: li, value: read (off + nb))
+        List.push<Int>(list: mut buf_lane, value: read li)
+        List.push<Int>(list: mut buf_offset, value: read off)
+        bi = bi + 1
+    }
+
+    local arenas = List.new<Int>()
+    let mut ai = 0
+    while ai < List.len<String>(list: read lane_devices) {
+        let dev = List.get<String>(list: read lane_devices, index: ai)
+        let sz = round_up(num: List.get<Int>(list: read lane_sizes, index: ai), amt: block_size)
+        let arena = mk_new_buffer(cache: mut cache, device: read dev, size: sz, dt: read dt_int8(), num: 900000 + ai)
+        List.push<Int>(list: mut arenas, value: read arena)
+        ai = ai + 1
+    }
+
+    local repl_old = List.new<Int>()
+    local repl_new = List.new<Int>()
+    let mut ri = 0
+    while ri < List.len<Int>(list: read buffers) {
+        let b = List.get<Int>(list: read buffers, index: ri)
+        let li = List.get<Int>(list: read buf_lane, index: ri)
+        let arena = List.get<Int>(list: read arenas, index: li)
+        let off = List.get<Int>(list: read buf_offset, index: ri)
+        let sz = node_const_int(cache: read cache, id: b)
+        let dt = node_full_dtype(cache: read cache, id: b)
+        let sl = mk_slice(cache: mut cache, base: arena, offset: off, size: sz, dt: read dt)
+        List.push<Int>(list: mut repl_old, value: read b)
+        List.push<Int>(list: mut repl_new, value: read sl)
+        ri = ri + 1
+    }
+    let out = memory_replace_many(cache: mut cache, id: linear, olds: read repl_old, news: read repl_new)
+    return MemoryPlanResult(linear: out, planned: List.len<Int>(list: read repl_old), arenas: List.len<Int>(list: read arenas), ok: true)
+}

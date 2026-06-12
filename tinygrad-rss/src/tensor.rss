@@ -293,6 +293,121 @@ fn tensor_fromnp(cache: mut UOpCache, data: read List<Float>, shape: read List<I
     return _fromnp(cache: mut cache, data: read data, shape: read shape, dt: read dt)
 }
 
+fn winograd_tail_numel(shape: read List<Int>, start: Int) -> Int {
+    let mut n = 1
+    let mut i = start
+    while i < List.len<Int>(list: read shape) {
+        n = n * List.get<Int>(list: read shape, index: i)
+        i = i + 1
+    }
+    return n
+}
+
+fn winograd_stride_after_dim(shape: read List<Int>, dim: Int) -> Int {
+    return winograd_tail_numel(shape: read shape, start: dim + 1)
+}
+
+fn _get_winograd_matcols(cache: mut UOpCache, mat: read List<Float>, rows: Int, cols: Int, dims: Int, shp: read List<Int>, dt: read DType) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let total = numel(shape: read shp)
+    let mut dim = 0
+    while dim < dims {
+        let stride = winograd_stride_after_dim(shape: read shp, dim: dim)
+        let mut k = 0
+        while k < cols {
+            local data = List.new<Float>()
+            let mut i = 0
+            while i < total {
+                let coord = (i / stride) % List.get<Int>(list: read shp, index: dim)
+                let mut v = 0.0
+                if coord < rows { v = List.get<Float>(list: read mat, index: coord * cols + k) }
+                pushf1(l: mut data, a: v)
+                i = i + 1
+            }
+            let t = mk_data_tensor(cache: mut cache, dt: read dt, shape: read shp, data: read data)
+            push1(l: mut out, a: t)
+            k = k + 1
+        }
+        dim = dim + 1
+    }
+    return take out
+}
+
+fn _apply_winograd_matrix(cache: mut UOpCache, mat: read List<Float>, rows: Int, cols: Int, t: Int, dims: Int) -> Int {
+    local in_shape = uop_shape(cache: read cache, id: t)
+    let dt = node_dtype(cache: read cache, id: t)
+    if dims == 1 {
+        let tail = winograd_tail_numel(shape: read in_shape, start: 1)
+        local out_shape = List.new<Int>()
+        push1(l: mut out_shape, a: rows)
+        let mut si = 1
+        while si < List.len<Int>(list: read in_shape) {
+            push1(l: mut out_shape, a: List.get<Int>(list: read in_shape, index: si))
+            si = si + 1
+        }
+        local src = tensor_data(cache: read cache, x: t)
+        local out = List.new<Float>()
+        let mut r = 0
+        while r < rows {
+            let mut ti = 0
+            while ti < tail {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < cols {
+                    acc = acc + List.get<Float>(list: read mat, index: r * cols + c) * List.get<Float>(list: read src, index: c * tail + ti)
+                    c = c + 1
+                }
+                pushf1(l: mut out, a: acc)
+                ti = ti + 1
+            }
+            r = r + 1
+        }
+        return mk_data_tensor(cache: mut cache, dt: read dt, shape: read out_shape, data: read out)
+    }
+    if dims == 2 {
+        let tail = winograd_tail_numel(shape: read in_shape, start: 2)
+        let in1 = List.get<Int>(list: read in_shape, index: 1)
+        local out_shape = List.new<Int>()
+        push1(l: mut out_shape, a: rows)
+        push1(l: mut out_shape, a: rows)
+        let mut si = 2
+        while si < List.len<Int>(list: read in_shape) {
+            push1(l: mut out_shape, a: List.get<Int>(list: read in_shape, index: si))
+            si = si + 1
+        }
+        local src = tensor_data(cache: read cache, x: t)
+        local out = List.new<Float>()
+        let mut r0 = 0
+        while r0 < rows {
+            let mut r1 = 0
+            while r1 < rows {
+                let mut ti = 0
+                while ti < tail {
+                    let mut acc = 0.0
+                    let mut c0 = 0
+                    while c0 < cols {
+                        let mut c1 = 0
+                        while c1 < cols {
+                            let w0 = List.get<Float>(list: read mat, index: r0 * cols + c0)
+                            let w1 = List.get<Float>(list: read mat, index: r1 * cols + c1)
+                            let v = List.get<Float>(list: read src, index: (c0 * in1 + c1) * tail + ti)
+                            acc = acc + w0 * w1 * v
+                            c1 = c1 + 1
+                        }
+                        c0 = c0 + 1
+                    }
+                    pushf1(l: mut out, a: acc)
+                    ti = ti + 1
+                }
+                r1 = r1 + 1
+            }
+            r0 = r0 + 1
+        }
+        return mk_data_tensor(cache: mut cache, dt: read dt, shape: read out_shape, data: read out)
+    }
+    return t
+}
+
 fn tensor_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {
     local dev = canonicalize_device(device: read device)
     return uop_empty_like(cache: mut cache, id: x, dt: read dt, device: read dev, num: num)

@@ -1,0 +1,126 @@
+// First integrated slice of tinygrad/schedule/indexing.py.
+//
+// This ports the source-shaped realize-map generation rules used before rangeify:
+// ALWAYS_CONTIGUOUS classification, unconditional realization of COPY/CONTIGUOUS/STORE,
+// realization of non-contiguous sources of COPY/MSELECT/MSTACK, direct STORE source cleanup for
+// COPY/SLICE outputs, and simple write-after-read hazard detection for STORE sources.
+features: local
+
+struct IndexingRealizeResult derives(Clone) {
+    nodes: List<Int>,
+}
+
+fn indexing_always_contiguous(op: read Ops) -> Bool {
+    if op == CONTIGUOUS { return true }
+    if op == AFTER { return true }
+    if op == COPY { return true }
+    if op == BUFFER { return true }
+    if op == SLICE { return true }
+    if op == CONST { return true }
+    if op == BIND { return true }
+    if op == DEVICE { return true }
+    if op == MSELECT { return true }
+    if op == MSTACK { return true }
+    if op == PARAM { return true }
+    if op == DEFINE_LOCAL { return true }
+    if op == DEFINE_REG { return true }
+    if op == LOAD { return true }
+    if op == CALL { return true }
+    if op == FUNCTION { return true }
+    return false
+}
+
+fn indexing_list_contains(items: read List<Int>, value: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn indexing_add_unique(items: mut List<Int>, value: Int) -> Unit {
+    if indexing_list_contains(items: read items, value: value) { return Unit }
+    List.push<Int>(list: mut items, value: read value)
+    return Unit
+}
+
+fn indexing_remove_value(items: mut List<Int>, value: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value {
+            List.remove_at<Int>(list: mut items, index: i)
+            return Unit
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn indexing_backward_slice_with_self_contains(cache: read UOpCache, id: Int, value: Int) -> Bool {
+    if id == value { return true }
+    local nodes = uop_backward_slice(cache: read cache, id: id)
+    return indexing_list_contains(items: read nodes, value: value)
+}
+
+fn indexing_store_dest_base(cache: read UOpCache, dest: Int) -> Int {
+    if node_op(cache: read cache, id: dest) == INDEX && node_num_src(cache: read cache, id: dest) > 0 {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: dest, k: 0))
+    }
+    return uop_base(cache: read cache, id: dest)
+}
+
+fn indexing_realize_srcs(cache: read UOpCache, realize: mut List<Int>, rb: Int) -> Unit {
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: rb) {
+        let s = node_src_id(cache: read cache, id: rb, k: i)
+        let base = uop_base(cache: read cache, id: s)
+        if indexing_always_contiguous(op: read node_op(cache: read cache, id: base)) == false {
+            indexing_add_unique(items: mut realize, value: s)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn indexing_realize_store_after_src(cache: read UOpCache, realize: mut List<Int>, store: Int) -> Unit {
+    if node_op(cache: read cache, id: store) != STORE { return Unit }
+    if node_num_src(cache: read cache, id: store) < 2 { return Unit }
+    let dest = node_src_id(cache: read cache, id: store, k: 0)
+    let src = node_src_id(cache: read cache, id: store, k: 1)
+    let sop = node_op(cache: read cache, id: src)
+    if sop == COPY || sop == SLICE {
+        let mut hazard = false
+        if uop_op_in_backward_slice_with_self(cache: read cache, id: dest, op: SHRINK) { hazard = true }
+        if uop_op_in_backward_slice_with_self(cache: read cache, id: dest, op: PERMUTE) { hazard = true }
+        if uop_op_in_backward_slice_with_self(cache: read cache, id: dest, op: FLIP) { hazard = true }
+        if uop_op_in_backward_slice_with_self(cache: read cache, id: dest, op: PAD) { hazard = true }
+        if hazard == false { indexing_remove_value(items: mut realize, value: src) }
+    }
+    let dest_base = indexing_store_dest_base(cache: read cache, dest: dest)
+    if indexing_backward_slice_with_self_contains(cache: read cache, id: src, value: dest_base) {
+        indexing_add_unique(items: mut realize, value: src)
+    }
+    return Unit
+}
+
+fn indexing_generate_realize_map(cache: read UOpCache, root: Int) -> fresh IndexingRealizeResult {
+    local realize = List.new<Int>()
+    local order = uop_toposort_enter_calls(cache: read cache, id: root, enter_calls: false)
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let u = List.get<Int>(list: read order, index: i)
+        let op = node_op(cache: read cache, id: u)
+        if op == COPY || op == CONTIGUOUS || op == STORE {
+            indexing_add_unique(items: mut realize, value: u)
+        }
+        if op == COPY || op == MSELECT || op == MSTACK {
+            indexing_realize_srcs(cache: read cache, realize: mut realize, rb: u)
+        }
+        if op == STORE {
+            indexing_realize_store_after_src(cache: read cache, realize: mut realize, store: u)
+        }
+        i = i + 1
+    }
+    return IndexingRealizeResult(nodes: take realize)
+}

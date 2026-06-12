@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 30 RSS files, 22,367 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 22,524 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -227,6 +227,10 @@ Integrated pieces:
   first/last lifetime tracking, copy-vs-compute lane separation, per-device/per-lane int8 arenas,
   and buffer-to-`SLICE` rewrite for planned `LINEAR` calls. Exact TLSF lifetime reuse remains
   unported; the current integrated planner uses monotonic lane offsets.
+- `schedule/indexing.rss`: first integrated source-shaped `tinygrad/schedule/indexing.py` slice:
+  `ALWAYS_CONTIGUOUS` classification, realize-map generation for `COPY`/`CONTIGUOUS`/`STORE`,
+  non-contiguous source realization for `COPY`/`MSELECT`/`MSTACK`, direct `COPY`/`SLICE` store-source
+  cleanup, and simple store self-dependency hazard detection.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -344,6 +348,9 @@ Current integrated demo:
   back to `AFTER`, and dependent `CALL` ordering into a `LINEAR` node.
 - validates the first source-shaped scheduler memory planner slice: compute/copy lane separation,
   int8 arena `SLICE` rewrites that pass the integrated spec verifier, and held-buffer exclusion.
+- validates the first source-shaped scheduler indexing slice: `ALWAYS_CONTIGUOUS` classification,
+  unconditional realize ops, non-contiguous copy-source realization, direct copy-store cleanup, and
+  self-store source realization.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.
@@ -689,8 +696,9 @@ Major missing integrated work:
   behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler remains partial. The first dependency-ordering slice in
   `schedule/__init__.rss` and first monotonic-offset memory planner slice in `schedule/memory.rss`
-  are integrated, but exact TLSF reuse, rangeify/indexing, multi-kernel behavior, schedule caching,
-  linear-call resolution, variable binding extraction, and JIT capture plumbing remain.
+  are integrated, and `schedule/indexing.rss` has the first realize-map generation slice. Exact TLSF
+  reuse, full rangeify/indexing, multi-kernel behavior, schedule caching, linear-call resolution,
+  variable binding extraction, and JIT capture plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
   gate-from-index movement, first expander CONTRACT/UNROLL/END normalization, same/mixed-axis expansion, and `pm_pre_expander` REDUCE/STORE/range unroll handling,

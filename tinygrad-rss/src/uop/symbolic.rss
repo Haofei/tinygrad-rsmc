@@ -33,6 +33,42 @@ fn uop_identity_element(op: read Ops) -> Int {
     return 0
 }
 
+fn symbolic_const_exponent_int(cache: read UOpCache, id: Int) -> Option<Int> {
+    if node_is_const_int(cache: read cache, id: id) { return Some(node_const_int(cache: read cache, id: id)) }
+    if node_is_const(cache: read cache, id: id) {
+        let dt = node_dtype(cache: read cache, id: id)
+        if dtype_is_float(d: read dt) {
+            let f = node_const_float(cache: read cache, id: id)
+            if f == 0.0 { return Some(0) }
+            if f == 1.0 { return Some(1) }
+            if f == 2.0 { return Some(2) }
+            if f == 3.0 { return Some(3) }
+            if f == 4.0 { return Some(4) }
+            if f == 0.0 - 1.0 { return Some(0 - 1) }
+            if f == 0.0 - 2.0 { return Some(0 - 2) }
+            if f == 0.0 - 3.0 { return Some(0 - 3) }
+            if f == 0.0 - 4.0 { return Some(0 - 4) }
+        }
+    }
+    return None
+}
+
+fn symbolic_pow_const_int(cache: mut UOpCache, x: Int, exp: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    if exp < 0 {
+        let recip = mk_alu1(cache: mut cache, op: RECIPROCAL, dt: read dt, x: x)
+        return symbolic_pow_const_int(cache: mut cache, x: recip, exp: 0 - exp)
+    }
+    if exp == 0 { return decomp_const_one_like(cache: mut cache, x: x) }
+    if exp == 1 { return x }
+    let y = symbolic_pow_const_int(cache: mut cache, x: x, exp: exp / 2)
+    let yy = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: y, y: y)
+    if exp % 2 == 1 {
+        return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: yy, y: x)
+    }
+    return yy
+}
+
 fn uop_pop_const(cache: read UOpCache, id: Int, op: Ops) -> fresh UOpConstSplit {
     let nodeop = node_op(cache: read cache, id: id)
     if nodeop == op {
@@ -288,6 +324,18 @@ fn rule_fold_const_alu(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn rule_simplify_pow_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != POW { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let x = node_src_id(cache: read cache, id: id, k: 0)
+    let c = node_src_id(cache: read cache, id: id, k: 1)
+    match symbolic_const_exponent_int(cache: read cache, id: c) {
+        Some(exp) => { return Some(symbolic_pow_const_int(cache: mut cache, x: x, exp: exp)) }
+        None => {}
+    }
+    return None
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -365,6 +413,10 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match divmod_fold_general(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_pow_const(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

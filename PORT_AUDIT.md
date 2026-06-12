@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,102 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,244 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -200,7 +200,8 @@ Integrated pieces:
   simplifying the resulting gradient graph.
 - `uop/vminmax.rss`, `uop/alu.rss`, `uop/symbolic.rss`, `runtime/ops_python.rss`: small
   interpreter/simplifier pieces. The symbolic layer now includes integer vmin/vmax, rewrite
-  identities/folding, monotonicity checks, known constant-factor extraction, `pop_const`,
+  identities/folding, constant-exponent `POW` simplification for integer exponents,
+  monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
   multiplicative cancellation. Vmin/vmax covers bounded `PARAM`, plus both `SPECIAL` and `RANGE` as `[0, end_max - 1]`.
   `STACK` and `UNROLL` propagate child/source min-max ranges.
@@ -301,7 +302,8 @@ Current integrated demo:
 - validates source-aligned UOp constructors/spec checks for `TUPLE`/`GETTUPLE`, `GETTUPLE(FUNCTION, idx)`, tuple/function shape propagation,
   `BINARY`/`STACK`/`GEP`/vector-cast shape helpers, `GROUP`,
   `GEP` stack extraction, `INDEX`, `LOAD`, `STORE`, `IF`/`ENDIF`, `AFTER`, `BARRIER`, and `END`.
-- validates UOp symbolic helpers for monotonicity, constant-factor extraction, exact
+- validates UOp symbolic helpers for monotonicity, constant-exponent `POW` simplification
+  (`x**3 -> x*x*x`, `x**0 -> 1`, `x**-1 -> 1/x`), constant-factor extraction, exact
   divisibility on `(x*4)+8`, conservative `divide_exact` cancellation for `(x*6)/(x*3)`,
   and symbolic `gcd(x*6, x*9) -> 3*x`.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

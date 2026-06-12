@@ -1,0 +1,65 @@
+// First integrated slice of tinygrad/schedule/allreduce.py.
+//
+// This ports the simple naive allreduce graph shape: for a multi-device input, select each
+// shard, copy it to the target device, then reduce the copied shards with the requested ALU op.
+// Ring/all2all chunking and allreduce function wrapping remain future scheduler slices.
+features: local
+
+struct AllreduceBuild derives(Clone) {
+    result: Int,
+    copies: Int,
+    ok: Bool,
+}
+
+fn allreduce_supported_op(op: read Ops) -> Bool {
+    if op == ADD { return true }
+    if op == MUL { return true }
+    return op == MAX
+}
+
+fn allreduce_op_copy(op: read Ops) -> Ops {
+    if op == ADD { return ADD }
+    if op == MUL { return MUL }
+    if op == MAX { return MAX }
+    return NOOP
+}
+
+fn allreduce_target_device(cache: read UOpCache, red: Int) -> fresh String {
+    if node_num_src(cache: read cache, id: red) < 2 { return String.copy(value: read "") }
+    let dev = node_src_id(cache: read cache, id: red, k: 1)
+    if node_effective_device_count(cache: read cache, id: dev) <= 0 { return String.copy(value: read "") }
+    return node_effective_device_name(cache: read cache, id: dev, index: 0)
+}
+
+fn allreduce_select_shard(cache: mut UOpCache, buf: Int, index: Int) -> Int {
+    if node_op(cache: read cache, id: buf) == MSTACK {
+        return node_src_id(cache: read cache, id: buf, k: index)
+    }
+    return mk_mselect(cache: mut cache, x: buf, index: index)
+}
+
+fn allreduce_handle_naive(cache: mut UOpCache, red: Int) -> fresh AllreduceBuild {
+    local empty = List.new<Int>()
+    let fallback = mk_sink(cache: mut cache, ids: read empty)
+    if node_op(cache: read cache, id: red) != ALLREDUCE || node_num_src(cache: read cache, id: red) < 2 {
+        return AllreduceBuild(result: fallback, copies: 0, ok: false)
+    }
+    let buf = node_src_id(cache: read cache, id: red, k: 0)
+    let ndev = node_effective_device_count(cache: read cache, id: buf)
+    let op = node_arg_op(cache: read cache, id: red)
+    local target = allreduce_target_device(cache: read cache, red: red)
+    if ndev <= 0 || String.len(value: read target) == 0 || allreduce_supported_op(op: read op) == false {
+        return AllreduceBuild(result: fallback, copies: 0, ok: false)
+    }
+    let first_shard = allreduce_select_shard(cache: mut cache, buf: buf, index: 0)
+    let mut result = mk_copy_to_device(cache: mut cache, x: first_shard, device: read target)
+    let mut i = 1
+    while i < ndev {
+        let shard = allreduce_select_shard(cache: mut cache, buf: buf, index: i)
+        let copied = mk_copy_to_device(cache: mut cache, x: shard, device: read target)
+        let rop = allreduce_op_copy(op: read op)
+        result = mk_alu2(cache: mut cache, op: rop, dt: read node_full_dtype(cache: read cache, id: result), x: result, y: copied)
+        i = i + 1
+    }
+    return AllreduceBuild(result: result, copies: ndev, ok: true)
+}

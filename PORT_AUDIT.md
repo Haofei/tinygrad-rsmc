@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 24,002 LOC.
+  - integrated `tinygrad-rss/src`: 32 RSS files, 24,072 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -252,6 +252,11 @@ Integrated pieces:
   sources, `PAD` rewrites now emit the upstream local `WHERE(valid, value, 0)` form, and
   realized child staging now follows upstream global-vs-local, removable, and full-global device
   option rules.
+- `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
+  naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
+  selecting/copying each shard to the target device and reducing copied shards with `ADD`/`MUL`/
+  `MAX`. Ring/all2all chunking, contiguous pre-copy cleanup, and allreduce function wrapping remain
+  unported.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -428,6 +433,8 @@ Current integrated demo:
 - validates source-shaped multi-device method helpers for `copy_to_device`, `multi`,
   `mselect`, `mstack`, `allreduce`, `detach`, and `contiguous_backward`, plus full-dtype
   preservation through `COPY`, `CONTIGUOUS`, and `DETACH`.
+- validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
+  `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
 - validates source-aligned UOp `axis` propagation for `MULTI`, `COPY`, sharded `PARAM`, ALU,
   `GETTUPLE`, `REDUCE`, and `PERMUTE`.
 - validates source-aligned UOp device key/count propagation for tuple buffers, `COPY`,

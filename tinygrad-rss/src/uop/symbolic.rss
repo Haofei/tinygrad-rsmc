@@ -63,6 +63,13 @@ struct UOpTermConst derives(Clone) {
     ok: Bool,
 }
 
+struct SymbolicValidParse derives(Clone) {
+    ok: Bool,
+    expr: Int,
+    is_upper: Bool,
+    c: Int,
+}
+
 fn uop_identity_element(op: read Ops) -> Int {
     if op == ADD { return 0 }
     if op == MUL { return 1 }
@@ -201,6 +208,47 @@ fn const_arg(cache: read UOpCache, u: Int) -> Option<Arg> {
         return Some(a)
     }
     return None
+}
+
+fn fold_bitcast(cache: mut UOpCache, root: Int, c: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: root) != BITCAST { return None }
+    if node_op(cache: read cache, id: c) != CONST { return None }
+    let from_dt = node_full_dtype(cache: read cache, id: c)
+    let to_dt = node_full_dtype(cache: read cache, id: root)
+    if from_dt.count != to_dt.count { return None }
+    if from_dt.bitsize != to_dt.bitsize { return None }
+    local arg = node_arg(cache: read cache, id: c)
+    match arg {
+        ArgInt(v) => {
+            local src = List.new<Int>()
+            local out_arg = ArgInt(value: v)
+            return Some(intern(cache: mut cache, op: CONST, dt: read to_dt, src: take src, arg: take out_arg))
+        }
+        ArgBool(v) => {
+            local src = List.new<Int>()
+            local out_arg = ArgBool(value: v)
+            return Some(intern(cache: mut cache, op: CONST, dt: read to_dt, src: take src, arg: take out_arg))
+        }
+        ArgInts(vals) => {
+            local src = List.new<Int>()
+            local out_vals = copy_int_list(l: read vals)
+            local out_arg = ArgInts(values: take out_vals)
+            return Some(intern(cache: mut cache, op: CONST, dt: read to_dt, src: take src, arg: take out_arg))
+        }
+        ArgNone => { return None }
+        ArgFloat(f) => { return None }
+        ArgStr(t) => { return None }
+        ArgReduce(r) => { return None }
+        ArgVar(v) => { return None }
+        ArgRange(r) => { return None }
+        ArgParam(p) => { return None }
+        ArgAxisSizes(a) => { return None }
+        ArgDevice(dv) => { return None }
+        ArgOp(o) => { return None }
+        ArgBufferize(b) => { return None }
+        ArgProgram(p) => { return None }
+        ArgCall(ca) => { return None }
+    }
 }
 
 fn symbolic_const_rhs(cache: read UOpCache, id: Int) -> fresh UOpTermConst {
@@ -1387,6 +1435,178 @@ fn rule_fold_known_bound(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn parse_valid(cache: read UOpCache, v: Int) -> fresh SymbolicValidParse {
+    if node_op(cache: read cache, id: v) == CMPNE && node_num_src(cache: read cache, id: v) == 2 {
+        let s0 = node_src_id(cache: read cache, id: v, k: 0)
+        let s1 = node_src_id(cache: read cache, id: v, k: 1)
+        if const_bool_eq(cache: read cache, id: s1, k: 1) && node_op(cache: read cache, id: s0) == CMPLT && node_num_src(cache: read cache, id: s0) == 2 {
+            let x = node_src_id(cache: read cache, id: s0, k: 0)
+            let c = node_src_id(cache: read cache, id: s0, k: 1)
+            let xdt = node_dtype(cache: read cache, id: x)
+            if dtype_is_int(d: read xdt) && node_is_const_int(cache: read cache, id: c) {
+                return SymbolicValidParse(ok: true, expr: x, is_upper: false, c: node_const_int(cache: read cache, id: c))
+            }
+        }
+    }
+    if node_op(cache: read cache, id: v) == CMPLT && node_num_src(cache: read cache, id: v) == 2 {
+        let x = node_src_id(cache: read cache, id: v, k: 0)
+        let c = node_src_id(cache: read cache, id: v, k: 1)
+        let xdt = node_dtype(cache: read cache, id: x)
+        if dtype_is_int(d: read xdt) && node_is_const_int(cache: read cache, id: c) {
+            return SymbolicValidParse(ok: true, expr: x, is_upper: true, c: node_const_int(cache: read cache, id: c) - 1)
+        }
+    }
+    return SymbolicValidParse(ok: false, expr: v, is_upper: true, c: 0)
+}
+
+fn symbolic_and_product(cache: mut UOpCache, parts: read List<Int>) -> Int {
+    let bdt = dt_bool()
+    if List.len<Int>(list: read parts) == 0 { return mk_const_int(cache: mut cache, dt: read bdt, v: 1) }
+    let mut out = List.get<Int>(list: read parts, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read parts) {
+        out = mk_alu2(cache: mut cache, op: AND, dt: read bdt, x: out, y: List.get<Int>(list: read parts, index: i))
+        i = i + 1
+    }
+    return out
+}
+
+fn symbolic_mul_product(cache: mut UOpCache, dt: read DType, parts: read List<Int>) -> Int {
+    if List.len<Int>(list: read parts) == 0 { return mk_const_int(cache: mut cache, dt: read dt, v: 1) }
+    let mut out = List.get<Int>(list: read parts, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read parts) {
+        out = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: out, y: List.get<Int>(list: read parts, index: i))
+        i = i + 1
+    }
+    return out
+}
+
+fn uop_given_valid(cache: mut UOpCache, valid: Int, uop: Int, try_simplex: Bool) -> Int {
+    if const_bool_eq(cache: read cache, id: valid, k: 1) { return uop }
+    local clauses = uop_split_by_op(cache: read cache, id: valid, sep: AND)
+    let mut lower_seen = false
+    let mut upper_seen = false
+    let mut lower = 0
+    let mut upper = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read clauses) {
+        let p = parse_valid(cache: read cache, v: List.get<Int>(list: read clauses, index: i))
+        if p.ok && p.expr == uop {
+            if p.is_upper {
+                upper_seen = true
+                upper = p.c
+            } else {
+                lower_seen = true
+                lower = p.c
+            }
+        }
+        i = i + 1
+    }
+    if lower_seen && upper_seen && lower == upper {
+        let dt = node_dtype(cache: read cache, id: uop)
+        return mk_const_int(cache: mut cache, dt: read dt, v: lower)
+    }
+    return uop
+}
+
+fn _valid_priority(cache: read UOpCache, v: Int, valids: read List<Int>) -> Int {
+    let parsed = parse_valid(cache: read cache, v: v)
+    if parsed.ok { return 0 - node_num_src(cache: read cache, id: parsed.expr) }
+    return 0
+}
+
+fn simplify_valid(cache: mut UOpCache, valid: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: valid) != AND { return None }
+    local clauses0 = uop_split_by_op(cache: read cache, id: valid, sep: AND)
+    local clauses = dedup(x: read clauses0)
+    local out = List.new<Int>()
+    let mut changed = symbolic_int_list_same(a: read clauses0, b: read clauses) == false
+    let mut i = 0
+    while i < List.len<Int>(list: read clauses) {
+        let mut stmt = List.get<Int>(list: read clauses, index: i)
+        if List.len<Int>(list: read out) > 0 {
+            let known = symbolic_and_product(cache: mut cache, parts: read out)
+            let rewritten = uop_given_valid(cache: mut cache, valid: known, uop: stmt, try_simplex: true)
+            if rewritten != stmt { changed = true }
+            stmt = rewritten
+        }
+        List.push<Int>(list: mut out, value: read stmt)
+        i = i + 1
+    }
+    if changed == false { return None }
+    return Some(symbolic_and_product(cache: mut cache, parts: read out))
+}
+
+fn reduce_mul_chain(cache: mut UOpCache, r: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: r) != REDUCE { return None }
+    let kind = node_reduce_kind(cache: read cache, id: r)
+    if kind != 0 && kind != 2 { return None }
+    if node_num_src(cache: read cache, id: r) < 1 { return None }
+    let inner = node_src_id(cache: read cache, id: r, k: 0)
+    if node_op(cache: read cache, id: inner) != MUL { return None }
+    let rdt = node_full_dtype(cache: read cache, id: r)
+    let idt = node_full_dtype(cache: read cache, id: inner)
+    if symbolic_dtype_same(a: read rdt, b: read idt) == false { return None }
+    local parts = uop_split_by_op(cache: read cache, id: inner, sep: MUL)
+    local inside = List.new<Int>()
+    local outside = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read parts) {
+        let m = List.get<Int>(list: read parts, index: i)
+        if node_is_const_int(cache: read cache, id: m) {
+            List.push<Int>(list: mut outside, value: read m)
+        } else {
+            List.push<Int>(list: mut inside, value: read m)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read outside) == 0 { return None }
+    let new_inner = symbolic_mul_product(cache: mut cache, dt: read idt, parts: read inside)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read new_inner)
+    local arg = node_arg(cache: read cache, id: r)
+    let new_reduce = intern(cache: mut cache, op: REDUCE, dt: read rdt, src: take src, arg: take arg)
+    let outside_prod = symbolic_mul_product(cache: mut cache, dt: read rdt, parts: read outside)
+    return Some(mk_alu2(cache: mut cache, op: MUL, dt: read rdt, x: new_reduce, y: outside_prod))
+}
+
+fn drop_and_clauses(cache: mut UOpCache, cond: Int, x: Int, i: Int) -> Option<Int> {
+    local keep = uop_split_by_op(cache: read cache, id: cond, sep: AND)
+    if List.len<Int>(list: read keep) == 0 { return None }
+    return None
+}
+
+fn where_on_load(cache: mut UOpCache, cond: Int, buf: Int, idx: Int, or_cast: Int) -> Option<Int> {
+    return None
+}
+
+fn gated_given_valid(cache: mut UOpCache, cond: Int, x: Int, i: Int) -> Option<Int> {
+    let xdt = node_dtype(cache: read cache, id: x)
+    if xdt.name != "weakint" { return None }
+    let sx = uop_given_valid(cache: mut cache, valid: cond, uop: x, try_simplex: false)
+    if sx == x { return None }
+    let dt = node_full_dtype(cache: read cache, id: i)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: cond, tval: sx, fval: i))
+}
+
+fn gep_through_wmma(cache: mut UOpCache, gep: Int, wmma: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: gep) != GEP { return None }
+    if node_op(cache: read cache, id: wmma) != WMMA { return None }
+    local idxs = node_argints(cache: read cache, id: gep)
+    let wdt = node_full_dtype(cache: read cache, id: wmma)
+    if List.len<Int>(list: read idxs) == wdt.count {
+        let mut i = 0
+        let mut identity = true
+        while i < List.len<Int>(list: read idxs) {
+            if List.get<Int>(list: read idxs, index: i) != i { identity = false }
+            i = i + 1
+        }
+        if identity { return Some(wmma) }
+    }
+    return None
+}
+
 // the PatternMatcher: try each rule in order, first match wins.
 fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
     match rule_fold_const_alu(cache: mut cache, id: id) {
@@ -1420,6 +1640,13 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
     match rule_simplify_trunc_int(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
+    }
+    if node_op(cache: read cache, id: id) == BITCAST && node_num_src(cache: read cache, id: id) == 1 {
+        let bc_src = node_src_id(cache: read cache, id: id, k: 0)
+        match fold_bitcast(cache: mut cache, root: id, c: bc_src) {
+            Some(r) => { return Some(r) }
+            None => {}
+        }
     }
     match rule_simplify_bool_alu_to_logic(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
@@ -1498,6 +1725,14 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_reciprocal_algebra(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match reduce_mul_chain(cache: mut cache, r: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match simplify_valid(cache: mut cache, valid: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

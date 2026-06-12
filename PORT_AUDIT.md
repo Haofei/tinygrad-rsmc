@@ -404,8 +404,12 @@ Integrated pieces:
   multiplicative cancellation. Vmin/vmax covers bounded `PARAM`, plus both `SPECIAL` and `RANGE` as `[0, end_max - 1]`.
   `STACK` and `UNROLL` propagate child/source min-max ranges.
   Source-shaped symbolic entry points now cover `simplify_pow`, `const_arg`, `fold_const_alu`,
-  `fold_add_divmod_recombine`, `lt_folding`, and `canonicalize_simplex` over the current
-  interned UOp-id representation.
+  `fold_add_divmod_recombine`, `lt_folding`, `canonicalize_simplex`, `fold_bitcast`,
+  `gep_through_wmma`, `parse_valid`, `uop_given_valid`, `_valid_priority`, `simplify_valid`,
+  `reduce_mul_chain`, `drop_and_clauses`, `where_on_load`, and `gated_given_valid` over the current
+  interned UOp-id representation. Full byte reinterpretation for float bitcasts, exact WMMA/GEP
+  layout pushing, complete valid-condition simplification, and data-dependent load gating remain
+  conservative/partial.
   The evaluator now covers the integrated unary math UOps
   `EXP2`, `LOG2`, `SIN`, `SQRT`, `RECIPROCAL`, `NEG`, `TRUNC`, plus binary `POW`, and handles
   scalar-to-tensor `EXPAND` materialization, `FLIP`, `PAD`, graph-backed `SHRINK` slicing, and

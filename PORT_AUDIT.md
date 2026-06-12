@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,380 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,486 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -201,7 +201,7 @@ Integrated pieces:
 - `uop/vminmax.rss`, `uop/alu.rss`, `uop/symbolic.rss`, `runtime/ops_python.rss`: small
   interpreter/simplifier pieces. The symbolic layer now includes integer vmin/vmax, rewrite
   identities/folding, a grouped `symbolic_simple` slice for idempotent ops, boolean constants,
-  same-self comparisons, `x//-1`, and `(x^y)^y`, simple `WHERE` folding,
+  same-self comparisons, `x//-1`, `(x^y)^y`, boolean not/cast/trunc folding, simple `WHERE` folding,
   constant-exponent `POW` simplification for integer exponents,
   monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
@@ -311,6 +311,9 @@ Current integrated demo:
 - validates a grouped upstream `symbolic_simple` batch: `max(x,x)`, boolean `x&x`/`x|x`,
   boolean `x&true`/`x&false`/`x|false`/`x|true`, `x<x`, integer `x!=x`, `(x^y)^y`,
   integer `x&0`, and `x//-1`.
+- validates a grouped boolean symbolic batch: `where(b,true,false) -> b`,
+  `where(b,false,true) -> !b`, `!!b -> b`, `cast(b,int)!=0 -> b`, `cast(b,int)!=1 -> !b`,
+  `cast(b,int)!=2 -> true`, and integer `trunc(x) -> x`.
 - validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
   constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

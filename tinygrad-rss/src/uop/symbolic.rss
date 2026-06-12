@@ -21,6 +21,15 @@ fn const_bool_eq(cache: read UOpCache, id: Int, k: Int) -> Bool {
     return false
 }
 
+fn symbolic_bool_true(cache: mut UOpCache) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dt_bool(), v: 1)
+}
+
+fn symbolic_bool_logical_not(cache: mut UOpCache, id: Int) -> Int {
+    let truth = symbolic_bool_true(cache: mut cache)
+    return mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: id, y: truth)
+}
+
 fn int_gcd(a: Int, b: Int) -> Int {
     let mut x = iabs(x: a)
     let mut y = iabs(x: b)
@@ -355,11 +364,73 @@ fn rule_simplify_where(cache: mut UOpCache, id: Int) -> Option<Int> {
     if tval == fval { return Some(tval) }
     let cdt = node_dtype(cache: read cache, id: cond)
     if dtype_is_bool(d: read cdt) {
+        if const_bool_eq(cache: read cache, id: tval, k: 1) {
+            if const_bool_eq(cache: read cache, id: fval, k: 0) { return Some(cond) }
+        }
+        if const_bool_eq(cache: read cache, id: tval, k: 0) {
+            if const_bool_eq(cache: read cache, id: fval, k: 1) {
+                return Some(symbolic_bool_logical_not(cache: mut cache, id: cond))
+            }
+        }
+    }
+    if dtype_is_bool(d: read cdt) {
         if node_is_const_int(cache: read cache, id: cond) {
             if node_const_int(cache: read cache, id: cond) == 0 { return Some(fval) }
             return Some(tval)
         }
     }
+    return None
+}
+
+fn rule_simplify_bool_cast_compare(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    let mut cast_id = lhs
+    let mut const_id = rhs
+    if node_op(cache: read cache, id: cast_id) != CAST {
+        cast_id = rhs
+        const_id = lhs
+    }
+    if node_op(cache: read cache, id: cast_id) != CAST { return None }
+    if node_is_const_int(cache: read cache, id: const_id) == false { return None }
+    let cast_dt = node_dtype(cache: read cache, id: cast_id)
+    if dtype_is_int(d: read cast_dt) == false { return None }
+    let x = node_src_id(cache: read cache, id: cast_id, k: 0)
+    let xdt = node_dtype(cache: read cache, id: x)
+    if dtype_is_bool(d: read xdt) == false { return None }
+    let c = node_const_int(cache: read cache, id: const_id)
+    if c == 0 { return Some(x) }
+    if c == 1 { return Some(symbolic_bool_logical_not(cache: mut cache, id: x)) }
+    return Some(symbolic_bool_true(cache: mut cache))
+}
+
+fn rule_simplify_bool_not(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    let mut inner = lhs
+    if const_bool_eq(cache: read cache, id: rhs, k: 1) == false {
+        if const_bool_eq(cache: read cache, id: lhs, k: 1) == false { return None }
+        inner = rhs
+    }
+    if node_op(cache: read cache, id: inner) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: inner) != 2 { return None }
+    let i0 = node_src_id(cache: read cache, id: inner, k: 0)
+    let i1 = node_src_id(cache: read cache, id: inner, k: 1)
+    if const_bool_eq(cache: read cache, id: i1, k: 1) { return Some(i0) }
+    if const_bool_eq(cache: read cache, id: i0, k: 1) { return Some(i1) }
+    return None
+}
+
+fn rule_simplify_trunc_int(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != TRUNC { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let x = node_src_id(cache: read cache, id: id, k: 0)
+    let dt = node_dtype(cache: read cache, id: x)
+    if dtype_is_int(d: read dt) || dtype_is_bool(d: read dt) { return Some(x) }
     return None
 }
 
@@ -488,6 +559,18 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_where(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_bool_cast_compare(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_bool_not(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_trunc_int(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

@@ -494,6 +494,58 @@ fn main() -> Unit {
     showb(label: read "uop.spec valid unroll/contract = ", v: spec_type_verify(cache: read mcache, id: munroll) && spec_type_verify(cache: read mcache, id: mcontract))
     showb(label: read "uop.spec rejects unroll product mismatch = ", v: spec_type_verify(cache: read mcache, id: mbad_unroll) == false)
     showb(label: read "uop.spec rejects empty contract axes = ", v: spec_type_verify(cache: read mcache, id: mbad_contract) == false)
+    let mut mex_contract_stack_ok = false
+    match expander_rewrite(cache: mut mcache, id: mcontract) {
+        Some(r) => {
+            mex_contract_stack_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mex_contract_unroll = mk_contract(cache: mut mcache, x: munroll, pairs: read maxis_pairs)
+    let mut mex_contract_unroll_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_contract_unroll) {
+        Some(r) => {
+            mex_contract_unroll_ok = node_op(cache: read mcache, id: r) == GEP && node_num_src(cache: read mcache, id: r) == 1 && node_full_dtype(cache: read mcache, id: r).count == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mex_empty_pairs = List.new<Int>()
+    let mex_empty_unroll = mk_unroll(cache: mut mcache, x: m2, pairs: read mex_empty_pairs)
+    let mut mex_empty_unroll_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_empty_unroll) {
+        Some(r) => { mex_empty_unroll_ok = r == m2 }
+        None => {}
+    }
+    local mex_pair0_2 = List.new<Int>()
+    List.push<Int>(list: mut mex_pair0_2, value: read 0)
+    List.push<Int>(list: mut mex_pair0_2, value: read 2)
+    local mex_pair1_2 = List.new<Int>()
+    List.push<Int>(list: mut mex_pair1_2, value: read 1)
+    List.push<Int>(list: mut mex_pair1_2, value: read 2)
+    let mex_inner_unroll = mk_unroll(cache: mut mcache, x: mstack4, pairs: read mex_pair0_2)
+    let mex_outer_unroll = mk_unroll(cache: mut mcache, x: mex_inner_unroll, pairs: read mex_pair1_2)
+    let mut mex_double_unroll_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_outer_unroll) {
+        Some(r) => {
+            mex_double_unroll_ok = node_op(cache: read mcache, id: r) == UNROLL && node_axis_size_product(cache: read mcache, id: r) == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mex_end_srcs = List.new<Int>()
+    List.push<Int>(list: mut mex_end_srcs, value: read munroll)
+    let mex_end = mk_end(cache: mut mcache, id: m2, srcs: read mex_end_srcs)
+    let mut mex_end_unroll_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_end) {
+        Some(r) => {
+            mex_end_unroll_ok = node_op(cache: read mcache, id: r) == CONTRACT && node_full_dtype(cache: read mcache, id: r).count == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    showb(label: read "codegen.expander contract scalar to stack = ", v: mex_contract_stack_ok)
+    showb(label: read "codegen.expander contract unroll to gep = ", v: mex_contract_unroll_ok)
+    showb(label: read "codegen.expander empty unroll unwraps = ", v: mex_empty_unroll_ok)
+    showb(label: read "codegen.expander double unroll merges axes = ", v: mex_double_unroll_ok)
+    showb(label: read "codegen.expander end consumes unroll axes = ", v: mex_end_unroll_ok)
     let mmulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: m3, z: m4)
     let mf_codegen = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let mbad_mulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: mf_codegen, z: m4)

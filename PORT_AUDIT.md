@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 25 RSS files, 19,840 LOC.
+  - integrated `tinygrad-rss/src`: 26 RSS files, 20,077 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -156,6 +156,11 @@ Integrated pieces:
   condition onto the load/store gate, supplies a zero-like load fallback, combines an existing
   store gate with the moved index gate, and folds `WHERE` around gated loads into the load alt
   value for direct and inverted gate forms.
+- `codegen/late/expander.rss`: first integrated source-shaped `tinygrad/codegen/late/expander.py`
+  slice, covering axis-size choice/index helpers and the compact normalization rewrites for
+  `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. Full vectorized
+  `do_expand`, WMMA expansion, group-for-reduce, and BufferizeOpts-local rewrites remain later
+  expander slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
@@ -387,6 +392,9 @@ Current integrated demo:
   `LOAD` and `STORE` are rewritten to plain indexes plus gates, optional casted pointers are
   preserved, an existing store gate is combined with the moved validity gate, and `WHERE`
   around direct/inverted gated loads is folded into the load alt value.
+- validates the first expander slice: scalar `CONTRACT` lowers to `STACK`, `CONTRACT` of
+  `UNROLL` lowers to indexed `GEP`, empty `UNROLL` unwraps, double `UNROLL` merges axes,
+  and `END` consumes `UNROLL` axes through `CONTRACT`.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample
@@ -604,7 +612,8 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
-  gate-from-index movement, `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
+  gate-from-index movement, first expander CONTRACT/UNROLL/END normalization,
+  `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
   IF rejection, late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,

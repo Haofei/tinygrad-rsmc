@@ -1,0 +1,185 @@
+// Integrated source-shaped slice of tinygrad/codegen/late/expander.py.
+//
+// This first slice ports the axis-size choice/index helpers plus the compact
+// CONTRACT/UNROLL/END normalization rules. Full vectorized do_expand, WMMA,
+// group-for-reduce, and BufferizeOpts-local rewrites remain later slices.
+features: local
+
+fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
+    local out = copy_int_list(l: read a)
+    let mut i = 0
+    while i < List.len<Int>(list: read b) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read b, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn expander_pairs_contains_axis(pairs: read List<Int>, axis: Int) -> Bool {
+    let mut i = 0
+    while i + 1 < List.len<Int>(list: read pairs) {
+        if List.get<Int>(list: read pairs, index: i) == axis { return true }
+        i = i + 2
+    }
+    return false
+}
+
+fn expander_pairs_without_axes(pairs: read List<Int>, remove: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i + 1 < List.len<Int>(list: read pairs) {
+        let axis = List.get<Int>(list: read pairs, index: i)
+        let size = List.get<Int>(list: read pairs, index: i + 1)
+        if expander_pairs_contains_axis(pairs: read remove, axis: axis) == false {
+            List.push<Int>(list: mut out, value: read axis)
+            List.push<Int>(list: mut out, value: read size)
+        }
+        i = i + 2
+    }
+    return take out
+}
+
+fn expander_choice_count(pairs: read List<Int>) -> Int {
+    if List.len<Int>(list: read pairs) == 0 { return 1 }
+    return axis_size_pairs_product(pairs: read pairs)
+}
+
+fn expander_choice_value(pairs: read List<Int>, choice: Int, axis: Int) -> Int {
+    let n = List.len<Int>(list: read pairs)
+    let mut i = 0
+    while i + 1 < n {
+        let ax = List.get<Int>(list: read pairs, index: i)
+        let sz = List.get<Int>(list: read pairs, index: i + 1)
+        if ax == axis {
+            let mut div = 1
+            let mut j = i + 3
+            while j < n {
+                div = div * List.get<Int>(list: read pairs, index: j)
+                j = j + 2
+            }
+            return (choice / div) % sz
+        }
+        i = i + 2
+    }
+    return 0
+}
+
+fn expander_expand_arg_to_idx(args: read List<Int>, choice_pairs: read List<Int>, choice: Int) -> Int {
+    let mut idx = 0
+    let mut mul = 1
+    let mut i = List.len<Int>(list: read args) - 2
+    while i >= 0 {
+        let axis = List.get<Int>(list: read args, index: i)
+        let size = List.get<Int>(list: read args, index: i + 1)
+        idx = idx + expander_choice_value(pairs: read choice_pairs, choice: choice, axis: axis) * mul
+        mul = mul * size
+        i = i - 2
+    }
+    return idx
+}
+
+fn expander_contract_indices(ex_pairs: read List<Int>, con_pairs: read List<Int>, new_pairs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let new_count = expander_choice_count(pairs: read new_pairs)
+    let con_count = expander_choice_count(pairs: read con_pairs)
+    let all_pairs = expander_pairs_concat(a: read new_pairs, b: read con_pairs)
+    let mut nc = 0
+    while nc < new_count {
+        let mut cc = 0
+        while cc < con_count {
+            let choice = nc * con_count + cc
+            let idx = expander_expand_arg_to_idx(args: read ex_pairs, choice_pairs: read all_pairs, choice: choice)
+            List.push<Int>(list: mut out, value: read idx)
+            cc = cc + 1
+        }
+        nc = nc + 1
+    }
+    return take out
+}
+
+fn expander_empty_unroll(cache: read UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != UNROLL { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    if List.len<Int>(list: read node_axis_size_pairs(cache: read cache, id: id)) != 0 { return None }
+    return Some(node_src_id(cache: read cache, id: id, k: 0))
+}
+
+fn expander_double_unroll(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != UNROLL { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let inner = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: inner) != UNROLL { return None }
+    let inner_src = node_src_id(cache: read cache, id: inner, k: 0)
+    let inner_pairs = node_axis_size_pairs(cache: read cache, id: inner)
+    let outer_pairs = node_axis_size_pairs(cache: read cache, id: id)
+    let pairs = expander_pairs_concat(a: read inner_pairs, b: read outer_pairs)
+    return Some(mk_unroll(cache: mut cache, x: inner_src, pairs: read pairs))
+}
+
+fn expander_do_contract(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CONTRACT { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let ex = node_src_id(cache: read cache, id: id, k: 0)
+    let con_dt = node_full_dtype(cache: read cache, id: id)
+    if node_op(cache: read cache, id: ex) != UNROLL {
+        local srcs = List.new<Int>()
+        let mut i = 0
+        while i < con_dt.count {
+            List.push<Int>(list: mut srcs, value: read ex)
+            i = i + 1
+        }
+        return Some(uop_stack(cache: mut cache, dt: read con_dt, srcs: read srcs))
+    }
+    let ex_pairs = node_axis_size_pairs(cache: read cache, id: ex)
+    let con_pairs = node_axis_size_pairs(cache: read cache, id: id)
+    let new_pairs = expander_pairs_without_axes(pairs: read ex_pairs, remove: read con_pairs)
+    let base = node_src_id(cache: read cache, id: ex, k: 0)
+    let idxs = expander_contract_indices(ex_pairs: read ex_pairs, con_pairs: read con_pairs, new_pairs: read new_pairs)
+    let gep = mk_gep(cache: mut cache, x: base, idxs: read idxs)
+    if List.len<Int>(list: read new_pairs) == 0 { return Some(gep) }
+    return Some(mk_unroll(cache: mut cache, x: gep, pairs: read new_pairs))
+}
+
+fn expander_end_unrolls(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != END { return None }
+    if node_num_src(cache: read cache, id: id) < 2 { return None }
+    local con_pairs = List.new<Int>()
+    local rest = List.new<Int>()
+    let mut found = false
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        let src = node_src_id(cache: read cache, id: id, k: i)
+        if node_op(cache: read cache, id: src) == UNROLL {
+            let pairs = node_axis_size_pairs(cache: read cache, id: src)
+            let mut j = 0
+            while j < List.len<Int>(list: read pairs) {
+                List.push<Int>(list: mut con_pairs, value: read List.get<Int>(list: read pairs, index: j))
+                j = j + 1
+            }
+            found = true
+        } else {
+            List.push<Int>(list: mut rest, value: read src)
+        }
+        i = i + 1
+    }
+    if found == false { return None }
+    let first = node_src_id(cache: read cache, id: id, k: 0)
+    let con = mk_contract(cache: mut cache, x: first, pairs: read con_pairs)
+    return Some(mk_end(cache: mut cache, id: con, srcs: read rest))
+}
+
+fn expander_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match expander_empty_unroll(cache: read cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match expander_double_unroll(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match expander_do_contract(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return expander_end_unrolls(cache: mut cache, id: id)
+}

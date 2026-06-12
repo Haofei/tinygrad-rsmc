@@ -47,6 +47,56 @@ fn devectorizer_no_vectorized_alu(cache: mut UOpCache, id: Int) -> Option<Int> {
     return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
 }
 
+fn devectorizer_gep_range(cache: mut UOpCache, id: Int, start: Int, count: Int) -> Int {
+    local idxs = List.new<Int>()
+    let mut i = 0
+    while i < count {
+        List.push<Int>(list: mut idxs, value: read (start + i))
+        i = i + 1
+    }
+    return mk_gep(cache: mut cache, x: id, idxs: read idxs)
+}
+
+fn devectorizer_no_vectorized_wmma(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != WMMA { return None }
+    if node_num_src(cache: read cache, id: id) != 3 { return None }
+    local args = node_argints(cache: read cache, id: id)
+    if List.len<Int>(list: read args) < 7 { return None }
+    let a_elems = List.get<Int>(list: read args, index: 4)
+    let b_elems = List.get<Int>(list: read args, index: 5)
+    let out_sz = List.get<Int>(list: read args, index: 6)
+    if a_elems <= 0 || b_elems <= 0 || out_sz <= 0 { return None }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dt.count == out_sz { return None }
+    if dt.count < out_sz { return None }
+    let groups = dt.count / out_sz
+    if groups * out_sz != dt.count { return None }
+    let a_src = node_src_id(cache: read cache, id: id, k: 0)
+    let b_src = node_src_id(cache: read cache, id: id, k: 1)
+    let c_src = node_src_id(cache: read cache, id: id, k: 2)
+    if node_full_dtype(cache: read cache, id: a_src).count < groups * a_elems { return None }
+    if node_full_dtype(cache: read cache, id: b_src).count < groups * b_elems { return None }
+    if node_full_dtype(cache: read cache, id: c_src).count < groups * out_sz { return None }
+    let wdt = dtype_vec(base: read dtype_scalar(d: read dt), sz: out_sz)
+    local lanes = List.new<Int>()
+    let mut g = 0
+    while g < groups {
+        let aa = devectorizer_gep_range(cache: mut cache, id: a_src, start: g * a_elems, count: a_elems)
+        let bb = devectorizer_gep_range(cache: mut cache, id: b_src, start: g * b_elems, count: b_elems)
+        let cc = devectorizer_gep_range(cache: mut cache, id: c_src, start: g * out_sz, count: out_sz)
+        let ww = mk_wmma(cache: mut cache, a_id: aa, b_id: bb, acc_id: cc, dt: read wdt, arg: read args)
+        let mut lane = 0
+        while lane < out_sz {
+            local one = List.new<Int>()
+            List.push<Int>(list: mut one, value: read lane)
+            List.push<Int>(list: mut lanes, value: read mk_gep(cache: mut cache, x: ww, idxs: read one))
+            lane = lane + 1
+        }
+        g = g + 1
+    }
+    return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+}
+
 fn devectorizer_scalar_const(cache: mut UOpCache, id: Int, lane: Int) -> Int {
     let sdt = dtype_scalar(d: read node_full_dtype(cache: read cache, id: id))
     local src = List.new<Int>()
@@ -377,6 +427,10 @@ fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match devectorizer_add_load_to_value_index(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_no_vectorized_wmma(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

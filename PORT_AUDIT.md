@@ -140,7 +140,9 @@ Integrated pieces:
   `unified_rewrite` over the current `PatternRule` engine, plus UPat compatibility hooks for
   `match`, `_check_dtype`, `_ensure_float`, reverse floordiv construction, callable
   deconstruction/interpret/deferred-compile placeholders, and non-tracing `add_trace_group`,
-  `track_rewrites`, and `profile_matches`; Python callable bytecode reconstruction, real deferred
+  `track_rewrites`, and `profile_matches`, plus source-shaped compile/render helper names
+  `_get_clause`, `do_process_and`, `wrap`, `_final_render`, `_get_code`, and `upat_compile`
+  over the current pattern metadata; Python callable bytecode reconstruction, dynamic `exec`-style
   UPat compilation, and trace/profile collection are still not represented.
 - `uop/spec.rss`: first integrated interned-graph verifier for the shared core currently built by
   the package: CONST/SPECIAL/RANGE, `DEFINE_VAR`/`BIND`, `PARAM`, `DEFINE_LOCAL`/`DEFINE_REG`,

@@ -3716,13 +3716,23 @@ fn main() -> Unit {
     showb(label: read "upat.after helper matches AFTER = ", v: upat_match(cache: read pcache, pat: read upat_after2(x: read upat_var(name: read "x"), dep: read upat_any(name: read "dep")), id: pafter, binds: mut b_after))
     showb(label: read "upat.end helper matches END = ", v: upat_match(cache: read pcache, pat: read upat_end2(x: read upat_var(name: read "x"), range: read upat_any(name: read "r")), id: pend, binds: mut b_end))
 
+    let up_clause = _get_clause(pat: read pat_named, base: px1, depth: 0)
+    let up_processed = do_process_and(clause: read up_clause)
+    let up_wrapped = wrap(ctx: read "ctx", x: read up_processed)
+    local up_rendered = _final_render(clause: read up_wrapped, has_ctx: true, depth: 1)
+    let up_code = _get_code(pat: read pat_named, has_ctx: true)
+    let up_render_ok = String.len(value: read up_clause) > 0 && String.len(value: read up_processed) > 0 && String.len(value: read up_wrapped) > String.len(value: read up_processed) && List.len<String>(list: read up_rendered) > 0 && String.len(value: read up_code) > 0
+    showb(label: read "upat.compile render helpers = ", v: up_render_ok)
+
     let rlhs = mk_alu2(cache: mut pcache, op: MUL, dt: read i32, x: px, y: p1)
     let rrhs = mk_alu2(cache: mut pcache, op: ADD, dt: read i32, x: p2, y: p3)
     let rexpr = mk_alu2(cache: mut pcache, op: ADD, dt: read i32, x: rlhs, y: rrhs)
     let prules = pattern_symbolic_rules()
+    let pcompiled = upat_compile(rules: read prules)
     let rroot = pattern_graph_rewrite(cache: mut pcache, id: rexpr, rules: read prules)
     let rleft = node_src_id(cache: read pcache, id: rroot, k: 0)
     let rright = node_src_id(cache: read pcache, id: rroot, k: 1)
+    showb(label: read "upat.compile preserves rules = ", v: List.len<PatternRule>(list: read pcompiled) == List.len<PatternRule>(list: read prules))
     showop(label: read "pattern_graph_rewrite((x*1)+(2+3)) root = ", op: read node_op(cache: read pcache, id: rroot))
     showop(label: read "pattern_graph_rewrite left = ", op: read node_op(cache: read pcache, id: rleft))
     showi(label: read "pattern_graph_rewrite right const = ", v: node_const_int(cache: read pcache, id: rright))

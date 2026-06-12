@@ -296,6 +296,116 @@ fn deconstruct_function(name: read String) -> fresh String {
     return String.copy(value: read name)
 }
 
+fn upat_render(pat: read UPat) -> fresh String {
+    let mut s = ""
+    if pat.kind == UpatAny {
+        s = "ANY"
+    } else {
+        if pat.kind == UpatConst {
+            if pat.exact_const {
+                s = String.concat(left: read "CONST(", right: read Int.to_string(value: read pat.cval))
+                s = String.concat(left: read s, right: read ")")
+            } else {
+                s = "CONST"
+            }
+        } else {
+            if List.len<Ops>(list: read pat.ops) > 0 {
+                s = "OPSET("
+                let mut oi = 0
+                while oi < List.len<Ops>(list: read pat.ops) {
+                    if oi > 0 { s = String.concat(left: read s, right: read "|") }
+                    let opi = List.get<Ops>(list: read pat.ops, index: oi)
+                    s = String.concat(left: read s, right: read ops_name(op: read opi))
+                    oi = oi + 1
+                }
+                s = String.concat(left: read s, right: read ")")
+            } else {
+                s = ops_name(op: read pat.op)
+            }
+        }
+    }
+
+    if String.len(value: read pat.dtype_name) > 0 {
+        s = String.concat(left: read s, right: read ":")
+        s = String.concat(left: read s, right: read pat.dtype_name)
+    }
+    if String.len(value: read pat.name) > 0 {
+        s = String.concat(left: read s, right: read " as ")
+        s = String.concat(left: read s, right: read pat.name)
+    }
+
+    let nk = List.len<UPat>(list: read pat.children)
+    if nk > 0 {
+        s = String.concat(left: read s, right: read "[")
+        let mut i = 0
+        while i < nk {
+            if i > 0 { s = String.concat(left: read s, right: read ", ") }
+            let child = List.get<UPat>(list: read pat.children, index: i)
+            s = String.concat(left: read s, right: read upat_render(pat: read child))
+            i = i + 1
+        }
+        if pat.allow_any_len { s = String.concat(left: read s, right: read ", ...") }
+        s = String.concat(left: read s, right: read "]")
+    }
+    return String.copy(value: read s)
+}
+
+fn _get_clause(pat: read UPat, base: Int, depth: Int) -> fresh String {
+    let mut s = String.concat(left: read "uop", right: read Int.to_string(value: read base))
+    s = String.concat(left: read s, right: read "@")
+    s = String.concat(left: read s, right: read Int.to_string(value: read depth))
+    s = String.concat(left: read s, right: read ":")
+    return String.concat(left: read s, right: read upat_render(pat: read pat))
+}
+
+fn do_process_and(clause: read String) -> fresh String {
+    return String.copy(value: read clause)
+}
+
+fn wrap(ctx: read String, x: read String) -> fresh String {
+    let mut s = String.copy(value: read ctx)
+    if String.len(value: read s) > 0 { s = String.concat(left: read s, right: read ":") }
+    return String.concat(left: read s, right: read x)
+}
+
+fn _final_render(clause: read String, has_ctx: Bool, depth: Int) -> fresh List<String> {
+    local lines = List.new<String>()
+    let mut indent = ""
+    let mut i = 0
+    while i < depth {
+        indent = String.concat(left: read indent, right: read "  ")
+        i = i + 1
+    }
+    let mut cond = String.concat(left: read indent, right: read "if match(")
+    cond = String.concat(left: read cond, right: read clause)
+    if has_ctx { cond = String.concat(left: read cond, right: read ", ctx") }
+    cond = String.concat(left: read cond, right: read "): return _ret")
+    List.push<String>(list: mut lines, value: read cond)
+    return take lines
+}
+
+fn _get_code(pat: read UPat, has_ctx: Bool) -> fresh String {
+    let clause = _get_clause(pat: read pat, base: 0, depth: 0)
+    let processed = do_process_and(clause: read clause)
+    let wrapped = wrap(ctx: read "uop", x: read processed)
+    local rendered = _final_render(clause: read wrapped, has_ctx: has_ctx, depth: 1)
+    local lines = List.new<String>()
+    List.push<String>(list: mut lines, value: read String.concat(left: read "# match for ", right: read upat_render(pat: read pat)))
+    List.push<String>(list: mut lines, value: read "def compiled_match(uop, ctx):")
+    let mut i = 0
+    while i < List.len<String>(list: read rendered) {
+        let line = List.get<String>(list: read rendered, index: i)
+        List.push<String>(list: mut lines, value: read line)
+        i = i + 1
+    }
+    List.push<String>(list: mut lines, value: read "  return None")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn upat_compile(rules: read List<PatternRule>) -> fresh List<PatternRule> {
+    return upat_deferred_compile(rules: read rules)
+}
+
 fn upat_interpret(cache: mut UOpCache, id: Int, rule: read PatternRule) -> Option<Int> {
     local binds = Map.new<String, Int>()
     if upat_match(cache: read cache, pat: read rule.pat, id: id, binds: mut binds) {

@@ -1,9 +1,10 @@
 // Integrated source-shaped slice of tinygrad/codegen/late/devectorizer.py.
 //
-// This first slice ports the devectorize_alu scalarization rule: vector
-// ALU/CAST/BITCAST nodes become a STACK of scalar lane operations. Load/store
-// grouping, buffer/index devectorization, REDUCE lowering, and image rewrites
-// remain later slices.
+// This first slice ports the devectorize_alu scalarization rule plus the
+// pm_render normalization rules: vector ALU/CAST/BITCAST nodes become a STACK
+// of scalar lane operations, and vector CONST/GEP/STACK nodes are normalized
+// for rendering. Load/store grouping, buffer/index devectorization, REDUCE
+// lowering, and image rewrites remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -43,8 +44,135 @@ fn devectorizer_no_vectorized_alu(cache: mut UOpCache, id: Int) -> Option<Int> {
     return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
 }
 
+fn devectorizer_scalar_const(cache: mut UOpCache, id: Int, lane: Int) -> Int {
+    let sdt = dtype_scalar(d: read node_full_dtype(cache: read cache, id: id))
+    local src = List.new<Int>()
+    let arg = node_arg(cache: read cache, id: id)
+    match arg {
+        ArgInts(vals) => {
+            let mut v = 0
+            if lane < List.len<Int>(list: read vals) { v = List.get<Int>(list: read vals, index: lane) }
+            local a = ArgInt(value: v)
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgInt(v) => {
+            local a = ArgInt(value: v)
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgFloat(v) => {
+            local a = ArgFloat(value: v)
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgBool(v) => {
+            local a = ArgBool(value: v)
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgNone => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgStr(v) => {
+            local a = ArgStr(text: String.copy(value: read v))
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgReduce(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgVar(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgRange(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgParam(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgAxisSizes(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgDevice(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgOp(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgBufferize(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgProgram(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+        ArgCall(v) => {
+            local a = ArgNone
+            return intern(cache: mut cache, op: CONST, dt: read sdt, src: take src, arg: take a)
+        }
+    }
+}
+
+fn devectorizer_render_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CONST { return None }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dt.count <= 1 { return None }
+    local lanes = List.new<Int>()
+    let mut i = 0
+    while i < dt.count {
+        List.push<Int>(list: mut lanes, value: read devectorizer_scalar_const(cache: mut cache, id: id, lane: i))
+        i = i + 1
+    }
+    return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+}
+
+fn devectorizer_render_gep(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != GEP { return None }
+    local idxs = node_argints(cache: read cache, id: id)
+    let src = node_src_id(cache: read cache, id: id, k: 0)
+    if List.len<Int>(list: read idxs) > 1 {
+        local lanes = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read idxs) {
+            local one = List.new<Int>()
+            List.push<Int>(list: mut one, value: read List.get<Int>(list: read idxs, index: i))
+            List.push<Int>(list: mut lanes, value: read mk_gep(cache: mut cache, x: src, idxs: read one))
+            i = i + 1
+        }
+        let dt = node_full_dtype(cache: read cache, id: id)
+        return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+    }
+    if List.len<Int>(list: read idxs) == 1 && List.get<Int>(list: read idxs, index: 0) == 0 {
+        if node_full_dtype(cache: read cache, id: src).count == 1 { return Some(src) }
+    }
+    return None
+}
+
+fn devectorizer_render_stack(cache: read UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STACK { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    return Some(node_src_id(cache: read cache, id: id, k: 0))
+}
+
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
     match devectorizer_no_vectorized_alu(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_render_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_render_gep(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_render_stack(cache: read cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

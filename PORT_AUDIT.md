@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 27 RSS files, 20,640 LOC.
+  - integrated `tinygrad-rss/src`: 27 RSS files, 20,814 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -170,7 +170,10 @@ Integrated pieces:
 - `codegen/late/devectorizer.rss`: first integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
   rule for vector ALU, `CAST`, and `BITCAST`: vector operations are rebuilt as scalar lane
-  operations over `GEP` sources and wrapped in a `STACK`. Load/store grouping and splitting,
+  operations over `GEP` sources and wrapped in a `STACK`. It also has the first `pm_render`
+  normalization rules: vector `CONST` nodes become scalar-constant `STACK`s, multi-lane `GEP`
+  becomes a `STACK` of lane `GEP`s, `GEP(x, 0)` on scalar `x` unwraps, and one-element `STACK`
+  unwraps. Load/store grouping and splitting,
   buffer/index devectorization, WMMA scalarization, REDUCE-to-acc lowering, image rewrites, and
   add-load cleanup remain later devectorizer slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
@@ -412,7 +415,8 @@ Current integrated demo:
   `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction.
 - validates the first devectorizer slice: vector `ADD`, vector `CAST`, and vector `BITCAST`
   scalarize into `STACK` nodes of scalar lane operations and pass the integrated UOp spec
-  verifier.
+  verifier. It also validates the first `pm_render` normalizations for vector `CONST`,
+  multi-lane `GEP`, scalar `GEP(0)`, and single-source `STACK`.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample

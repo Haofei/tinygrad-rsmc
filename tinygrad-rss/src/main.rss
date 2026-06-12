@@ -785,6 +785,52 @@ fn main() -> Unit {
     showb(label: read "codegen.devectorizer scalarizes vector add = ", v: mdev_add_ok)
     showb(label: read "codegen.devectorizer scalarizes vector cast = ", v: mdev_cast_ok)
     showb(label: read "codegen.devectorizer scalarizes vector bitcast = ", v: mdev_bitcast_ok)
+    local mdev_const_vals = List.new<Int>()
+    List.push<Int>(list: mut mdev_const_vals, value: read 2)
+    List.push<Int>(list: mut mdev_const_vals, value: read 3)
+    List.push<Int>(list: mut mdev_const_vals, value: read 4)
+    List.push<Int>(list: mut mdev_const_vals, value: read 5)
+    local mdev_const_src = List.new<Int>()
+    local mdev_const_arg = ArgInts(values: take mdev_const_vals)
+    let mdev_const_vec = intern(cache: mut mcache, op: CONST, dt: read mstack4dt, src: take mdev_const_src, arg: take mdev_const_arg)
+    let mut mdev_const_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_const_vec) {
+        Some(r) => {
+            let c0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let c3 = node_src_id(cache: read mcache, id: r, k: 3)
+            let dev_const_root_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4
+            let dev_const_vals_ok = node_const_int(cache: read mcache, id: c0) == 2 && node_const_int(cache: read mcache, id: c3) == 5
+            mdev_const_ok = dev_const_root_ok && dev_const_vals_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mut mdev_gep_multi_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mgep2) {
+        Some(r) => {
+            mdev_gep_multi_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 2 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mdev_gep0_idx = List.new<Int>()
+    List.push<Int>(list: mut mdev_gep0_idx, value: read 0)
+    let mdev_gep0 = mk_gep(cache: mut mcache, x: m2, idxs: read mdev_gep0_idx)
+    let mut mdev_gep0_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_gep0) {
+        Some(r) => { mdev_gep0_ok = r == m2 }
+        None => {}
+    }
+    local mdev_stack1_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_stack1_src, value: read m2)
+    let mdev_stack1 = uop_stack(cache: mut mcache, dt: read i32, srcs: read mdev_stack1_src)
+    let mut mdev_stack1_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_stack1) {
+        Some(r) => { mdev_stack1_ok = r == m2 }
+        None => {}
+    }
+    showb(label: read "codegen.devectorizer renders vector const = ", v: mdev_const_ok)
+    showb(label: read "codegen.devectorizer renders multi gep = ", v: mdev_gep_multi_ok)
+    showb(label: read "codegen.devectorizer removes scalar gep0 = ", v: mdev_gep0_ok)
+    showb(label: read "codegen.devectorizer unwraps single stack = ", v: mdev_stack1_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)
     let maxis_param2 = mk_param_axis(cache: mut mcache, slot: 7, dt: read i32, shape: read mparam_shape, name: read "sharded2", axis: 1)
     let maxis_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: maxis_param, y: maxis_param2)

@@ -17,6 +17,16 @@ struct RealizeExecContext {
     input_slots: List<Int>,
 }
 
+struct RealizeProgramExec derives(Clone) {
+    ok: Bool,
+    global_count: Int,
+    allocated_count: Int,
+    source_len: Int,
+    global_dim_count: Int,
+    has_local_size: Bool,
+    local_dim_count: Int,
+}
+
 fn realize_exec_context_new(store: take DeviceMemoryStore, buffers: take List<TGBuffer>) -> fresh RealizeExecContext {
     local input_slots = List.new<Int>()
     let mut i = 0
@@ -216,6 +226,49 @@ fn realize_exec_view_indices(cache: read UOpCache, ctx: mut RealizeExecContext, 
     return Unit
 }
 
+fn realize_program_source_len(cache: read UOpCache, ast: Int) -> Int {
+    if node_op(cache: read cache, id: ast) != PROGRAM { return 0 }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: ast) {
+        let s = node_src_id(cache: read cache, id: ast, k: i)
+        if node_op(cache: read cache, id: s) == SOURCE {
+            return node_arg_str_len(cache: read cache, id: s)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeProgramExec {
+    if node_op(cache: read cache, id: call) != CALL {
+        return RealizeProgramExec(ok: false, global_count: 0, allocated_count: 0, source_len: 0,
+                                  global_dim_count: 0, has_local_size: false, local_dim_count: 0)
+    }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    if node_op(cache: read cache, id: ast) != PROGRAM {
+        return RealizeProgramExec(ok: false, global_count: 0, allocated_count: 0, source_len: 0,
+                                  global_dim_count: 0, has_local_size: false, local_dim_count: 0)
+    }
+    local prog = node_program_arg(cache: read cache, id: ast)
+    local launch = program_arg_launch_dims(arg: read prog)
+    let mut allocated = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read prog.globals) {
+        let slot = List.get<Int>(list: read prog.globals, index: i)
+        let idx = realize_exec_context_get_slot(ctx: read ctx, slot: slot)
+        let b0 = realize_exec_context_get_buffer(ctx: read ctx, index: idx)
+        local b = buffer_ensure_allocated(store: mut ctx.store, buf: read b0)
+        if buffer_is_initialized(buf: read b) { allocated = allocated + 1 }
+        realize_exec_context_set_buffer(ctx: mut ctx, index: idx, buf: read b)
+        i = i + 1
+    }
+    return RealizeProgramExec(ok: true, global_count: List.len<Int>(list: read prog.globals),
+                              allocated_count: allocated, source_len: realize_program_source_len(cache: read cache, ast: ast),
+                              global_dim_count: List.len<Int>(list: read launch.global_size),
+                              has_local_size: take launch.has_local_size,
+                              local_dim_count: List.len<Int>(list: read launch.local_size))
+}
+
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
     if node_op(cache: read cache, id: call) != CALL { return false }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
@@ -227,6 +280,10 @@ fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: In
     if op == SLICE {
         realize_exec_view(cache: read cache, ctx: mut ctx, call: call)
         return true
+    }
+    if op == PROGRAM {
+        local exec = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
+        return exec.ok
     }
     return false
 }
@@ -257,6 +314,10 @@ fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext,
     if op == SLICE {
         realize_exec_view_indices(cache: read cache, ctx: mut ctx, ast: ast, dest_idx: dest_idx, src_idx: src_idx)
         return true
+    }
+    if op == PROGRAM {
+        local exec = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
+        return exec.ok
     }
     return false
 }

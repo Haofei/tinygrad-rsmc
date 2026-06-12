@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 17,145 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 17,230 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -165,9 +165,10 @@ Integrated pieces:
   `COPY`, `SLICE`, and `CUSTOM_FUNCTION("encdec")`, `estimate_uop` for `PROGRAM`, `COPY`, and
   `encdec`, parameter resolution helpers, RSS byte-store `exec_copy`/`exec_view` over the
   integrated `TGBuffer` allocator, the first `run_linear` dispatcher for supported `COPY` and
-  `SLICE` calls, and first parameter-slot-to-buffer-index remapping for those calls. Runtime caches,
-  local-size optimization, actual kernel execution, validation execution, graph execution, and full
-  multi-buffer/device remapping remain unported.
+  `SLICE` calls, first parameter-slot-to-buffer-index remapping for those calls, and first
+  `PROGRAM` execution staging that resolves/allocates declared global buffers and records source and
+  launch metadata. Runtime caches, local-size optimization, compiled numeric kernel invocation,
+  validation execution, graph execution, and full multi-buffer/device remapping remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream

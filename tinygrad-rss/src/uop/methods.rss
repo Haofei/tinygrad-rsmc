@@ -1754,6 +1754,129 @@ fn uop_reduce(cache: mut UOpCache, id: Int, op: Ops, axes: read List<Int>) -> In
     return uop_rop(cache: mut cache, id: id, op: op, axes: read axes)
 }
 
+fn split_uop(cache: read UOpCache, id: Int, sep: Ops) -> fresh List<Int> {
+    return uop_split_by_op(cache: read cache, id: id, sep: sep)
+}
+
+fn key(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_key_string(cache: read cache, id: id)
+}
+
+fn uop_key(cache: read UOpCache, id: Int) -> fresh String {
+    return key(cache: read cache, id: id)
+}
+
+fn tagstr(cache: read UOpCache, id: Int) -> fresh String {
+    return String.copy(value: read "")
+}
+
+fn uop_tagstr(cache: read UOpCache, id: Int) -> fresh String {
+    return tagstr(cache: read cache, id: id)
+}
+
+fn tuplize(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_key_string(cache: read cache, id: id)
+}
+
+fn uop_tuplize(cache: read UOpCache, id: Int) -> fresh String {
+    return tuplize(cache: read cache, id: id)
+}
+
+fn ptrdtype(cache: read UOpCache, id: Int) -> fresh DType {
+    return node_full_dtype(cache: read cache, id: id)
+}
+
+fn uop_ptrdtype(cache: read UOpCache, id: Int) -> fresh DType {
+    return ptrdtype(cache: read cache, id: id)
+}
+
+fn trace_num(cache: read UOpCache, id: Int) -> Int {
+    return id
+}
+
+fn uop_trace_num(cache: read UOpCache, id: Int) -> Int {
+    return trace_num(cache: read cache, id: id)
+}
+
+fn rtag(cache: mut UOpCache, id: Int, tag: Bool) -> Int {
+    return id
+}
+
+fn uop_rtag(cache: mut UOpCache, id: Int, tag: Bool) -> Int {
+    return rtag(cache: mut cache, id: id, tag: tag)
+}
+
+fn _unshard(cache: mut UOpCache, id: Int, axis: Int) -> Int {
+    let dcount = uop_device_count(cache: read cache, id: id)
+    if node_op(cache: read cache, id: id) == MULTI && dcount > 1 {
+        let out = multi_unshard_to_tuple(cache: mut cache, multi: id, dcount: dcount)
+        if out >= 0 { return out }
+    }
+    return id
+}
+
+fn uop_unshard(cache: mut UOpCache, id: Int, axis: Int) -> Int {
+    return _unshard(cache: mut cache, id: id, axis: axis)
+}
+
+fn uop_split_movement_halves(vals: read List<Int>, first: mut List<Int>, second: mut List<Int>) -> Unit {
+    let n = List.len<Int>(list: read vals) / 2
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        let v = List.get<Int>(list: read vals, index: i)
+        if i < n { List.push<Int>(list: mut first, value: read v) }
+        else { List.push<Int>(list: mut second, value: read v) }
+        i = i + 1
+    }
+}
+
+fn _mop(cache: mut UOpCache, id: Int, op: Ops, arg: read List<Int>) -> Int {
+    if op == RESHAPE { return mk_reshape(cache: mut cache, x: id, new_shape: read arg) }
+    if op == EXPAND { return mk_expand(cache: mut cache, x: id, new_shape: read arg) }
+    if op == PERMUTE { return mk_permute(cache: mut cache, x: id, perm: read arg) }
+    if op == FLIP { return mk_flip(cache: mut cache, x: id, axes: read arg) }
+    if op == PAD {
+        local before = List.new<Int>()
+        local after = List.new<Int>()
+        uop_split_movement_halves(vals: read arg, first: mut before, second: mut after)
+        return mk_pad(cache: mut cache, x: id, before: read before, after: read after)
+    }
+    if op == SHRINK {
+        local starts = List.new<Int>()
+        local ends = List.new<Int>()
+        uop_split_movement_halves(vals: read arg, first: mut starts, second: mut ends)
+        return mk_shrink(cache: mut cache, x: id, starts: read starts, ends: read ends)
+    }
+    return id
+}
+
+fn uop_mop(cache: mut UOpCache, id: Int, op: Ops, arg: read List<Int>) -> Int {
+    return _mop(cache: mut cache, id: id, op: op, arg: read arg)
+}
+
+fn contiguous_view_offset(cache: read UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op == RESHAPE || op == CONTIGUOUS || op == DETACH || op == AFTER {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return contiguous_view_offset(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == BUFFER || op == PARAM || op == SLICE { return Some(0) }
+    return None
+}
+
+fn uop_contiguous_view_offset(cache: read UOpCache, id: Int) -> Option<Int> {
+    return contiguous_view_offset(cache: read cache, id: id)
+}
+
+fn _sym_fxn(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_render_infer_expr(cache: read cache, id: id)
+}
+
+fn uop_sym_fxn(cache: read UOpCache, id: Int) -> fresh String {
+    return _sym_fxn(cache: read cache, id: id)
+}
+
 fn uop_reg(cache: mut UOpCache, id: Int, slot: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: id)
     let dt = node_full_dtype(cache: read cache, id: id)
@@ -1847,4 +1970,42 @@ fn bitcast(x: Int, in_dtype: read DType, out_dtype: read DType) -> Int {
 
 fn get_location() -> fresh String {
     return String.copy(value: read "")
+}
+
+fn sint_to_uop(cache: mut UOpCache, value: Int, dt: read DType) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dt, v: value)
+}
+
+fn to_max_shape(shape: read List<Int>) -> fresh List<Int> {
+    return copy_int_list(l: read shape)
+}
+
+fn select_dtype(cache: read UOpCache, id: Int) -> fresh DType {
+    local vr = uop_min_max(cache: read cache, id: id)
+    let i32 = dt_int32()
+    let mut overflow = false
+    if vr.lo < dtype_imin(d: read i32) { overflow = true }
+    if vr.hi > dtype_imax(d: read i32) { overflow = true }
+    let mut base = dt_int32()
+    if overflow { base = dt_int64() }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return dtype_vec(base: read base, sz: dt.count)
+}
+
+fn _index_to_concrete_int(cache: mut UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) == SINK && node_num_src(cache: read cache, id: id) > 0 {
+        return node_src_id(cache: read cache, id: id, k: 0)
+    }
+    return id
+}
+
+fn gate_kernel_sink(cache: read UOpCache, id: Int) -> Bool {
+    return node_op(cache: read cache, id: id) != LINEAR
+}
+
+fn do_unbind(cache: read UOpCache, id: Int) -> Int {
+    match uop_unbind(cache: read cache, id: id) {
+        Some(b) => { return b.var_id }
+        None => { return id }
+    }
 }

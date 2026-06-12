@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,492 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,653 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 77/106 symbols, `mixin/__init__.py` 79/82 symbols,
-    `uop/ops.py` 181/221 symbols; 337/409 total rough symbols covered.
+  - result: `tensor.py` 78/106 symbols, `mixin/__init__.py` 79/82 symbols,
+    `uop/ops.py` 198/221 symbols; 355/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -105,6 +105,12 @@ Integrated pieces:
   register definition, `bounds`, `metadata`, `sgep`, `marg`, `gcd`, `_suop`, ProgramInfo-shaped
   `function_name`/`runtimevars`/`launch_dims`/`vals`/`from_sink`, and integer `safe_exp2`,
   `safe_pow`, `exec_alu`, `bitcast`, and `get_location` compatibility helpers,
+  source-compatible structural/property aliases for `key`, `tagstr`, `tuplize`, `ptrdtype`,
+  `trace_num`, `rtag`, `_sym_fxn`, `_unshard`, `_mop`, `contiguous_view_offset`,
+  `sint_to_uop`, `to_max_shape`, `select_dtype`, `_index_to_concrete_int`, `gate_kernel_sink`,
+  and `do_unbind`; these are grounded in the current interned-DAG helpers, but tag metadata is
+  still not represented, `key`/`tuplize` are structural strings rather than Python bytes/tuples,
+  and contiguous-view offset only proves the conservative zero-offset cases,
   source-aligned `contiguous` no-op behavior and `bufferize` as `STAGE`, concrete `as_shape`, source-shaped movement wrappers
   `reshape`/`expand`/`permute`/`flip`/`shrink`/`pad`,
   high-level `call` lowering to `CALL` or `FUNCTION` and `set` lowering to `STORE`/`END`/`AFTER`,
@@ -860,7 +866,7 @@ Major missing integrated work:
   handling, complete VJP coverage, gradient accumulation APIs, and exact tinygrad gradient
   semantics are still missing.
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
-  source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
+  source-aligned implementation. UPat/rewrite and a broader method-helper/alias slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, exact symbolic shape
   representation, real upstream `Buffer`/`MultiBuffer` realization semantics, complete render/pyrender
   behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.

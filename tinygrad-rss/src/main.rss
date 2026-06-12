@@ -3936,6 +3936,10 @@ fn main() -> Unit {
     let thash_row = tensor_reshape(cache: mut tcache, x: thash_msg, new_shape: read thash_row_shape)
     let thash_1mb_small = _hash_1mb(cache: mut tcache, x: thash_row)
     show(label: read "tensor._hash_1mb(small row)", l: read eval_tensor(cache: read tcache, id: thash_1mb_small))
+    let thash_1mb_small_checked = _hash_1mb_result(cache: mut tcache, x: thash_row)
+    showb(label: read "tensor._hash_1mb checked rejects small row = ", v: thash_1mb_small_checked.ok == false)
+    let thash_float_checked = _hash_1mb_result(cache: mut tcache, x: tpool)
+    showb(label: read "tensor._hash_1mb checked rejects non-uint8 = ", v: thash_float_checked.ok == false)
     let tio_path = "/tmp/tinygrad-rss-fs.bin"
     let tio_bytes = Bytes.from_uints(values: read tensor_data_uints_slice(data: read thash_data, start: 0, len: 3))
     match File.write_bytes(path: read Path.from_string(value: read tio_path), data: read tio_bytes) {

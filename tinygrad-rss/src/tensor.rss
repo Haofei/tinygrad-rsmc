@@ -67,6 +67,12 @@ struct TensorBoolResult derives(Clone) {
     message: String,
 }
 
+struct TensorNodeResult derives(Clone) {
+    ok: Bool,
+    value: Int,
+    message: String,
+}
+
 fn tensor_state_new(uop: Int) -> fresh TensorState {
     return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
 }
@@ -699,6 +705,22 @@ fn _hash_1mb(cache: mut UOpCache, x: Int) -> Int {
         row = row + 1
     }
     return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read out_shape, data: read out_data)
+}
+
+fn _hash_1mb_result(cache: mut UOpCache, x: Int) -> fresh TensorNodeResult {
+    let dt = node_dtype(cache: read cache, id: x)
+    if dt.name != dt_uint8().name {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "only support uint8 tensors for hashing"))
+    }
+    local shape = uop_shape(cache: read cache, id: x)
+    if List.len<Int>(list: read shape) != 2 {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "only support batched 1d tensors"))
+    }
+    if List.get<Int>(list: read shape, index: 1) != 1048576 {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "only support messages of 1mb"))
+    }
+    let y = _hash_1mb(cache: mut cache, x: x)
+    return TensorNodeResult(ok: true, value: y, message: String.copy(value: read ""))
 }
 
 fn tensor_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {

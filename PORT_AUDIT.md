@@ -474,7 +474,8 @@ Integrated pieces:
   `repr`, scalar-shape `len` rejection via sentinel return, bool rejection flag, contiguous-buffer graph
   boundary, and list-backed `numpy`/host-data materialization over the current evaluator,
   materialized `keccak` for row-wise `sha3_224`, `sha3_256`, and `shake_128` byte tensors plus
-  a materialized `_hash_1mb` SHAKE-128 chunk/reduce helper over the current evaluator byte path,
+  a materialized `_hash_1mb` SHAKE-128 chunk/reduce helper over the current evaluator byte path
+  with an upstream-shaped checked result wrapper for dtype/rank/1MiB row-size assertions,
   materialized byte/file boundary helpers for current local execution (`fs_load`/`fs_store`
   through `File.read_bytes`/`File.write_bytes`, `from_blob` as an external-pointer-shaped empty
   buffer placeholder, `from_url` through sync `Http.get`/`HttpResponse.bytes` with gzip byte
@@ -823,6 +824,9 @@ Current integrated demo:
   tensors, and `_apply_winograd_matrix` applies a row-major matrix over the first one or two axes
   using the evaluator-backed data path. This covers the real matrix transform primitive for current
   Tensor data, but not the full upstream lazy expression or final lazy Winograd convolution path.
+- validates materialized hash boundary helpers: row-wise `keccak`, permissive evaluator-backed
+  `_hash_1mb` for local smoke data, and the upstream-shaped checked `_hash_1mb` wrapper rejecting
+  non-uint8 tensors and non-1MiB row widths.
 - validates Tensor `cumsum` against real tinygrad for axis-0 and axis-1 cases, backed by the
   upstream `_cumalu` ADD composition using zero-padding, pooling, and sum.
 - validates Tensor `cumprod` against real tinygrad for axis-0 and axis-1 cases, backed by the
@@ -938,7 +942,7 @@ Major missing integrated work:
   weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact global
   seed/counter APIs, broader distribution helpers,
   full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
-  exact lazy hash graph semantics and strict `_hash_1mb` size enforcement,
+  exact lazy hash graph semantics beyond the current materialized `_hash_1mb` checked path,
   exact tinyfs chunk-tree storage semantics for `fs_load`/`fs_store`, real external-pointer buffer
   ownership/lifetime for `from_blob`, exact cache/progress behavior for `from_url`, and
   actual HEVC decode runtime execution behind the `encdec` custom function,

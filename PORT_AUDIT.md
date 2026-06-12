@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 24,162 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 24,242 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -260,8 +260,9 @@ Integrated pieces:
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device through shard-0
-  `MSELECT`, and eliminating `MSELECT(MSTACK)`. Full ALU/reduce/movement/FUNCTION multi rewrite
-  remains unported.
+  `MSELECT`, eliminating `MSELECT(MSTACK)`, passthrough rebuilds for boundary ops with a leading
+  `MULTI` child, and source stripping for non-value-producing roots such as `STORE`. Full
+  ALU/reduce/movement/FUNCTION multi rewrite remains unported.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -441,7 +442,8 @@ Current integrated demo:
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
   `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
-  multi-device COPY-to-one, and `MSELECT(MSTACK)` elimination.
+  multi-device COPY-to-one, `MSELECT(MSTACK)` elimination, `CAST`/`CONTIGUOUS`/`AFTER`
+  passthrough, and `STORE` source stripping.
 - validates source-aligned UOp `axis` propagation for `MULTI`, `COPY`, sharded `PARAM`, ALU,
   `GETTUPLE`, `REDUCE`, and `PERMUTE`.
 - validates source-aligned UOp device key/count propagation for tuple buffers, `COPY`,

@@ -1,8 +1,7 @@
 // First integrated slice of tinygrad/schedule/multi.py.
 //
-// This ports the first multi-device graph rewrites around COPY/MSELECT/MSTACK:
-// broadcast a single-device COPY to a tuple device as MSTACK(copy-to-each-device), copy a
-// multi-device value to one device by selecting shard 0, and eliminate MSELECT(MSTACK).
+// This ports the first multi-device graph rewrites around COPY/MSELECT/MSTACK plus
+// passthrough/strip handling for boundary ops that carry a MULTI child.
 // Full ALU/reduce/movement/FUNCTION multi rewrite remains future scheduler work.
 features: local
 
@@ -73,4 +72,71 @@ fn multi_mselect_mstack(cache: mut UOpCache, mselect: Int) -> fresh MultiRewrite
         return MultiRewrite(result: fallback, changed: false, ok: false)
     }
     return MultiRewrite(result: node_src_id(cache: read cache, id: src, k: idx), changed: true, ok: true)
+}
+
+fn multi_rebuild_srcs_replacing_multi_with_payload(cache: read UOpCache, root: Int, start: Int) -> fresh List<Int> {
+    local srcs = List.new<Int>()
+    let mut i = start
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
+            List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
+        } else {
+            List.push<Int>(list: mut srcs, value: read child)
+        }
+        i = i + 1
+    }
+    return srcs
+}
+
+fn multi_passthrough_root(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: multi, k: 0))
+    local tail = multi_rebuild_srcs_replacing_multi_with_payload(cache: read cache, root: root, start: 1)
+    let mut i = 0
+    while i < List.len<Int>(list: read tail) {
+        let child = List.get<Int>(list: read tail, index: i)
+        List.push<Int>(list: mut srcs, value: read child)
+        i = i + 1
+    }
+    let op = node_op(cache: read cache, id: root)
+    let axis = node_const_int(cache: read cache, id: multi)
+    local dt = node_full_dtype(cache: read cache, id: root)
+    local arg = node_arg(cache: read cache, id: root)
+    let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take srcs, arg: take arg)
+    let out = mk_multi(cache: mut cache, x: rebuilt, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_strip_multi_srcs(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local srcs = multi_rebuild_srcs_replacing_multi_with_payload(cache: read cache, root: root, start: 0)
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
+            changed = true
+        }
+        i = i + 1
+    }
+    if changed == false {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let op = node_op(cache: read cache, id: root)
+    local dt = node_full_dtype(cache: read cache, id: root)
+    local arg = node_arg(cache: read cache, id: root)
+    let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take srcs, arg: take arg)
+    return MultiRewrite(result: rebuilt, changed: true, ok: true)
 }

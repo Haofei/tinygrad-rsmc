@@ -175,6 +175,34 @@ fn symbolic_binop_const(cache: mut UOpCache, op: Ops, dt: read DType, a: Int, b:
     return mk_const_int(cache: mut cache, dt: read dt, v: out)
 }
 
+fn simplify_pow(cache: mut UOpCache, x: Int, c: Int) -> Option<Int> {
+    match symbolic_const_exponent_int(cache: read cache, id: c) {
+        Some(exp) => { return Some(symbolic_pow_const_int(cache: mut cache, x: x, exp: exp)) }
+        None => {}
+    }
+    return None
+}
+
+fn const_arg(cache: read UOpCache, u: Int) -> Option<Arg> {
+    if node_op(cache: read cache, id: u) == CONST {
+        local a = node_arg(cache: read cache, id: u)
+        return Some(a)
+    }
+    if node_op(cache: read cache, id: u) == STACK {
+        local vals = List.new<Int>()
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: u) {
+            let child = node_src_id(cache: read cache, id: u, k: i)
+            if node_is_const_int(cache: read cache, id: child) == false { return None }
+            List.push<Int>(list: mut vals, value: read node_const_int(cache: read cache, id: child))
+            i = i + 1
+        }
+        local a = ArgInts(values: take vals)
+        return Some(a)
+    }
+    return None
+}
+
 fn symbolic_const_rhs(cache: read UOpCache, id: Int) -> fresh UOpTermConst {
     if node_num_src(cache: read cache, id: id) != 2 { return UOpTermConst(term: id, value: 0, ok: false) }
     let a = node_src_id(cache: read cache, id: id, k: 0)
@@ -495,16 +523,16 @@ fn rule_fold_const_alu(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn fold_const_alu(cache: mut UOpCache, a: Int) -> Option<Int> {
+    return rule_fold_const_alu(cache: mut cache, id: a)
+}
+
 fn rule_simplify_pow_const(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != POW { return None }
     if node_num_src(cache: read cache, id: id) != 2 { return None }
     let x = node_src_id(cache: read cache, id: id, k: 0)
     let c = node_src_id(cache: read cache, id: id, k: 1)
-    match symbolic_const_exponent_int(cache: read cache, id: c) {
-        Some(exp) => { return Some(symbolic_pow_const_int(cache: mut cache, x: x, exp: exp)) }
-        None => {}
-    }
-    return None
+    return simplify_pow(cache: mut cache, x: x, c: c)
 }
 
 fn rule_simplify_where(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -625,9 +653,132 @@ fn symbolic_is_logical_not_of(cache: read UOpCache, not_id: Int, x: Int) -> Bool
     return false
 }
 
+struct SymbolicDivModTerm derives(Clone) {
+    ok: Bool,
+    base: Int,
+    div: Int,
+    mul: Int,
+}
+
+fn symbolic_divmod_term(cache: read UOpCache, u: Int) -> fresh SymbolicDivModTerm {
+    if node_op(cache: read cache, id: u) == FLOORMOD {
+        let den = node_src_id(cache: read cache, id: u, k: 1)
+        if node_is_const_int(cache: read cache, id: den) {
+            return SymbolicDivModTerm(ok: true, base: node_src_id(cache: read cache, id: u, k: 0),
+                                      div: node_const_int(cache: read cache, id: den), mul: 1)
+        }
+    }
+    if node_op(cache: read cache, id: u) == MUL {
+        let mul = symbolic_const_rhs(cache: read cache, id: u)
+        if mul.ok {
+            if node_op(cache: read cache, id: mul.term) == FLOORMOD {
+                let den = node_src_id(cache: read cache, id: mul.term, k: 1)
+                if node_is_const_int(cache: read cache, id: den) {
+                    return SymbolicDivModTerm(ok: true, base: node_src_id(cache: read cache, id: mul.term, k: 0),
+                                              div: node_const_int(cache: read cache, id: den), mul: mul.value)
+                }
+            }
+        }
+    }
+    return SymbolicDivModTerm(ok: false, base: u, div: 1, mul: 1)
+}
+
+fn symbolic_usum_with_replacement(cache: mut UOpCache, dt: read DType, parts: read List<Int>, repl: Int, i: Int, j: Int) -> Int {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read repl)
+    let mut k = 0
+    while k < List.len<Int>(list: read parts) {
+        if k != i && k != j {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read parts, index: k))
+        }
+        k = k + 1
+    }
+    return divmod_usum(cache: mut cache, dt: read dt, parts: read out)
+}
+
+fn fold_add_divmod_recombine(cache: mut UOpCache, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != ADD { return None }
+    local terms = uop_split_by_op(cache: read cache, id: x, sep: ADD)
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let mut i = 0
+    while i < List.len<Int>(list: read terms) {
+        let u = List.get<Int>(list: read terms, index: i)
+        let dm = symbolic_divmod_term(cache: read cache, u: u)
+        if dm.ok {
+            let mut j = 0
+            while j < List.len<Int>(list: read terms) {
+                if i != j {
+                    let v = List.get<Int>(list: read terms, index: j)
+                    if node_op(cache: read cache, id: v) == MUL {
+                        let mul = symbolic_const_rhs(cache: read cache, id: v)
+                        if mul.ok && mul.value == dm.div * dm.mul {
+                            let q = mul.term
+                            let mut exact = false
+                            if node_op(cache: read cache, id: q) == FLOORDIV {
+                                let qden = node_src_id(cache: read cache, id: q, k: 1)
+                                if node_is_const_int(cache: read cache, id: qden) {
+                                    if node_const_int(cache: read cache, id: qden) == dm.div {
+                                        if node_src_id(cache: read cache, id: q, k: 0) == dm.base {
+                                            exact = true
+                                        }
+                                    }
+                                }
+                            }
+                            if exact == false && dm.div > 0 && node_op(cache: read cache, id: dm.base) == FLOORDIV {
+                                let bden = node_src_id(cache: read cache, id: dm.base, k: 1)
+                                if node_is_const_int(cache: read cache, id: bden) {
+                                    if node_op(cache: read cache, id: q) == FLOORDIV {
+                                        let qden = node_src_id(cache: read cache, id: q, k: 1)
+                                        if node_is_const_int(cache: read cache, id: qden) {
+                                            if node_src_id(cache: read cache, id: q, k: 0) == node_src_id(cache: read cache, id: dm.base, k: 0) {
+                                                if node_const_int(cache: read cache, id: qden) == node_const_int(cache: read cache, id: bden) * dm.div {
+                                                    exact = true
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if exact {
+                                let repl = symbolic_mul_const(cache: mut cache, dt: read dt, x: dm.base, coeff: dm.mul)
+                                return Some(symbolic_usum_with_replacement(cache: mut cache, dt: read dt, parts: read terms, repl: repl, i: i, j: j))
+                            }
+                            if dm.div > 0 && node_op(cache: read cache, id: q) == FLOORMOD {
+                                let qden = node_src_id(cache: read cache, id: q, k: 1)
+                                let qbase = node_src_id(cache: read cache, id: q, k: 0)
+                                if node_is_const_int(cache: read cache, id: qden) && node_op(cache: read cache, id: qbase) == FLOORDIV {
+                                    let inner_den = node_src_id(cache: read cache, id: qbase, k: 1)
+                                    if node_is_const_int(cache: read cache, id: inner_den) {
+                                        if node_src_id(cache: read cache, id: qbase, k: 0) == dm.base && node_const_int(cache: read cache, id: inner_den) == dm.div {
+                                            let d = node_const_int(cache: read cache, id: qden)
+                                            if d > 0 {
+                                                let mod_den = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: inner_den), v: dm.div * d)
+                                                let rem = mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: dm.base, y: mod_den)
+                                                let repl = symbolic_mul_const(cache: mut cache, dt: read dt, x: rem, coeff: dm.mul)
+                                                return Some(symbolic_usum_with_replacement(cache: mut cache, dt: read dt, parts: read terms, repl: repl, i: i, j: j))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return None
+}
+
 fn rule_simplify_combine_add_terms(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != ADD { return None }
     if node_num_src(cache: read cache, id: id) != 2 { return None }
+    match fold_add_divmod_recombine(cache: mut cache, x: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     let dt = node_full_dtype(cache: read cache, id: id)
     let a = node_src_id(cache: read cache, id: id, k: 0)
     let b = node_src_id(cache: read cache, id: id, k: 1)
@@ -740,6 +891,72 @@ fn rule_simplify_add_lt_const(cache: mut UOpCache, id: Int) -> Option<Int> {
     return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt, x: add.term, y: new_rhs))
 }
 
+fn lt_folding(cache: mut UOpCache, x: Int, c: Int) -> Option<Int> {
+    local terms = uop_split_by_op(cache: read cache, id: x, sep: ADD)
+    local p = List.new<Int>()
+    local np = List.new<Int>()
+    let mut g = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read terms) {
+        let u = List.get<Int>(list: read terms, index: i)
+        let cf = uop_const_factor(cache: read cache, id: u)
+        if cf == 1 {
+            List.push<Int>(list: mut p, value: read u)
+        } else {
+            List.push<Int>(list: mut np, value: read u)
+            if g == 0 { g = cf } else { g = int_gcd(a: g, b: cf) }
+        }
+        i = i + 1
+    }
+    g = int_gcd(a: g, b: c)
+    if List.len<Int>(list: read np) == 0 || g <= 1 { return None }
+    let mut plo = 0
+    let mut phi = 0
+    let mut pi = 0
+    while pi < List.len<Int>(list: read p) {
+        let r = uop_min_max(cache: read cache, id: List.get<Int>(list: read p, index: pi))
+        plo = plo + r.lo
+        phi = phi + r.hi
+        pi = pi + 1
+    }
+    if plo < 0 || phi >= g { return None }
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let np_sum = divmod_usum(cache: mut cache, dt: read dt, parts: read np)
+    match uop_divides(cache: mut cache, id: np_sum, v: g) {
+        Some(divided) => {
+            let rhs = mk_const_int(cache: mut cache, dt: read dt, v: c / g)
+            return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: divided, y: rhs))
+        }
+        None => {}
+    }
+    return None
+}
+
+fn canonicalize_simplex(cache: mut UOpCache, X: Int) -> Option<Int> {
+    local terms = uop_split_by_op(cache: read cache, id: X, sep: ADD)
+    local out = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < List.len<Int>(list: read terms) {
+        let mut u = List.get<Int>(list: read terms, index: i)
+        if node_op(cache: read cache, id: u) == MUL {
+            let mul = symbolic_const_rhs(cache: read cache, id: u)
+            if mul.ok && mul.value > 0 {
+                u = mul.term
+                changed = true
+            }
+        }
+        let op = node_op(cache: read cache, id: u)
+        let r = uop_min_max(cache: read cache, id: u)
+        if group_irreducible(op: read op) == false || r.lo < 0 { return None }
+        List.push<Int>(list: mut out, value: read u)
+        i = i + 1
+    }
+    if changed == false { return None }
+    let dt = node_full_dtype(cache: read cache, id: X)
+    return Some(divmod_usum(cache: mut cache, dt: read dt, parts: read out))
+}
+
 fn rule_simplify_chained_floordiv_const(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != FLOORDIV { return None }
     if node_num_src(cache: read cache, id: id) != 2 { return None }
@@ -766,6 +983,12 @@ fn rule_simplify_linear_lt_const(cache: mut UOpCache, id: Int) -> Option<Int> {
     let rhs = node_src_id(cache: read cache, id: id, k: 1)
     if node_is_const_int(cache: read cache, id: rhs) == false { return None }
     let c = node_const_int(cache: read cache, id: rhs)
+    if c > 0 {
+        match lt_folding(cache: mut cache, x: lhs, c: c) {
+            Some(r) => { return Some(r) }
+            None => {}
+        }
+    }
     if node_op(cache: read cache, id: lhs) == MUL {
         let mul = symbolic_const_rhs(cache: read cache, id: lhs)
         if mul.ok {
@@ -1033,6 +1256,27 @@ fn rule_simplify_distribution(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn rule_simplify_canonicalize_simplex(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if const_bool_eq(cache: read cache, id: rhs, k: 1) == false { return None }
+    if node_op(cache: read cache, id: lhs) != CMPLT { return None }
+    if node_num_src(cache: read cache, id: lhs) != 2 { return None }
+    let simplex = node_src_id(cache: read cache, id: lhs, k: 0)
+    let bound = node_src_id(cache: read cache, id: lhs, k: 1)
+    if const_int_eq(cache: read cache, id: bound, k: 1) == false { return None }
+    match canonicalize_simplex(cache: mut cache, X: simplex) {
+        Some(newx) => {
+            let lt = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: newx, y: bound)
+            return Some(mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: lt, y: rhs))
+        }
+        None => {}
+    }
+    return None
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -1218,6 +1462,10 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_linear_lt_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_canonicalize_simplex(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

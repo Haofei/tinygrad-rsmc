@@ -1385,6 +1385,25 @@ fn main() -> Unit {
     showb(label: read "uop.spec valid symbolic pow x**3 = ", v: spec_type_verify(cache: read mcache, id: mpow3))
     showb(label: read "uop.spec valid symbolic pow x**0 = ", v: spec_type_verify(cache: read mcache, id: mpow0))
     showb(label: read "uop.spec valid symbolic pow x**-1 = ", v: spec_type_verify(cache: read mcache, id: mpown1))
+    let msym_const_add_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: m2, y: m3)
+    let mut msym_const_arg_ok = false
+    match const_arg(cache: read mcache, u: m2) {
+        Some(arg) => { msym_const_arg_ok = true }
+        None => {}
+    }
+    let mut msym_simplify_pow_ok = false
+    match simplify_pow(cache: mut mcache, x: mpow_x, c: mpow_c3) {
+        Some(pow_alias) => { msym_simplify_pow_ok = spec_type_verify(cache: read mcache, id: pow_alias) }
+        None => {}
+    }
+    let mut msym_fold_const_alias = 0
+    match fold_const_alu(cache: mut mcache, a: msym_const_add_raw) {
+        Some(alias_fold) => { msym_fold_const_alias = node_const_int(cache: read mcache, id: alias_fold) }
+        None => {}
+    }
+    showi(label: read "uop.symbolic fold_const_alu alias = ", v: msym_fold_const_alias)
+    showb(label: read "uop.symbolic const_arg alias ok = ", v: msym_const_arg_ok)
+    showb(label: read "uop.symbolic simplify_pow alias valid = ", v: msym_simplify_pow_ok)
     let msym_true = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 1)
     let msym_false = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 0)
     let msym_where_true_raw = mk_where(cache: mut mcache, dt: read i32, cond: msym_true, tval: m2, fval: m3)
@@ -1614,6 +1633,23 @@ fn main() -> Unit {
     let msym_wc3 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 3)
     let msym_wsum = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_wx, y: msym_wy)
     let msym_dist_raw = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_wsum, y: msym_wc3)
+    let msym_wr = mk_define_var(cache: mut mcache, name: read "pwr", min_val: 0, max_val: 1, dt: read msym_wdt)
+    let msym_wq = mk_define_var(cache: mut mcache, name: read "pwq", min_val: 0, max_val: 10, dt: read msym_wdt)
+    let msym_wc2 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 2)
+    let msym_wc4 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 4)
+    let msym_wc6 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 6)
+    let msym_wq4 = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_wq, y: msym_wc4)
+    let msym_wr_plus_q4 = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_wr, y: msym_wq4)
+    let msym_lt_fold_raw = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_wr_plus_q4, y: msym_wc6)
+    let msym_simplex_a2 = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_wx, y: msym_wc2)
+    let msym_simplex_b3 = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_wy, y: msym_wc3)
+    let msym_simplex_sum = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_simplex_a2, y: msym_simplex_b3)
+    let msym_simplex_lt = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_simplex_sum, y: msym_i1)
+    let msym_simplex_raw = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: msym_simplex_lt, y: msym_true)
+    let msym_recomb_mod = mk_alu2(cache: mut mcache, op: FLOORMOD, dt: read msym_wdt, x: msym_wx, y: msym_wc4)
+    let msym_recomb_div = mk_alu2(cache: mut mcache, op: FLOORDIV, dt: read msym_wdt, x: msym_wx, y: msym_wc4)
+    let msym_recomb_mul = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_recomb_div, y: msym_wc4)
+    let msym_recomb_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_recomb_mod, y: msym_recomb_mul)
     let msym_group_clean = graph_rewrite(cache: mut mcache, id: msym_group_outer_raw)
     let msym_sink_clean = graph_rewrite(cache: mut mcache, id: msym_sink_raw)
     let msym_vadd = graph_rewrite(cache: mut mcache, id: msym_vadd_raw)
@@ -1621,6 +1657,9 @@ fn main() -> Unit {
     let msym_x_over_one_plus = graph_rewrite(cache: mut mcache, id: msym_x_over_one_plus_raw)
     let msym_recip_square = graph_rewrite(cache: mut mcache, id: msym_recip_square_raw)
     let msym_dist = graph_rewrite(cache: mut mcache, id: msym_dist_raw)
+    let msym_lt_fold = graph_rewrite(cache: mut mcache, id: msym_lt_fold_raw)
+    let msym_simplex = graph_rewrite(cache: mut mcache, id: msym_simplex_raw)
+    let msym_recomb = graph_rewrite(cache: mut mcache, id: msym_recomb_raw)
     showb(label: read "uop.symbolic group(single) is value = ", v: msym_group_clean == m2)
     showi(label: read "uop.symbolic sink(group) deps = ", v: node_num_src(cache: read mcache, id: msym_sink_clean))
     showop(label: read "uop.symbolic vector alu op = ", op: read node_op(cache: read mcache, id: msym_vadd))
@@ -1628,6 +1667,9 @@ fn main() -> Unit {
     showop(label: read "uop.symbolic x/(1+x) op = ", op: read node_op(cache: read mcache, id: msym_x_over_one_plus))
     showop(label: read "uop.symbolic reciprocal square op = ", op: read node_op(cache: read mcache, id: msym_recip_square))
     showop(label: read "uop.symbolic distribute weakint op = ", op: read node_op(cache: read mcache, id: msym_dist))
+    showi(label: read "uop.symbolic lt_folding rhs = ", v: node_const_int(cache: read mcache, id: node_src_id(cache: read mcache, id: msym_lt_fold, k: 1)))
+    showb(label: read "uop.symbolic simplex canonicalized = ", v: node_op(cache: read mcache, id: node_src_id(cache: read mcache, id: node_src_id(cache: read mcache, id: msym_simplex, k: 0), k: 0)) == ADD)
+    showb(label: read "uop.symbolic divmod recombine is base = ", v: msym_recomb == msym_wx)
     let wdt = dt_weakint()
     let dm_n = mk_define_var(cache: mut mcache, name: read "dn", min_val: 0, max_val: 15, dt: read wdt)
     let dm_b = mk_define_var(cache: mut mcache, name: read "db", min_val: 0, max_val: 1, dt: read wdt)

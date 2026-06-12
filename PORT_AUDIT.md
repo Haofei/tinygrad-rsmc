@@ -376,6 +376,9 @@ Integrated pieces:
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
   multiplicative cancellation. Vmin/vmax covers bounded `PARAM`, plus both `SPECIAL` and `RANGE` as `[0, end_max - 1]`.
   `STACK` and `UNROLL` propagate child/source min-max ranges.
+  Source-shaped symbolic entry points now cover `simplify_pow`, `const_arg`, `fold_const_alu`,
+  `fold_add_divmod_recombine`, `lt_folding`, and `canonicalize_simplex` over the current
+  interned UOp-id representation.
   The evaluator now covers the integrated unary math UOps
   `EXP2`, `LOG2`, `SIN`, `SQRT`, `RECIPROCAL`, `NEG`, `TRUNC`, plus binary `POW`, and handles
   scalar-to-tensor `EXPAND` materialization, `FLIP`, `PAD`, graph-backed `SHRINK` slicing, and
@@ -622,7 +625,8 @@ Current integrated demo:
 - validates a grouped upstream symbolic combine/algebra batch: bool `MUL -> AND`, bool
   `ADD/MAX -> OR`, `b|!b -> true`, `x*2+x*3 -> x*5`, `x+x -> x*2`,
   nested additive coefficient combining, `-1*(x+3) -> -x + -3`, and
-  `!b.where(2,3) -> b.where(3,2)`.
+  `!b.where(2,3) -> b.where(3,2)`. It also validates source-shaped symbolic helper
+  aliases for `const_arg`, `fold_const_alu`, and `simplify_pow`.
 - validates a grouped upstream symbolic bounds/constant-chain batch: exact `DEFINE_VAR`,
   `SPECIAL(size=1)`, and `RANGE(size=1)` constantization, `MAX` folding by disjoint
   ranges, `(x+2)+3 -> x+5`, `(x*2)*3 -> x*6`, `2+x<7 -> x<5`,
@@ -635,7 +639,9 @@ Current integrated demo:
 - validates a grouped upstream symbolic phase-three batch: singleton `GROUP` collapse,
   `SINK(GROUP(...))` flattening, vectorized binary ALU lane splitting,
   `CAST(WHERE(...)) -> WHERE(CAST(...), CAST(...))`, `x/(1+x) -> 1-(1/(1+x))`,
-  `1/(x*x) -> (1/x)*(1/x)`, and weakint `(x+y)*c -> x*c+y*c`.
+  `1/(x*x) -> (1/x)*(1/x)`, weakint `(x+y)*c -> x*c+y*c`,
+  `lt_folding` by gcd-constrained terms, simplex canonicalization for positive integer
+  coefficients, and `(x%4)+(x//4)*4 -> x` div/mod recombination.
 - validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
   constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

@@ -1,0 +1,235 @@
+// Integrated source-shaped slice of tinygrad/codegen/simplify.py.
+//
+// The upstream file is mostly PatternMatcher composition. This port exposes the
+// source-shaped helper names over the current cache-backed graph_rewrite,
+// range, and reduction primitives.
+features: local
+
+struct SimplifySubst derives(Clone) {
+    olds: List<Int>,
+    news: List<Int>,
+}
+
+fn simplify_empty_subst() -> fresh SimplifySubst {
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    return SimplifySubst(olds: take olds, news: take news)
+}
+
+fn simplify_subst_put(ctx: mut SimplifySubst, old_id: Int, new_id: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read ctx.olds) {
+        if List.get<Int>(list: read ctx.olds, index: i) == old_id {
+            List.set<Int>(list: mut ctx.news, index: i, value: read new_id)
+            return Unit
+        }
+        i = i + 1
+    }
+    List.push<Int>(list: mut ctx.olds, value: read old_id)
+    List.push<Int>(list: mut ctx.news, value: read new_id)
+    return Unit
+}
+
+fn simplify_ranges_from_toposort(cache: read UOpCache, ids: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read ids) {
+        local topo = uop_toposort(cache: read cache, id: List.get<Int>(list: read ids, index: i))
+        let mut j = 0
+        while j < List.len<Int>(list: read topo) {
+            let u = List.get<Int>(list: read topo, index: j)
+            if node_op(cache: read cache, id: u) == RANGE {
+                uop_push_unique(vals: mut out, v: u)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn flatten_range(cache: mut UOpCache, r: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: r)
+    if op != REDUCE && op != END { return None }
+    let off = uop_range_start_index(op: read op)
+    if off < 0 || node_num_src(cache: read cache, id: r) <= off { return None }
+    local front = List.new<Int>()
+    let mut i = 0
+    while i < off {
+        List.push<Int>(list: mut front, value: read node_src_id(cache: read cache, id: r, k: i))
+        i = i + 1
+    }
+    local tails = List.new<Int>()
+    i = off
+    while i < node_num_src(cache: read cache, id: r) {
+        List.push<Int>(list: mut tails, value: read node_src_id(cache: read cache, id: r, k: i))
+        i = i + 1
+    }
+    local flat = simplify_ranges_from_toposort(cache: read cache, ids: read tails)
+    if List.len<Int>(list: read flat) == 0 { return None }
+    local src = copy_int_list(l: read front)
+    i = 0
+    while i < List.len<Int>(list: read flat) {
+        List.push<Int>(list: mut src, value: read List.get<Int>(list: read flat, index: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: r)
+    return Some(intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: r), src: take src, arg: take arg))
+}
+
+fn count_divmod(cache: read UOpCache, x: Int) -> Int {
+    local topo = uop_toposort(cache: read cache, id: x)
+    let mut out = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let op = node_op(cache: read cache, id: List.get<Int>(list: read topo, index: i))
+        if op == FLOORDIV || op == FLOORMOD { out = out + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn simplify_merge_adjacent(cache: mut UOpCache, u: Int) -> Option<Int> {
+    let rewritten = graph_rewrite(cache: mut cache, id: u)
+    match flatten_range(cache: mut cache, r: rewritten) {
+        Some(flat) => {
+            if count_divmod(cache: read cache, x: flat) <= count_divmod(cache: read cache, x: u) { return Some(flat) }
+            return Some(rewritten)
+        }
+        None => {
+            if rewritten != u { return Some(rewritten) }
+        }
+    }
+    return None
+}
+
+fn mark_gated(cache: mut UOpCache, ctx: mut SimplifySubst, idx: Int) -> Unit {
+    if node_op(cache: read cache, id: idx) != INDEX { return Unit }
+    local ranges = uop_ranges(cache: read cache, id: idx)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        let r = List.get<Int>(list: read ranges, index: i)
+        if node_num_src(cache: read cache, id: r) > 0 {
+            simplify_subst_put(ctx: mut ctx, old_id: r, new_id: node_src_id(cache: read cache, id: r, k: 0))
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn mark_range_mod(cache: mut UOpCache, ctx: mut SimplifySubst, r: Int, c: Int) -> Unit {
+    if node_op(cache: read cache, id: r) != RANGE { return Unit }
+    if node_range_type(cache: read cache, id: r) == AXIS_WARP { return Unit }
+    if node_num_src(cache: read cache, id: r) == 0 { return Unit }
+    let rend = node_src_id(cache: read cache, id: r, k: 0)
+    if node_is_const_int(cache: read cache, id: rend) == false { return Unit }
+    if node_is_const_int(cache: read cache, id: c) == false { return Unit }
+    let rv = node_const_int(cache: read cache, id: rend)
+    let cv = node_const_int(cache: read cache, id: c)
+    if rv != 0 && cv % rv == 0 { simplify_subst_put(ctx: mut ctx, old_id: r, new_id: c) }
+    return Unit
+}
+
+fn do_substitute(cache: mut UOpCache, ctx: mut SimplifySubst, x: Int) -> Option<Int> {
+    if List.len<Int>(list: read ctx.olds) == 0 { return None }
+    let ret = memory_replace_many(cache: mut cache, id: x, olds: read ctx.olds, news: read ctx.news)
+    ctx.olds = List.new<Int>()
+    ctx.news = List.new<Int>()
+    if ret == x { return None }
+    return Some(graph_rewrite(cache: mut cache, id: ret))
+}
+
+fn no_range(cache: read UOpCache, u: Int) -> Bool {
+    return uop_op_in_backward_slice_with_self(cache: read cache, id: u, op: RANGE) == false
+}
+
+fn simplify_range_in_list(items: read List<Int>, v: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn simplify_reduce_with_srcs(cache: mut UOpCache, red: Int, value: Int, ranges: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read value)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        List.push<Int>(list: mut src, value: read List.get<Int>(list: read ranges, index: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: red)
+    return intern(cache: mut cache, op: REDUCE, dt: read node_full_dtype(cache: read cache, id: red), src: take src, arg: take arg)
+}
+
+fn reduce_unparented(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE || node_num_src(cache: read cache, id: red) == 0 { return None }
+    let rop = node_arg_op(cache: read cache, id: red)
+    if rop != ADD && rop != MAX && rop != MUL { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    local value_ranges = uop_ranges(cache: read cache, id: value)
+    local parented = List.new<Int>()
+    local unparented = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: red) {
+        let r = node_src_id(cache: read cache, id: red, k: i)
+        if simplify_range_in_list(items: read value_ranges, v: r) {
+            List.push<Int>(list: mut parented, value: read r)
+        } else {
+            List.push<Int>(list: mut unparented, value: read r)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read unparented) == 0 { return None }
+    let mut ret = value
+    let rdt = node_full_dtype(cache: read cache, id: red)
+    let vdt = node_full_dtype(cache: read cache, id: value)
+    if List.len<Int>(list: read parented) > 0 || rdt.name != vdt.name || rdt.count != vdt.count {
+        ret = simplify_reduce_with_srcs(cache: mut cache, red: red, value: value, ranges: read parented)
+    }
+    if rop == ADD {
+        i = 0
+        while i < List.len<Int>(list: read unparented) {
+            let r = List.get<Int>(list: read unparented, index: i)
+            if node_num_src(cache: read cache, id: r) > 0 {
+                let sz = node_src_id(cache: read cache, id: r, k: 0)
+                let csz = mk_cast(cache: mut cache, x: sz, dt: read node_dtype(cache: read cache, id: ret))
+                ret = mk_alu2(cache: mut cache, op: MUL, dt: read node_full_dtype(cache: read cache, id: ret), x: ret, y: csz)
+            }
+            i = i + 1
+        }
+    }
+    if rop == MUL {
+        i = 0
+        while i < List.len<Int>(list: read unparented) {
+            let r = List.get<Int>(list: read unparented, index: i)
+            if node_num_src(cache: read cache, id: r) > 0 {
+                let sz = node_src_id(cache: read cache, id: r, k: 0)
+                let csz = mk_cast(cache: mut cache, x: sz, dt: read node_dtype(cache: read cache, id: ret))
+                ret = mk_alu2(cache: mut cache, op: POW, dt: read node_full_dtype(cache: read cache, id: ret), x: ret, y: csz)
+            }
+            i = i + 1
+        }
+    }
+    return Some(graph_rewrite(cache: mut cache, id: ret))
+}
+
+fn reduce_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE { return None }
+    if no_range(cache: read cache, u: u) { return Some(graph_rewrite(cache: mut cache, id: u)) }
+    match reduce_unparented(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return None
+}
+
+fn reduce_load_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
+    return reduce_collapse(cache: mut cache, red: red, u: u)
+}
+
+fn no_load(cache: read UOpCache, u: Int) -> Bool {
+    return uop_op_in_backward_slice_with_self(cache: read cache, id: u, op: INDEX) == false
+}

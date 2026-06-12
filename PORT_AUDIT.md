@@ -371,6 +371,13 @@ Integrated pieces:
   for `GLOBAL`/`THREAD` and `WARP`/`LOCAL`/`GROUP_REDUCE` axes. Symbolic `sint.vmax`, renderer
   product-limit tuning, and the upstream missing-local invalid-store guard remain future fidelity
   work.
+- `codegen/simplify.rss`: first integrated source-shaped `tinygrad/codegen/simplify.py` facade:
+  `flatten_range`, `count_divmod`, `simplify_merge_adjacent`, `mark_gated`, `mark_range_mod`,
+  `do_substitute`, `no_range`, `reduce_unparented`, `reduce_collapse`, `reduce_load_collapse`,
+  and `no_load`. It uses existing `graph_rewrite`, range discovery, and `memory_replace_many`
+  primitives, with a real `reduce_unparented` path for unused ADD/MUL reduce ranges and
+  conservative collapse hooks for pattern-heavy upstream cases. Full PatternMatcher parity for
+  gated range shrinking and load-index collapse remains later fidelity work.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device by copying each shard and

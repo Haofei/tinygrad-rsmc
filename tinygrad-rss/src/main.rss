@@ -2227,6 +2227,59 @@ fn main() -> Unit {
         Some(v) => { showb(label: read "codegen.gpudims split helper = ", v: List.len<Int>(list: read v) >= 2) }
         None => { showb(label: read "codegen.gpudims split helper = ", v: false) }
     }
+    let simp_r0 = mk_range_int(cache: mut mcache, end: 2, axis_id: 41, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_r1 = mk_range_int(cache: mut mcache, end: 3, axis_id: 42, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_nested = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_r0, y: simp_r1)
+    local simp_end_srcs = List.new<Int>()
+    pushi(l: mut simp_end_srcs, v: simp_nested)
+    let simp_end = mk_end(cache: mut mcache, id: m2, srcs: read simp_end_srcs)
+    local simp_flat = flatten_range(cache: mut mcache, r: simp_end)
+    local simp_merge = simplify_merge_adjacent(cache: mut mcache, u: simp_end)
+    let simp_c2 = mk_const_int(cache: mut mcache, dt: read i32, v: 2)
+    let simp_div = mk_alu2(cache: mut mcache, op: FLOORDIV, dt: read i32, x: simp_nested, y: simp_c2)
+    let simp_mod = mk_alu2(cache: mut mcache, op: FLOORMOD, dt: read i32, x: simp_nested, y: simp_c2)
+    let simp_divmod = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_div, y: simp_mod)
+    local simp_idx_srcs = List.new<Int>()
+    pushi(l: mut simp_idx_srcs, v: simp_r0)
+    let simp_idx = mk_index(cache: mut mcache, base: gpudims_buf, srcs: read simp_idx_srcs, ptr: false)
+    local simp_ctx = simplify_empty_subst()
+    mark_gated(cache: mut mcache, ctx: mut simp_ctx, idx: simp_idx)
+    mark_range_mod(cache: mut mcache, ctx: mut simp_ctx, r: simp_r0, c: simp_c2)
+    local simp_sub = do_substitute(cache: mut mcache, ctx: mut simp_ctx, x: simp_nested)
+    local simp_red_srcs = List.new<Int>()
+    pushi(l: mut simp_red_srcs, v: m2)
+    pushi(l: mut simp_red_srcs, v: simp_r1)
+    local simp_red_arg = ArgOp(value: ADD)
+    let simp_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_red_srcs, arg: take simp_red_arg)
+    local simp_red_unparented = reduce_unparented(cache: mut mcache, red: simp_red)
+    local simp_red_collapse = reduce_collapse(cache: mut mcache, red: simp_red, u: m2)
+    local simp_red_load_collapse = reduce_load_collapse(cache: mut mcache, red: simp_red, u: m2)
+    showi(label: read "codegen.simplify count divmod = ", v: count_divmod(cache: read mcache, x: simp_divmod))
+    match simp_flat {
+        Some(v) => { showb(label: read "codegen.simplify flatten range = ", v: node_op(cache: read mcache, id: v) == END && node_num_src(cache: read mcache, id: v) == 3) }
+        None => { showb(label: read "codegen.simplify flatten range = ", v: false) }
+    }
+    match simp_merge {
+        Some(v) => { showb(label: read "codegen.simplify merge adjacent facade = ", v: node_op(cache: read mcache, id: v) == END) }
+        None => { showb(label: read "codegen.simplify merge adjacent facade = ", v: false) }
+    }
+    match simp_sub {
+        Some(v) => { showb(label: read "codegen.simplify substitute context = ", v: spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify substitute context = ", v: false) }
+    }
+    showb(label: read "codegen.simplify no range/load = ", v: no_range(cache: read mcache, u: m2) && no_range(cache: read mcache, u: simp_nested) == false && no_load(cache: read mcache, u: m2) && no_load(cache: read mcache, u: simp_idx) == false)
+    match simp_red_unparented {
+        Some(v) => { showb(label: read "codegen.simplify reduce unparented = ", v: node_op(cache: read mcache, id: v) == MUL && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify reduce unparented = ", v: false) }
+    }
+    match simp_red_collapse {
+        Some(v) => { showb(label: read "codegen.simplify reduce collapse = ", v: v == m2) }
+        None => { showb(label: read "codegen.simplify reduce collapse = ", v: false) }
+    }
+    match simp_red_load_collapse {
+        Some(v) => { showb(label: read "codegen.simplify reduce load collapse = ", v: v == m2) }
+        None => { showb(label: read "codegen.simplify reduce load collapse = ", v: false) }
+    }
     showstr(label: read "uop.render_expr special named = ", v: read uop_render_expr(cache: read mcache, id: ck_sg0))
     let ck_sg0_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: ck_sg0, y: m2)
     showstr(label: read "uop.render_expr special add = ", v: read uop_render_expr(cache: read mcache, id: ck_sg0_add))

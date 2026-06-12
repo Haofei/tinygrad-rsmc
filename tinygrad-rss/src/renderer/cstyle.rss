@@ -362,6 +362,10 @@ fn cstyle_render_statement_ctx(cache: read UOpCache, names: read Map<Int, String
 }
 
 fn cstyle_param_decl(cache: read UOpCache, id: Int) -> fresh String {
+    if node_op(cache: read cache, id: id) == DEFINE_VAR {
+        let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+        return cstyle_cat(a: read "const ", b: read cstyle_cat(a: read dt, b: read cstyle_cat(a: read " ", b: read uop_expr(cache: read cache, id: id))))
+    }
     let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
     return cstyle_cat(a: read dt, b: read cstyle_cat(a: read "* ", b: read cstyle_param_data_name(cache: read cache, id: id)))
 }
@@ -389,8 +393,9 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
     while i < List.len<Int>(list: read order) {
         let id = List.get<Int>(list: read order, index: i)
         let op = node_op(cache: read cache, id: id)
-        if op == PARAM {
-            let nm = cstyle_param_data_name(cache: read cache, id: id)
+        if op == PARAM || op == DEFINE_VAR {
+            let mut nm = cstyle_param_data_name(cache: read cache, id: id)
+            if op == DEFINE_VAR { nm = uop_expr(cache: read cache, id: id) }
             Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
             if int_contains(items: read params, v: id) == false { List.push<Int>(list: mut params, value: read id) }
         } else {

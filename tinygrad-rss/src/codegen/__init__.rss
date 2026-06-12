@@ -1,8 +1,8 @@
 // Integrated source-shaped slice of tinygrad/codegen/__init__.py.
 //
 // This wires the linearized program form into estimates and renderer output.
-// Compile/binary materialization and the full to_program orchestration remain
-// later slices.
+// Compile/binary materialization and the full schedule/device rewrite path
+// remain later slices.
 features: local
 
 fn codegen_estimate_numel(cache: read UOpCache, id: Int) -> Int {
@@ -250,4 +250,10 @@ fn codegen_do_render_cstyle(cache: mut UOpCache, prg: Int) -> Int {
     local prog = node_program_arg(cache: read cache, id: prg)
     local arg = ArgProgram(value: take prog)
     return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}
+
+fn codegen_to_program_cstyle(cache: mut UOpCache, prg: Int) -> Int {
+    let lin = linearizer_do_linearize(cache: mut cache, prg: prg)
+    let est = codegen_do_estimates(cache: mut cache, prg: lin)
+    return codegen_do_render_cstyle(cache: mut cache, prg: est)
 }

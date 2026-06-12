@@ -130,15 +130,18 @@ Integrated pieces:
   splitting of multi-range `END` nodes into nested single-range `END`s. It also has the first
   `pm_linearize_cleanups`-style line rewrite: gated `STORE(ptr,value,gate)` becomes
   `IF(gate,ptr)`, ungated `STORE`, `ENDIF`, with later line sources remapped to the ungated store.
-  The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`.
+  The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`
+  and is idempotent when the program already has a `LINEAR` child.
   CFG edge insertion, pre-existing IF rejection, ISA register allocation, compile/binary,
-  and full `to_program` orchestration remain unported.
+  and full schedule/device rewrite orchestration remain unported.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
   metadata for the current interned UOps (`ops`, load/store bytes, and unique capped buffer memory),
-  then appends a `SOURCE` child with the rendered kernel text. Full symbolic `sint` estimates,
-  compile/binary materialization, and full `to_program` orchestration remain unported.
+  then appends a `SOURCE` child with the rendered kernel text. It also has the first
+  `to_program`-style orchestration for the supported C-style path:
+  `do_linearize -> do_estimates -> do_render_cstyle`. Full symbolic `sint` estimates,
+  compile/binary materialization, and full schedule/device rewrite orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity

@@ -336,6 +336,10 @@ fn linearizer_cleaned_order(cache: mut UOpCache, sink: Int) -> fresh List<Int> {
 fn linearizer_do_linearize(cache: mut UOpCache, prg: Int) -> Int {
     if node_op(cache: read cache, id: prg) != PROGRAM { return prg }
     if node_num_src(cache: read cache, id: prg) < 2 { return prg }
+    if node_num_src(cache: read cache, id: prg) > 2 {
+        if node_op(cache: read cache, id: node_src_id(cache: read cache, id: prg, k: 2)) == LINEAR { return prg }
+        return prg
+    }
     let sink = node_src_id(cache: read cache, id: prg, k: 0)
     if node_op(cache: read cache, id: sink) != SINK { return prg }
     local order = linearizer_cleaned_order(cache: mut cache, sink: sink)

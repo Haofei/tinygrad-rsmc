@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,757 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,841 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -246,10 +246,12 @@ Integrated pieces:
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream
   tie-splitting, mask-selection `WHERE`, zero gradients for integrated comparison predicates, and
-  movement/reduce VJPs for `RESHAPE`, `EXPAND`, `PERMUTE`, `FLIP`, `PAD`, `SHRINK`, and `REDUCE`, then
+  movement/reduce VJPs for `RESHAPE`, `EXPAND`, `PERMUTE`, `FLIP`, `PAD`, `SHRINK`, and `REDUCE`,
+  plus grouped boundary VJPs for `CONTIGUOUS`, `CONTIGUOUS_BACKWARD`, `COPY`, `DETACH`, and `BITCAST`, then
   simplifying the resulting gradient graph.
 - `uop/vminmax.rss`, `uop/alu.rss`, `uop/symbolic.rss`, `runtime/ops_python.rss`: small
-  interpreter/simplifier pieces. The symbolic layer now includes integer vmin/vmax, rewrite
+  interpreter/simplifier pieces. The evaluator now passes through boundary data movement nodes
+  `CONTIGUOUS`, `CONTIGUOUS_BACKWARD`, `DETACH`, and `COPY`. The symbolic layer now includes integer vmin/vmax, rewrite
   identities/folding, a grouped `symbolic_simple` slice for idempotent ops, boolean constants,
   same-self comparisons, `x//-1`, `(x^y)^y`, boolean not/cast/trunc folding,
   bool-ALU-to-logic folding, boolean contradiction folding, additive coefficient combining,
@@ -325,6 +327,8 @@ Current integrated demo:
   movement constructors, and upstream-shaped weakint vector `shape_to_shape_arg`.
 - validates high-level UOp sugar for upstream-shaped `call` dispatch to opaque `CALL` vs
   value-producing `FUNCTION`, and `set` lowering through `STORE`/`END`/`AFTER`.
+- validates grouped gradient boundary rules: `CONTIGUOUS`/`COPY` pass gradients through,
+  `CONTIGUOUS_BACKWARD` wraps the adjoint in `CONTIGUOUS`, and `DETACH`/`BITCAST` stop gradients.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

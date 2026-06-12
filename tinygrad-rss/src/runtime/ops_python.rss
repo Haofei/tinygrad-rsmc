@@ -229,6 +229,10 @@ fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return eval_tensor(cache: read cache, id: x)
     }
+    if op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH || op == COPY {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return eval_tensor(cache: read cache, id: x)
+    }
     if op == RESHAPE {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return eval_tensor(cache: read cache, id: x)

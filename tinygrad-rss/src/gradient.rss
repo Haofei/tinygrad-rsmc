@@ -203,6 +203,9 @@ fn grad_wrt_inner(cache: mut UOpCache, node: Int, g: Int, target: Int) -> Int {
         let adj = mk_cast(cache: mut cache, x: g, dt: read xdt)
         return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
     }
+    if op == BITCAST {
+        return grad_const_zero_like(cache: mut cache, like: node)
+    }
     if op == MAX {
         let a = node_src_id(cache: read cache, id: node, k: 0)
         let b = node_src_id(cache: read cache, id: node, k: 1)
@@ -347,6 +350,28 @@ fn grad_wrt_inner(cache: mut UOpCache, node: Int, g: Int, target: Int) -> Int {
         local xshape = uop_shape(cache: read cache, id: x)
         let adj = mk_expand(cache: mut cache, x: g, new_shape: read xshape)
         return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == CONTIGUOUS {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        return grad_wrt_inner(cache: mut cache, node: x, g: g, target: target)
+    }
+    if op == CONTIGUOUS_BACKWARD {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let adj = mk_contiguous(cache: mut cache, x: g)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == COPY {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let cnt = node_effective_device_count(cache: read cache, id: x)
+        if cnt > 0 {
+            let dev = node_effective_device_name(cache: read cache, id: x, index: 0)
+            let adj = mk_copy_to_device(cache: mut cache, x: g, device: read dev)
+            return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+        }
+        return grad_wrt_inner(cache: mut cache, node: x, g: g, target: target)
+    }
+    if op == DETACH {
+        return grad_const_zero_like(cache: mut cache, like: node)
     }
     return grad_const_zero(cache: mut cache, dt: read dt)
 }

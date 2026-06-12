@@ -1931,6 +1931,48 @@ fn node_effective_device_count(cache: read UOpCache, id: Int) -> Int {
     return 0
 }
 
+fn node_effective_device_name(cache: read UOpCache, id: Int, index: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEVICE {
+        return node_device_name(cache: read cache, id: id, index: index)
+    }
+    if op == BUFFER {
+        if node_is_upstream_buffer(cache: read cache, id: id) {
+            let d = node_src_id(cache: read cache, id: id, k: 1)
+            return node_effective_device_name(cache: read cache, id: d, index: index)
+        }
+        return ""
+    }
+    if op == COPY || op == ALLREDUCE {
+        if node_num_src(cache: read cache, id: id) >= 2 {
+            let d = node_src_id(cache: read cache, id: id, k: 1)
+            return node_effective_device_name(cache: read cache, id: d, index: index)
+        }
+        return ""
+    }
+    if op == MSELECT {
+        if node_num_src(cache: read cache, id: id) == 0 { return "" }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        return node_effective_device_name(cache: read cache, id: src, index: index)
+    }
+    if op == MSTACK {
+        if index >= 0 && index < node_num_src(cache: read cache, id: id) {
+            let src = node_src_id(cache: read cache, id: id, k: index)
+            return node_effective_device_name(cache: read cache, id: src, index: 0)
+        }
+        return ""
+    }
+    if op == PARAM {
+        if index == 0 { return node_param_device(cache: read cache, id: id) }
+        return ""
+    }
+    if node_num_src(cache: read cache, id: id) > 0 {
+        let s = node_src_id(cache: read cache, id: id, k: 0)
+        return node_effective_device_name(cache: read cache, id: s, index: index)
+    }
+    return ""
+}
+
 fn node_is_upstream_buffer(cache: read UOpCache, id: Int) -> Bool {
     if node_op(cache: read cache, id: id) != BUFFER { return false }
     if node_num_src(cache: read cache, id: id) != 2 { return false }

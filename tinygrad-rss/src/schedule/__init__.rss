@@ -23,6 +23,11 @@ struct ScheduleResolve derives(Clone) {
     ok: Bool,
 }
 
+struct ScheduleVars derives(Clone) {
+    var_vals: Map<String, Int>,
+    ok: Bool,
+}
+
 fn schedule_is_unwrap_stop(op: read Ops) -> Bool {
     if op == AFTER { return true }
     if op == BUFFER { return true }
@@ -104,6 +109,21 @@ fn schedule_add_edge(kernels: mut List<Int>, indeg: mut List<Int>, edge_from: mu
 
 fn schedule_mark_bad(ok_flags: mut List<Int>) -> Unit {
     List.set<Int>(list: mut ok_flags, index: 0, value: read 0)
+    return Unit
+}
+
+fn schedule_string_list_contains(items: read List<String>, value: read String) -> Bool {
+    let mut i = 0
+    while i < List.len<String>(list: read items) {
+        if List.get<String>(list: read items, index: i) == value { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn schedule_add_string_unique(items: mut List<String>, value: read String) -> Unit {
+    if schedule_string_list_contains(items: read items, value: read value) { return Unit }
+    List.push<String>(list: mut items, value: read String.copy(value: read value))
     return Unit
 }
 
@@ -243,6 +263,60 @@ fn schedule_resolve_linear_call(cache: mut UOpCache, linear_call: Int) -> fresh 
     let linear = schedule_resolve_node(cache: mut cache, id: node_src_id(cache: read cache, id: linear_call, k: 0), call_args: read args, olds: mut olds, news: mut news, ok_flags: mut ok_flags)
     let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
     return ScheduleResolve(linear: linear, ok: ok)
+}
+
+fn schedule_collect_used_var_names(cache: read UOpCache, linear: Int) -> fresh List<String> {
+    local names = List.new<String>()
+    if node_op(cache: read cache, id: linear) != LINEAR { return take names }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        let si = node_src_id(cache: read cache, id: linear, k: i)
+        if node_num_src(cache: read cache, id: si) > 0 {
+            let body = node_src_id(cache: read cache, id: si, k: 0)
+            local vars = uop_variables(cache: read cache, id: body)
+            let mut j = 0
+            while j < List.len<Int>(list: read vars) {
+                local name = uop_expr(cache: read cache, id: List.get<Int>(list: read vars, index: j))
+                schedule_add_string_unique(items: mut names, value: read name)
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return take names
+}
+
+fn schedule_extract_var_vals(cache: read UOpCache, big_sink: Int, linear: Int) -> fresh ScheduleVars {
+    local used = schedule_collect_used_var_names(cache: read cache, linear: linear)
+    local vals = Map.new<String, Int>()
+    local ok_flags = List.new<Int>()
+    List.push<Int>(list: mut ok_flags, value: read 1)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: big_sink) {
+        let b = node_src_id(cache: read cache, id: big_sink, k: i)
+        if node_op(cache: read cache, id: b) == BIND {
+            match uop_unbind(cache: read cache, id: b) {
+                Some(bound) => {
+                    local name = uop_expr(cache: read cache, id: bound.var_id)
+                    if schedule_string_list_contains(items: read used, value: read name) {
+                        match Map.get<String, Int>(map: read vals, key: read name) {
+                            Some(prev) => {
+                                if prev != bound.value { schedule_mark_bad(ok_flags: mut ok_flags) }
+                            }
+                            None => {
+                                local key = String.copy(value: read name)
+                                Map.insert<String, Int>(map: mut vals, key: read (manage key), value: read bound.value)
+                            }
+                        }
+                    }
+                }
+                None => { schedule_mark_bad(ok_flags: mut ok_flags) }
+            }
+        }
+        i = i + 1
+    }
+    let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
+    return ScheduleVars(var_vals: take vals, ok: ok)
 }
 
 fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {

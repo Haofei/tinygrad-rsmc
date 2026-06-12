@@ -1116,6 +1116,16 @@ fn tensor_interpolate_axis_linear(cache: mut UOpCache, x: Int, axis: Int, out_si
     return tensor_lerp_weight(cache: mut cache, x: lx, end: hx, weight: perc)
 }
 
+fn tensor_interpolate(cache: mut UOpCache, x: Int, axis: Int, out_size: Int, mode: Int, align_corners: Bool) -> Int {
+    if mode == 1 {
+        return tensor_interpolate_axis_nearest(cache: mut cache, x: x, axis: axis, out_size: out_size)
+    }
+    if mode == 2 {
+        return tensor_interpolate_axis_nearest_exact(cache: mut cache, x: x, axis: axis, out_size: out_size)
+    }
+    return tensor_interpolate_axis_linear(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: align_corners)
+}
+
 fn tensor_float_predicate(cache: mut UOpCache, x: Int, pred: Int) -> Int {
     local vals = eval_tensor(cache: read cache, id: x)
     local shape = uop_shape(cache: read cache, id: x)
@@ -2688,6 +2698,49 @@ fn tensor_max_unpool2d_nchw(cache: mut UOpCache, x: Int, indices: Int, kh: Int, 
     return tensor_max_unpool2d_nchw_output(cache: mut cache, x: x, indices: indices, out_h: out_h, out_w: out_w)
 }
 
+fn tensor_apply_ceil_mode(cache: read UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> TensorPair {
+    local xs = uop_shape(cache: read cache, id: x)
+    let h = List.get<Int>(list: read xs, index: 2)
+    let w = List.get<Int>(list: read xs, index: 3)
+    let bottom = tensor_pool_ceil_after(input: h, k: kh, stride: sh, dilation: dh, pad_before: pad_top, pad_after: pad_bottom)
+    let right = tensor_pool_ceil_after(input: w, k: kw, stride: sw, dilation: dw, pad_before: pad_left, pad_after: pad_right)
+    return TensorPair(first: bottom, second: right)
+}
+
+fn tensor_avg_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, ceil_mode: Bool, count_include_pad: Bool) -> Int {
+    if ceil_mode {
+        if count_include_pad {
+            return tensor_avg_pool2d_nchw_pad_dilated_ceil(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+        }
+        return tensor_avg_pool2d_nchw_pad_count_exclude_ceil(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    }
+    if count_include_pad {
+        return tensor_avg_pool2d_nchw_pad_dilated(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    }
+    return tensor_avg_pool2d_nchw_pad_count_exclude(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
+fn tensor_max_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, ceil_mode: Bool, return_indices: Bool) -> TensorPair {
+    if ceil_mode {
+        let values = tensor_max_pool2d_nchw_pad_dilated_ceil(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+        if return_indices {
+            let indices = tensor_max_pool2d_nchw_indices_pad_dilated_ceil(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+            return TensorPair(first: values, second: indices)
+        }
+        return TensorPair(first: values, second: 0 - 1)
+    }
+    let values = tensor_max_pool2d_nchw_pad_dilated(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    if return_indices {
+        let indices = tensor_max_pool2d_nchw_indices_pad_dilated(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+        return TensorPair(first: values, second: indices)
+    }
+    return TensorPair(first: values, second: 0 - 1)
+}
+
+fn tensor_max_unpool2d(cache: mut UOpCache, x: Int, indices: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> Int {
+    return tensor_max_unpool2d_nchw(cache: mut cache, x: x, indices: indices, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
 fn tensor_max_pool2d_nchw_pad(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> Int {
     local before = List.new<Int>()
     push1(l: mut before, a: 0)
@@ -2959,6 +3012,20 @@ fn tensor_conv_transpose2d_nchw_groups_bias_dilated(cache: mut UOpCache, x: Int,
     push1(l: mut bshape, a: 1)
     let br = tensor_reshape(cache: mut cache, x: bias, new_shape: read bshape)
     return tensor_add(cache: mut cache, a: y, b: br)
+}
+
+fn tensor_conv2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> Int {
+    if bias >= 0 {
+        return tensor_conv2d_nchw_groups_pad_bias_dilated(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    }
+    return tensor_conv2d_nchw_groups_pad_dilated(cache: mut cache, x: x, weight: weight, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
+fn tensor_conv_transpose2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, out_pad_h: Int, out_pad_w: Int) -> Int {
+    if bias >= 0 {
+        return tensor_conv_transpose2d_nchw_groups_bias_dilated(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, out_pad_h: out_pad_h, out_pad_w: out_pad_w)
+    }
+    return tensor_conv_transpose2d_nchw_groups_dilated(cache: mut cache, x: x, weight: weight, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, out_pad_h: out_pad_h, out_pad_w: out_pad_w)
 }
 
 fn tensor_cat(cache: mut UOpCache, tensors: read List<Int>, dim: Int) -> Int {
@@ -3525,6 +3592,40 @@ fn tensor_cross_entropy_sparse_mean(cache: mut UOpCache, logits: Int, target: In
     return tensor_mean_all(cache: mut cache, x: loss)
 }
 
+fn tensor_do_reduction(cache: mut UOpCache, x: Int, reduction: Int) -> Int {
+    if reduction == 1 { return tensor_sum_all(cache: mut cache, x: x) }
+    if reduction == 2 { return tensor_mean_all(cache: mut cache, x: x) }
+    return x
+}
+
+fn tensor_binary_crossentropy(cache: mut UOpCache, x: Int, y: Int, reduction: Int) -> Int {
+    let loss = tensor_binary_crossentropy_none(cache: mut cache, x: x, y: y)
+    return tensor_do_reduction(cache: mut cache, x: loss, reduction: reduction)
+}
+
+fn tensor_binary_crossentropy_logits(cache: mut UOpCache, x: Int, y: Int, pos_weight: Int, reduction: Int) -> Int {
+    if pos_weight >= 0 {
+        let weighted_loss = tensor_binary_crossentropy_logits_pos_weight_none(cache: mut cache, x: x, y: y, pos_weight: pos_weight)
+        return tensor_do_reduction(cache: mut cache, x: weighted_loss, reduction: reduction)
+    }
+    let loss = tensor_binary_crossentropy_logits_none(cache: mut cache, x: x, y: y)
+    return tensor_do_reduction(cache: mut cache, x: loss, reduction: reduction)
+}
+
+fn tensor_sparse_categorical_crossentropy(cache: mut UOpCache, logits: Int, target: Int, reduction: Int) -> Int {
+    let loss = tensor_cross_entropy_sparse_none(cache: mut cache, logits: logits, target: target)
+    return tensor_do_reduction(cache: mut cache, x: loss, reduction: reduction)
+}
+
+fn tensor_cross_entropy(cache: mut UOpCache, logits: Int, target: Int, reduction: Int) -> Int {
+    return tensor_sparse_categorical_crossentropy(cache: mut cache, logits: logits, target: target, reduction: reduction)
+}
+
+fn tensor_nll_loss(cache: mut UOpCache, log_probs: Int, target: Int, reduction: Int) -> Int {
+    let loss = tensor_nll_loss_none(cache: mut cache, log_probs: log_probs, target: target)
+    return tensor_do_reduction(cache: mut cache, x: loss, reduction: reduction)
+}
+
 fn tensor_cumprod_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     let ndim = List.len<Int>(list: read shape)
@@ -4071,6 +4172,13 @@ fn tensor_batchnorm_affine(cache: mut UOpCache, x: Int, weight: Int, bias: Int, 
     return tensor_batchnorm_basic(cache: mut cache, x: x, weight: weight, bias: bias, mean: mean, invstd: invstd, axes: read axes)
 }
 
+fn tensor_batchnorm(cache: mut UOpCache, x: Int, weight: Int, bias: Int, mean: Int, invstd: Int, axes: read List<Int>) -> Int {
+    if weight >= 0 {
+        return tensor_batchnorm_affine(cache: mut cache, x: x, weight: weight, bias: bias, mean: mean, invstd: invstd, axes: read axes)
+    }
+    return tensor_batchnorm_no_affine(cache: mut cache, x: x, mean: mean, invstd: invstd, axes: read axes)
+}
+
 // 2D matmul A[m,k] @ B[k,n] -> [m,n], built from movement + broadcast-mul + sum (tinygrad dot).
 // A.reshape(m,1,k) * B.T.reshape(1,n,k) -> [m,n,k], sum axis 2 -> [m,n,1], reshape -> [m,n].
 fn tensor_matmul2d(cache: mut UOpCache, a: Int, b: Int) -> Int {
@@ -4152,6 +4260,10 @@ fn tensor_dot(cache: mut UOpCache, x: Int, w: Int) -> Int {
 
 fn tensor_matmul(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_dot(cache: mut cache, x: a, w: b)
+}
+
+fn tensor_rmatmul(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_matmul(cache: mut cache, a: y, b: x)
 }
 
 fn tensor_scaled_dot_product_attention(cache: mut UOpCache, query: Int, key: Int, value: Int, dropout_p: Float, training: Bool, seed: Int) -> Int {

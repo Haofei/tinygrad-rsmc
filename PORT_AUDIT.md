@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 26,085 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 26,198 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 25/106 symbols, `mixin/__init__.py` 53/82 symbols,
-    `uop/ops.py` 75/221 symbols; 153/409 total rough symbols covered.
+  - result: `tensor.py` 26/106 symbols, `mixin/__init__.py` 68/82 symbols,
+    `uop/ops.py` 75/221 symbols; 169/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -348,6 +348,11 @@ Integrated pieces:
   `normal_like`, `scaled_uniform`, `glorot_uniform`, `kaiming_uniform`, and
   `kaiming_normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
   `const`, `const_like`, `unique_const`, `_broadcasted`, and `_binop`),
+  upstream-shaped higher-op wrappers (`__rmatmul__`, `interpolate`, `_apply_ceil_mode`,
+  `avg_pool2d`, `max_pool2d`, `max_unpool2d`, `conv2d`, `conv_transpose2d`,
+  `batchnorm`, `_do_reduction`, `binary_crossentropy`, `binary_crossentropy_logits`,
+  `sparse_categorical_crossentropy`, `cross_entropy`, and `nll_loss`) over the existing
+  explicit RSS tensor kernels,
   dtype conversion through `CAST` for core float/int/bool cases, same-itemsize
   `BITCAST` graph construction plus upstream-style shape-changing bitcast composition through
   unsigned integer packing/unpacking, broadcast elementwise arithmetic/comparison ops, unary

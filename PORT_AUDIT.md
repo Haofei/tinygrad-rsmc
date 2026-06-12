@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 26,415 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 26,455 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 32/106 symbols, `mixin/__init__.py` 78/82 symbols,
-    `uop/ops.py` 79/221 symbols; 189/409 total rough symbols covered.
+  - result: `tensor.py` 34/106 symbols, `mixin/__init__.py` 78/82 symbols,
+    `uop/ops.py` 79/221 symbols; 191/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -394,6 +394,8 @@ Integrated pieces:
   `__getitem__`/`_getitem`, and implicit-scalar `gradient` over the integrated `grad_wrt` slice,
   plus boundary wrappers for `alu`, scalar `ufix`, `contiguous`, and `to` over existing UOp
   graph primitives,
+  explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
+  compaction,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
   composition for vector, matrix, and batched cases, upstream-style `relu` as
   `(x > 0).where(x, 0)`, and legacy `linear_forward`.
@@ -810,7 +812,8 @@ Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random and initializer helpers are partially integrated now, but exact global
   seed/counter APIs, broader distribution helpers,
-  full symbolic/lazy indexing semantics, graph-backed NaN/Inf predicate lowering,
+  full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
+  on runtime `.item()` shape discovery, graph-backed NaN/Inf predicate lowering,
   broader multi-axis interpolation and composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   Python-facing method breadth,

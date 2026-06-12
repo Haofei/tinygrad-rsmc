@@ -2093,6 +2093,46 @@ fn tensor_getitem(cache: mut UOpCache, x: Int, indices: read List<Int>) -> Int {
     return tensor_gather_axis0(cache: mut cache, x: x, indices: read indices)
 }
 
+fn tensor_masked_select_size(cache: mut UOpCache, x: Int, mask: Int, size: Int, fill_value: Float) -> Int {
+    let xf = tensor_flatten(cache: mut cache, x: x, start_dim: 0, end_dim: 0 - 1)
+    let mb = broadcast_to(cache: mut cache, x: mask, target: read uop_shape(cache: read cache, id: x))
+    let mf = tensor_flatten(cache: mut cache, x: mb, start_dim: 0, end_dim: 0 - 1)
+    let mi = tensor_cast(cache: mut cache, x: mf, dt: read dt_int32())
+    let mask_cumsum = tensor_cumsum_axis(cache: mut cache, x: mi, axis: 0)
+    local out_shape = List.new<Int>()
+    push1(l: mut out_shape, a: size)
+    let counts_base = tensor_zeros(cache: mut cache, dt: read dt_int32(), shape: read out_shape)
+    local one_src_shape = uop_shape(cache: read cache, id: mask_cumsum)
+    let ones = tensor_full(cache: mut cache, dt: read dt_int32(), shape: read one_src_shape, value: 1.0)
+    let counts = tensor_scatter_reduce_sum(cache: mut cache, base: counts_base, dim: 0, index: mask_cumsum, src: ones, include_self: true)
+    let gather_idx = tensor_cumsum_axis(cache: mut cache, x: counts, axis: 0)
+    let gathered = tensor_gather(cache: mut cache, x: xf, dim: 0, index: gather_idx)
+    let ar = tensor_arange(cache: mut cache, dt: read dt_int32(), n: size)
+    let total = tensor_sum_all(cache: mut cache, x: mi)
+    let valid = tensor_lt(cache: mut cache, a: ar, b: total)
+    let fill = tensor_full(cache: mut cache, dt: read node_dtype(cache: read cache, id: x), shape: read out_shape, value: fill_value)
+    let selected = tensor_where(cache: mut cache, cond: valid, x: gathered, y: fill)
+    let dt = node_dtype(cache: read cache, id: x)
+    return tensor_cast(cache: mut cache, x: selected, dt: read dt)
+}
+
+fn tensor_masked_select(cache: mut UOpCache, x: Int, mask: Int, size: Int, fill_value: Float) -> Int {
+    return tensor_masked_select_size(cache: mut cache, x: x, mask: mask, size: size, fill_value: fill_value)
+}
+
+fn tensor_nonzero(cache: mut UOpCache, x: Int, size: Int, fill_value: Float) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let n = List.get<Int>(list: read shape, index: 0)
+    let zero = tensor_full(cache: mut cache, dt: read node_dtype(cache: read cache, id: x), shape: read shape, value: 0.0)
+    let mask = tensor_ne(cache: mut cache, a: x, b: zero)
+    let idx = tensor_arange(cache: mut cache, dt: read dt_int32(), n: n)
+    let selected = tensor_masked_select_size(cache: mut cache, x: idx, mask: mask, size: size, fill_value: fill_value)
+    local out_shape = List.new<Int>()
+    push1(l: mut out_shape, a: size)
+    push1(l: mut out_shape, a: 1)
+    return tensor_reshape(cache: mut cache, x: selected, new_shape: read out_shape)
+}
+
 fn tensor_norm_slice_bound(v: Int, dim: Int) -> Int {
     let mut out = tensor_norm_index(idx: v, dim: dim)
     if out < 0 { out = 0 }

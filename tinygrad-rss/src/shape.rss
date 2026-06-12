@@ -260,11 +260,12 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return uop_shape(cache: read cache, id: x)
     }
-    // elementwise / binary: shape of src[0]
+    // elementwise / binary: broadcast src shapes.
     if group_binary(op: read op) {
-        if node_num_src(cache: read cache, id: id) >= 1 {
-            let x = node_src_id(cache: read cache, id: id, k: 0)
-            return uop_shape(cache: read cache, id: x)
+        if node_num_src(cache: read cache, id: id) >= 2 {
+            local left = uop_shape(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+            local right = uop_shape(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+            return broadcast_shape(s1: read left, s2: read right)
         }
     }
     if group_ternary(op: read op) {

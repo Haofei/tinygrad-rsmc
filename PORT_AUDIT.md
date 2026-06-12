@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,084 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,120 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -71,7 +71,9 @@ Integrated pieces:
   `AFTER`, `END`, `BARRIER`), matching the role of upstream
   `tinygrad/uop/ops.py`. REDUCE metadata is
   explicit (`sum`/`prod`/`max` kind plus axes) rather than encoded as sentinel axes.
-  `BufferizeArg` device metadata is inspectable for scheduler validation and rewrite tests.
+  `BufferizeArg` device metadata is inspectable for scheduler validation and rewrite tests, and
+  value-op effective device projection now follows upstream's first-device-carrying-source behavior
+  for ALU/movement/order/load-store/reduce-style nodes.
 - `uop/methods.rss`: integrated UOp helper surface over interned node ids: `const_like`, `ufix`,
   masked-index `invalid`/`valid`/`get_idx`/`get_valid`,
   symbolic variable `expr`/`unbind`/`val`/sorted `variables`/`unbind_all`,
@@ -268,8 +270,9 @@ Integrated pieces:
   `MSELECT` plus tuple-device `COPY`, plus early `SHRINK(MSTACK)` splitting and tuple routing for
   `GETTUPLE(TUPLE)` and `GETTUPLE(MULTI(TUPLE|FUNCTION))`, FUNCTION-body multi stripping/rewrapping, and source-shaped `REDUCE(MULTI)`
   handling for piecewise and shard-axis allreduce reductions, explicit tuple-device
-  `ALLREDUCE(MULTI)` passthrough, plus same-axis unary/binary `ALU(MULTI, ...)` payload rewrites.
-  Full ALU sharding/axis-mismatch remains unported.
+  `ALLREDUCE(MULTI)` passthrough, plus same-axis unary/binary `ALU(MULTI, ...)` payload rewrites
+  including upstream scalar-broadcast operands. Non-scalar ALU sharding and axis-mismatch resharding
+  remain unported.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -456,7 +459,7 @@ Current integrated demo:
   `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP` movement rewrites, tuple and function
   `GETTUPLE` routing through `MULTI`, FUNCTION-body multi stripping/rewrapping, and piecewise vs. shard-axis `REDUCE(MULTI)` rewrites,
   tuple-device `ALLREDUCE(MULTI)` passthrough, plus same-axis unary/binary `ALU(MULTI, ...)`
-  rewrites.
+  rewrites including scalar-broadcast operands in either source order.
 - validates source-aligned UOp `axis` propagation for `MULTI`, `COPY`, sharded `PARAM`, ALU,
   `GETTUPLE`, `REDUCE`, and `PERMUTE`.
 - validates source-aligned UOp device key/count propagation for tuple buffers, `COPY`,

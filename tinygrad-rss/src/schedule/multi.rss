@@ -634,13 +634,21 @@ fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let mut i = 0
     while i < node_num_src(cache: read cache, id: root) {
         let child = node_src_id(cache: read cache, id: root, k: i)
-        if node_op(cache: read cache, id: child) != MULTI || node_num_src(cache: read cache, id: child) == 0 {
-            return MultiRewrite(result: fallback, changed: false, ok: false)
+        if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
+            if node_const_int(cache: read cache, id: child) != axis {
+                return MultiRewrite(result: fallback, changed: false, ok: false)
+            }
+            List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
+        } else {
+            if uop_axis(cache: read cache, id: child) >= 0 {
+                return MultiRewrite(result: fallback, changed: false, ok: false)
+            }
+            local child_shape = uop_shape(cache: read cache, id: child)
+            if List.len<Int>(list: read child_shape) != 0 {
+                return MultiRewrite(result: fallback, changed: false, ok: false)
+            }
+            List.push<Int>(list: mut srcs, value: read child)
         }
-        if node_const_int(cache: read cache, id: child) != axis {
-            return MultiRewrite(result: fallback, changed: false, ok: false)
-        }
-        List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
         i = i + 1
     }
     local dt = node_full_dtype(cache: read cache, id: root)

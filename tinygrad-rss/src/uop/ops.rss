@@ -2077,6 +2077,16 @@ fn node_effective_device_count(cache: read UOpCache, id: Int) -> Int {
     if op == PARAM {
         return node_param_device_count(cache: read cache, id: id)
     }
+    if group_alu(op: read op) || group_movement(op: read op) || op == GETTUPLE || op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH || op == AFTER || op == LOAD || op == STORE || op == REDUCE {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let cnt = node_effective_device_count(cache: read cache, id: child)
+            if cnt > 0 { return cnt }
+            i = i + 1
+        }
+        return 0
+    }
     if node_num_src(cache: read cache, id: id) > 0 {
         let s = node_src_id(cache: read cache, id: id, k: 0)
         return node_effective_device_count(cache: read cache, id: s)
@@ -2129,6 +2139,17 @@ fn node_effective_device_name(cache: read UOpCache, id: Int, index: Int) -> fres
     }
     if op == PARAM {
         return node_param_device_name(cache: read cache, id: id, index: index)
+    }
+    if group_alu(op: read op) || group_movement(op: read op) || op == GETTUPLE || op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH || op == AFTER || op == LOAD || op == STORE || op == REDUCE {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            if node_effective_device_count(cache: read cache, id: child) > index {
+                return node_effective_device_name(cache: read cache, id: child, index: index)
+            }
+            i = i + 1
+        }
+        return ""
     }
     if node_num_src(cache: read cache, id: id) > 0 {
         let s = node_src_id(cache: read cache, id: id, k: 0)

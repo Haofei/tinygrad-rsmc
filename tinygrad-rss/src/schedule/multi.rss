@@ -415,6 +415,7 @@ fn multi_shrink(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     if node_op(cache: read cache, id: root) != SHRINK || node_num_src(cache: read cache, id: root) < 3 {
         return MultiRewrite(result: fallback, changed: false, ok: false)
     }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
     let payload = multi_root_payload(cache: read cache, root: root)
     if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
     let axis = multi_root_axis(cache: read cache, root: root)
@@ -428,6 +429,24 @@ fn multi_shrink(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
         let axis_start = List.get<Int>(list: read starts, index: axis)
         let axis_end = List.get<Int>(list: read ends, index: axis)
         let shard_dim = List.get<Int>(list: read payload_shape, index: axis)
+        let dcount = node_effective_device_count(cache: read cache, id: multi)
+        if dcount > 1 && shard_dim > 0 && axis_end > axis_start && axis_start % shard_dim == 0 && axis_end - axis_start == shard_dim {
+            let shard_index = axis_start / shard_dim
+            if shard_index > 0 && shard_index < dcount {
+                List.set<Int>(list: mut starts, index: axis, value: read 0)
+                List.set<Int>(list: mut ends, index: axis, value: read shard_dim)
+                let selected = mk_mselect(cache: mut cache, x: payload, index: shard_index)
+                let dev = multi_effective_device_node(cache: mut cache, id: multi)
+                local copy_src = List.new<Int>()
+                List.push<Int>(list: mut copy_src, value: read selected)
+                List.push<Int>(list: mut copy_src, value: read dev)
+                local dt = node_full_dtype(cache: read cache, id: selected)
+                local copy_arg = ArgNone
+                let copied = intern(cache: mut cache, op: COPY, dt: read dt, src: take copy_src, arg: take copy_arg)
+                let shrunk = mk_shrink(cache: mut cache, x: copied, starts: read starts, ends: read ends)
+                return MultiRewrite(result: shrunk, changed: true, ok: true)
+            }
+        }
         if axis_start != 0 || axis_end != shard_dim {
             return MultiRewrite(result: fallback, changed: false, ok: false)
         }

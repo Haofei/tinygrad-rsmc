@@ -387,6 +387,10 @@ Integrated pieces:
   `normal_like`, `scaled_uniform`, `glorot_uniform`, `kaiming_uniform`, and
   `kaiming_normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
   `const`, `const_like`, `unique_const`, `_broadcasted`, and `_binop`),
+  Python-facing public wrapper aliases for reverse/truediv/mod/fmod arithmetic,
+  bitwise/shift helpers, `clamp`, `copysign`, `masked_fill`, `detach`,
+  `contiguous_backward`, reduction/statistics, sort/topk, softmax/logsumexp, and
+  cumsum/cumprod entry points,
   upstream-shaped higher-op wrappers (`__rmatmul__`, single-axis and trailing multi-axis
   `interpolate`, `_apply_ceil_mode`,
   `avg_pool2d`, `max_pool2d`, `max_unpool2d`, `conv2d`, `conv_transpose2d`,
@@ -782,6 +786,11 @@ Current integrated demo:
 - validates upstream-shaped Tensor wrapper aliases for `_uop`/`_wrap_uop`, scalar `const`,
   `unique_const`, reverse `_binop` with `const_like`, `_split_cumalu` for ADD/MUL, and pair
   returns for `cummax`/`cummin` on the active tensor smoke.
+- validates public Tensor wrapper aliases through the active tensor smoke: reverse/truediv
+  arithmetic, `rpow`, Python-style and C-style mod aliases, bitwise/shift aliases, `clamp`,
+  `copysign`, `masked_fill`, `detach`, `contiguous_backward`, all/axis arg reductions, sort,
+  argsort, topk, all/axis statistics aliases, softmax/log_softmax/logsumexp aliases, and
+  cumsum/cumprod aliases.
 - validates Tensor normalization helpers against real tinygrad: `normalize(p=2, dim=1)`,
   `normalize(p=1, dim=0)`, `normalize(p=0, dim=1)`, and `layernorm(axis=1, eps=1e-5)`.
 - validates tuple-axis Tensor statistics/normalization against real tinygrad: `mean(axis=(1,2))`,
@@ -925,7 +934,8 @@ Major missing integrated work:
   on runtime `.item()` shape discovery,
   broader composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
-  Python-facing method breadth,
+  remaining Python-facing method breadth such as `bitwise_not`, exact object magic, and
+  Python-level overload/exception parity,
   and exact tinygrad semantics are still incomplete.
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and

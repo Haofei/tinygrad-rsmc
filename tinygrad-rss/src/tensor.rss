@@ -283,6 +283,14 @@ fn tensor_contiguous(cache: mut UOpCache, x: Int) -> Int {
     return mk_contiguous(cache: mut cache, x: x)
 }
 
+fn tensor_contiguous_backward(cache: mut UOpCache, x: Int) -> Int {
+    return mk_contiguous_backward(cache: mut cache, x: x)
+}
+
+fn tensor_detach(cache: mut UOpCache, x: Int) -> Int {
+    return mk_detach(cache: mut cache, x: x)
+}
+
 fn tensor_to(cache: mut UOpCache, x: Int, device: read String) -> Int {
     local target = canonicalize_device(device: read device)
     if String.len(value: read target) == 0 { return x }
@@ -1687,6 +1695,26 @@ fn tensor_div(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: FDIV, a: a, b: b)
 }
 
+fn tensor_truediv(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_div(cache: mut cache, a: a, b: b)
+}
+
+fn tensor_radd(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_add(cache: mut cache, a: y, b: x)
+}
+
+fn tensor_rsub(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_sub(cache: mut cache, a: y, b: x)
+}
+
+fn tensor_rmul(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_mul(cache: mut cache, a: y, b: x)
+}
+
+fn tensor_rtruediv(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_div(cache: mut cache, a: y, b: x)
+}
+
 fn tensor_maximum(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: MAX, a: a, b: b)
 }
@@ -1723,20 +1751,40 @@ fn tensor_and(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: AND, a: a, b: b)
 }
 
+fn tensor_bitwise_and(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_and(cache: mut cache, a: a, b: b)
+}
+
 fn tensor_or(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: OR, a: a, b: b)
+}
+
+fn tensor_bitwise_or(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_or(cache: mut cache, a: a, b: b)
 }
 
 fn tensor_xor(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: XOR, a: a, b: b)
 }
 
+fn tensor_bitwise_xor(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_xor(cache: mut cache, a: a, b: b)
+}
+
 fn tensor_shl(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: SHL, a: a, b: b)
 }
 
+fn tensor_lshift(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_shl(cache: mut cache, a: a, b: b)
+}
+
 fn tensor_shr(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: SHR, a: a, b: b)
+}
+
+fn tensor_rshift(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_shr(cache: mut cache, a: a, b: b)
 }
 
 fn tensor_cdiv(cache: mut UOpCache, a: Int, b: Int) -> Int {
@@ -1755,8 +1803,20 @@ fn tensor_floormod(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: FLOORMOD, a: a, b: b)
 }
 
+fn tensor_mod(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_floormod(cache: mut cache, a: a, b: b)
+}
+
+fn tensor_fmod(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    return tensor_cmod(cache: mut cache, a: a, b: b)
+}
+
 fn tensor_pow(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: POW, a: a, b: b)
+}
+
+fn tensor_rpow(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_pow(cache: mut cache, a: y, b: x)
 }
 
 fn tensor_minimum(cache: mut UOpCache, a: Int, b: Int) -> Int {
@@ -1808,6 +1868,23 @@ fn tensor_clip(cache: mut UOpCache, x: Int, min_value: Float, max_value: Float) 
     let maxc = tensor_const_like_float(cache: mut cache, x: x, value: max_value)
     let above = tensor_gt(cache: mut cache, a: lowered, b: maxc)
     return tensor_where(cache: mut cache, cond: above, x: maxc, y: lowered)
+}
+
+fn tensor_clamp(cache: mut UOpCache, x: Int, min_value: Float, max_value: Float) -> Int {
+    return tensor_clip(cache: mut cache, x: x, min_value: min_value, max_value: max_value)
+}
+
+fn tensor_copysign(cache: mut UOpCache, x: Int, other: Int) -> Int {
+    let mag = tensor_abs(cache: mut cache, x: x)
+    let zero = tensor_const_like_float(cache: mut cache, x: other, value: 0.0)
+    let neg = tensor_lt(cache: mut cache, a: other, b: zero)
+    let inv = tensor_reciprocal(cache: mut cache, x: other)
+    let neg_zero = tensor_lt(cache: mut cache, a: inv, b: zero)
+    let neg_sign = tensor_or(cache: mut cache, a: neg, b: neg_zero)
+    let pos_one = tensor_const_like_float(cache: mut cache, x: mag, value: 1.0)
+    let neg_one = tensor_const_like_float(cache: mut cache, x: mag, value: 0.0 - 1.0)
+    let sign = tensor_where(cache: mut cache, cond: neg_sign, x: neg_one, y: pos_one)
+    return tensor_mul(cache: mut cache, a: mag, b: sign)
 }
 
 fn tensor_sign(cache: mut UOpCache, x: Int) -> Int {
@@ -3006,6 +3083,10 @@ fn tensor_logical_not(cache: mut UOpCache, x: Int) -> Int {
     local xs = uop_shape(cache: read cache, id: x)
     let f = tensor_full(cache: mut cache, dt: read dt_bool(), shape: read xs, value: 0.0)
     return tensor_eq(cache: mut cache, a: x, b: f)
+}
+
+fn tensor_masked_fill(cache: mut UOpCache, x: Int, mask: Int, value: Int) -> Int {
+    return tensor_where(cache: mut cache, cond: mask, x: value, y: x)
 }
 
 fn tensor_any_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
@@ -4519,6 +4600,10 @@ fn tensor_cumsum_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     return tensor_transpose(cache: mut cache, x: summed, dim0: d, dim1: 0 - 1)
 }
 
+fn tensor_cumsum(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    return tensor_cumsum_axis(cache: mut cache, x: x, axis: axis)
+}
+
 fn tensor_prod_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local sh0 = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh0), dim: axis, extra: false)
@@ -4645,6 +4730,14 @@ fn tensor_argmax_all(cache: mut UOpCache, x: Int) -> Int {
     return tensor_argmax_axis(cache: mut cache, x: flat, axis: 0, keepdim: false)
 }
 
+fn tensor_argmax(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_argmax_all(cache: mut cache, x: x)
+}
+
+fn tensor_argmax_dim(cache: mut UOpCache, x: Int, dim: Int, keepdim: Bool) -> Int {
+    return tensor_argmax_axis(cache: mut cache, x: x, axis: dim, keepdim: keepdim)
+}
+
 fn tensor_argmin_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool) -> Int {
     let nx = tensor_neg(cache: mut cache, x: x)
     return tensor_argmax_axis(cache: mut cache, x: nx, axis: axis, keepdim: keepdim)
@@ -4653,6 +4746,14 @@ fn tensor_argmin_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool) -> 
 fn tensor_argmin_all(cache: mut UOpCache, x: Int) -> Int {
     let nx = tensor_neg(cache: mut cache, x: x)
     return tensor_argmax_all(cache: mut cache, x: nx)
+}
+
+fn tensor_argmin(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_argmin_all(cache: mut cache, x: x)
+}
+
+fn tensor_argmin_dim(cache: mut UOpCache, x: Int, dim: Int, keepdim: Bool) -> Int {
+    return tensor_argmin_axis(cache: mut cache, x: x, axis: dim, keepdim: keepdim)
 }
 
 fn tensor_logsumexp_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
@@ -4667,6 +4768,10 @@ fn tensor_logsumexp_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     return tensor_squeeze_dim(cache: mut cache, x: out, dim: d)
 }
 
+fn tensor_logsumexp(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    return tensor_logsumexp_axis(cache: mut cache, x: x, axis: axis)
+}
+
 fn tensor_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
@@ -4675,6 +4780,10 @@ fn tensor_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     let e = tensor_exp(cache: mut cache, x: m)
     let ss = tensor_sum_axis_keepdim(cache: mut cache, x: e, axis: d)
     return tensor_div(cache: mut cache, a: e, b: ss)
+}
+
+fn tensor_softmax(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    return tensor_softmax_axis(cache: mut cache, x: x, axis: axis)
 }
 
 fn tensor_log_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
@@ -4686,6 +4795,10 @@ fn tensor_log_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     let ss = tensor_sum_axis_keepdim(cache: mut cache, x: e, axis: d)
     let lss = tensor_log(cache: mut cache, x: ss)
     return tensor_sub(cache: mut cache, a: m, b: lss)
+}
+
+fn tensor_log_softmax(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    return tensor_log_softmax_axis(cache: mut cache, x: x, axis: axis)
 }
 
 fn tensor_logcumsumexp_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
@@ -4892,6 +5005,14 @@ fn tensor_argsort_axis(cache: mut UOpCache, x: Int, dim: Int, descending: Bool) 
     return sorted.indices
 }
 
+fn tensor_sort(cache: mut UOpCache, x: Int, dim: Int, descending: Bool) -> SortResult {
+    return tensor_sort_axis(cache: mut cache, x: x, dim: dim, descending: descending)
+}
+
+fn tensor_argsort(cache: mut UOpCache, x: Int, dim: Int, descending: Bool) -> Int {
+    return tensor_argsort_axis(cache: mut cache, x: x, dim: dim, descending: descending)
+}
+
 fn tensor_topk_axis(cache: mut UOpCache, x: Int, k: Int, dim: Int, largest: Bool) -> SortResult {
     let sorted = tensor_sort_axis(cache: mut cache, x: x, dim: dim, descending: largest)
     local sh = uop_shape(cache: read cache, id: x)
@@ -4906,6 +5027,10 @@ fn tensor_topk_axis(cache: mut UOpCache, x: Int, k: Int, dim: Int, largest: Bool
     let values = tensor_shrink_to(cache: mut cache, x: sorted.values, new_shape: read top_shape)
     let indices = tensor_shrink_to(cache: mut cache, x: sorted.indices, new_shape: read top_shape)
     return SortResult(values: values, indices: indices)
+}
+
+fn tensor_topk(cache: mut UOpCache, x: Int, k: Int, dim: Int, largest: Bool) -> SortResult {
+    return tensor_topk_axis(cache: mut cache, x: x, k: k, dim: dim, largest: largest)
 }
 
 fn tensor_binary_crossentropy_none(cache: mut UOpCache, x: Int, y: Int) -> Int {
@@ -5088,6 +5213,10 @@ fn tensor_cumprod_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local pooled_shape = uop_shape(cache: read cache, id: pooled)
     let prodded = tensor_prod_axis(cache: mut cache, x: pooled, axis: List.len<Int>(list: read pooled_shape) - 1)
     return tensor_transpose(cache: mut cache, x: prodded, dim0: d, dim1: 0 - 1)
+}
+
+fn tensor_cumprod(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    return tensor_cumprod_axis(cache: mut cache, x: x, axis: axis)
 }
 
 fn tensor_cummax_values_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
@@ -5387,6 +5516,14 @@ fn tensor_mean_all(cache: mut UOpCache, x: Int) -> Int {
     return tensor_div(cache: mut cache, a: s, b: d)
 }
 
+fn tensor_mean(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_mean_all(cache: mut cache, x: x)
+}
+
+fn tensor_mean_dim(cache: mut UOpCache, x: Int, dim: Int) -> Int {
+    return tensor_mean_axis(cache: mut cache, x: x, axis: dim)
+}
+
 fn tensor_var_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d_axis = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
@@ -5438,6 +5575,14 @@ fn tensor_var_all(cache: mut UOpCache, x: Int, correction: Float) -> Int {
     return tensor_div(cache: mut cache, a: reduced, b: denom_pos)
 }
 
+fn tensor_var(cache: mut UOpCache, x: Int, correction: Float) -> Int {
+    return tensor_var_all(cache: mut cache, x: x, correction: correction)
+}
+
+fn tensor_var_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> Int {
+    return tensor_var_axis(cache: mut cache, x: x, axis: dim, correction: correction)
+}
+
 fn tensor_var_mean_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> fresh TensorPair {
     let v = tensor_var_axis(cache: mut cache, x: x, axis: axis, correction: correction)
     let m = tensor_mean_axis(cache: mut cache, x: x, axis: axis)
@@ -5456,6 +5601,14 @@ fn tensor_var_mean_all(cache: mut UOpCache, x: Int, correction: Float) -> fresh 
     return TensorPair(first: v, second: m)
 }
 
+fn tensor_var_mean(cache: mut UOpCache, x: Int, correction: Float) -> fresh TensorPair {
+    return tensor_var_mean_all(cache: mut cache, x: x, correction: correction)
+}
+
+fn tensor_var_mean_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> fresh TensorPair {
+    return tensor_var_mean_axis(cache: mut cache, x: x, axis: dim, correction: correction)
+}
+
 fn tensor_std_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> Int {
     let v = tensor_var_axis(cache: mut cache, x: x, axis: axis, correction: correction)
     return tensor_sqrt(cache: mut cache, x: v)
@@ -5464,6 +5617,14 @@ fn tensor_std_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) ->
 fn tensor_std_all(cache: mut UOpCache, x: Int, correction: Float) -> Int {
     let v = tensor_var_all(cache: mut cache, x: x, correction: correction)
     return tensor_sqrt(cache: mut cache, x: v)
+}
+
+fn tensor_std(cache: mut UOpCache, x: Int, correction: Float) -> Int {
+    return tensor_std_all(cache: mut cache, x: x, correction: correction)
+}
+
+fn tensor_std_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> Int {
+    return tensor_std_axis(cache: mut cache, x: x, axis: dim, correction: correction)
 }
 
 fn tensor_std_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> Int {
@@ -5487,6 +5648,14 @@ fn tensor_std_mean_all(cache: mut UOpCache, x: Int, correction: Float) -> fresh 
     let s = tensor_std_all(cache: mut cache, x: x, correction: correction)
     let m = tensor_mean_all(cache: mut cache, x: x)
     return TensorPair(first: s, second: m)
+}
+
+fn tensor_std_mean(cache: mut UOpCache, x: Int, correction: Float) -> fresh TensorPair {
+    return tensor_std_mean_all(cache: mut cache, x: x, correction: correction)
+}
+
+fn tensor_std_mean_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> fresh TensorPair {
+    return tensor_std_mean_axis(cache: mut cache, x: x, axis: dim, correction: correction)
 }
 
 fn tensor_normalize(cache: mut UOpCache, x: Int, p: Float, dim: Int, eps: Float) -> Int {

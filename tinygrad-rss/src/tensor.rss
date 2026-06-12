@@ -4156,6 +4156,17 @@ fn tensor_scaled_dot_product_attention_add_mask(cache: mut UOpCache, query: Int,
     return tensor_matmul(cache: mut cache, a: dropped, b: value)
 }
 
+fn tensor_scaled_dot_product_attention_gqa(cache: mut UOpCache, query: Int, key: Int, value: Int, dropout_p: Float, training: Bool, seed: Int) -> Int {
+    local qshape = uop_shape(cache: read cache, id: query)
+    local kshape = uop_shape(cache: read cache, id: key)
+    let q_heads = List.get<Int>(list: read qshape, index: List.len<Int>(list: read qshape) - 3)
+    let k_heads = List.get<Int>(list: read kshape, index: List.len<Int>(list: read kshape) - 3)
+    let repeats = q_heads / k_heads
+    let key_rep = tensor_repeat_interleave_dim(cache: mut cache, x: key, repeats: repeats, dim: 0 - 3)
+    let value_rep = tensor_repeat_interleave_dim(cache: mut cache, x: value, repeats: repeats, dim: 0 - 3)
+    return tensor_scaled_dot_product_attention(cache: mut cache, query: query, key: key_rep, value: value_rep, dropout_p: dropout_p, training: training, seed: seed)
+}
+
 fn tensor_linear(cache: mut UOpCache, x: Int, weight: Int, bias: Int) -> Int {
     let y = tensor_dot(cache: mut cache, x: x, w: weight)
     return tensor_add(cache: mut cache, a: y, b: bias)

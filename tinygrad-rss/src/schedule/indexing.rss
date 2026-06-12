@@ -21,6 +21,11 @@ struct IndexingRealizeAxisRecord derives(Clone) {
     axes: List<Int>,
 }
 
+struct IndexingEndingRecord derives(Clone) {
+    node: Int,
+    ranges: List<Int>,
+}
+
 struct IndexingRangeifyResult derives(Clone) {
     records: List<IndexingRangeRecord>,
     realize_axes: List<IndexingRealizeAxisRecord>,
@@ -439,6 +444,74 @@ fn indexing_all_axes(rank: Int) -> fresh List<Int> {
     return take axes
 }
 
+fn indexing_ending_record_index(records: read List<IndexingEndingRecord>, node: Int) -> Int {
+    let mut i = 0
+    while i < List.len<IndexingEndingRecord>(list: read records) {
+        let rec = List.get<IndexingEndingRecord>(list: read records, index: i)
+        if rec.node == node { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn indexing_collect_consumer_ending_ranges(cache: read UOpCache, order: read List<Int>, endings: read List<IndexingEndingRecord>, node: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let cand = List.get<Int>(list: read order, index: i)
+        if indexing_consumer_uses(cache: read cache, consumer: cand, node: node) {
+            let ei = indexing_ending_record_index(records: read endings, node: cand)
+            if ei >= 0 {
+                let rec = List.get<IndexingEndingRecord>(list: read endings, index: ei)
+                let mut j = 0
+                while j < List.len<Int>(list: read rec.ranges) {
+                    indexing_add_unique(items: mut out, value: List.get<Int>(list: read rec.ranges, index: j))
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_set_ending_ranges(endings: mut List<IndexingEndingRecord>, node: Int, ranges: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<IndexingEndingRecord>(list: read endings) {
+        let rec = List.get<IndexingEndingRecord>(list: read endings, index: i)
+        if rec.node == node {
+            local copied = copy_int_list(l: read ranges)
+            local nr = IndexingEndingRecord(node: node, ranges: take copied)
+            List.set<IndexingEndingRecord>(list: mut endings, index: i, value: read manage nr)
+            return Unit
+        }
+        i = i + 1
+    }
+    local copied2 = copy_int_list(l: read ranges)
+    local nr2 = IndexingEndingRecord(node: node, ranges: take copied2)
+    List.push<IndexingEndingRecord>(list: mut endings, value: read manage nr2)
+    return Unit
+}
+
+fn indexing_collect_expand_ended_ranges(cache: read UOpCache, out_ranges: read List<Int>, in_ranges: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read out_ranges) {
+        let ro = List.get<Int>(list: read out_ranges, index: i)
+        let ri = List.get<Int>(list: read in_ranges, index: i)
+        if ro != ri {
+            local rr = uop_ranges(cache: read cache, id: ro)
+            let mut j = 0
+            while j < List.len<Int>(list: read rr) {
+                indexing_add_unique(items: mut out, value: List.get<Int>(list: read rr, index: j))
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return take out
+}
+
 fn indexing_consumer_axis_same_idx(cache: read UOpCache, records: read List<IndexingRangeRecord>, consumers: read List<Int>, axis: Int) -> Bool {
     if List.len<Int>(list: read consumers) == 0 { return false }
     let first_rec = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: 0))
@@ -498,13 +571,57 @@ fn indexing_add_realize_axes(realize_axes: mut List<IndexingRealizeAxisRecord>, 
     let mut i = 0
     while i < List.len<IndexingRealizeAxisRecord>(list: read realize_axes) {
         let rec = List.get<IndexingRealizeAxisRecord>(list: read realize_axes, index: i)
-        if rec.node == node { return Unit }
+        if rec.node == node {
+            local merged = copy_int_list(l: read rec.axes)
+            let mut j = 0
+            while j < List.len<Int>(list: read axes) {
+                indexing_add_unique(items: mut merged, value: List.get<Int>(list: read axes, index: j))
+                j = j + 1
+            }
+            local nr = IndexingRealizeAxisRecord(node: node, axes: take merged)
+            List.set<IndexingRealizeAxisRecord>(list: mut realize_axes, index: i, value: read manage nr)
+            return Unit
+        }
         i = i + 1
     }
     local copied = copy_int_list(l: read axes)
     local rec = IndexingRealizeAxisRecord(node: node, axes: take copied)
     List.push<IndexingRealizeAxisRecord>(list: mut realize_axes, value: read manage rec)
     return Unit
+}
+
+fn indexing_apply_ending_realization(cache: mut UOpCache, ctx: mut IndexingContext, realize_axes: mut List<IndexingRealizeAxisRecord>, node: Int, out_ranges: read List<Int>, shape: read List<Int>, ended_ranges: read List<Int>) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: node)
+    if List.len<Int>(list: read ended_ranges) == 0 { return copy_int_list(l: read out_ranges) }
+    if group_elementwise(op: read op) == false && op != REDUCE { return copy_int_list(l: read out_ranges) }
+    let mut axes = List.new<Int>()
+    let rai = indexing_realize_axis_index(records: read realize_axes, node: node)
+    if rai >= 0 {
+        let rec = List.get<IndexingRealizeAxisRecord>(list: read realize_axes, index: rai)
+        axes = copy_int_list(l: read rec.axes)
+    }
+    let mut i = 0
+    while i < List.len<Int>(list: read out_ranges) {
+        if indexing_list_contains(items: read axes, value: i) == false {
+            List.push<Int>(list: mut axes, value: read i)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read axes) > 0 {
+        indexing_add_realize_axes(realize_axes: mut realize_axes, node: node, axes: read axes)
+    }
+    local out = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read out_ranges) {
+        if indexing_list_contains(items: read axes, value: j) {
+            let nr = indexing_new_range(cache: mut cache, ctx: mut ctx, size: List.get<Int>(list: read shape, index: j), axis_type: read AXIS_LOOP)
+            List.push<Int>(list: mut out, value: read nr)
+        } else {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read out_ranges, index: j))
+        }
+        j = j + 1
+    }
+    return take out
 }
 
 fn indexing_is_rangeify_skip(cache: read UOpCache, id: Int) -> Bool {
@@ -703,6 +820,7 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
     local realized = indexing_generate_realize_map(cache: read cache, root: root)
     local records = List.new<IndexingRangeRecord>()
     local realize_axes = List.new<IndexingRealizeAxisRecord>()
+    local endings = List.new<IndexingEndingRecord>()
     local order = uop_toposort_enter_calls(cache: read cache, id: root, enter_calls: false)
     let mut oi = List.len<Int>(list: read order) - 1
     while oi >= 0 {
@@ -710,10 +828,13 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
         if indexing_is_rangeify_skip(cache: read cache, id: x) == false {
             let mut out_rngs = List.new<Int>()
             local shape = uop_shape(cache: read cache, id: x)
+            let mut ended_ranges = indexing_collect_consumer_ending_ranges(cache: read cache, order: read order, endings: read endings, node: x)
             if indexing_list_contains(items: read realized.nodes, value: x) {
                 out_rngs = indexing_ranges_for_shape(cache: mut cache, ctx: mut rctx, shape: read shape, axis_type: read AXIS_LOOP)
                 local axes = indexing_all_axes(rank: List.len<Int>(list: read shape))
                 indexing_add_realize_axes(realize_axes: mut realize_axes, node: x, axes: read axes)
+                local cleared = List.new<Int>()
+                ended_ranges = take cleared
             } else {
                 local consumers = indexing_collect_consumer_records(cache: read cache, order: read order, records: read records, node: x)
                 if List.len<Int>(list: read consumers) == 1 {
@@ -726,6 +847,7 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
                 }
             }
             if List.len<Int>(list: read out_rngs) > 0 || List.len<Int>(list: read shape) == 0 {
+                out_rngs = indexing_apply_ending_realization(cache: mut cache, ctx: mut rctx, realize_axes: mut realize_axes, node: x, out_ranges: read out_rngs, shape: read shape, ended_ranges: read ended_ranges)
                 let mut in_rngs = copy_int_list(l: read out_rngs)
                 let op = node_op(cache: read cache, id: x)
                 if group_movement(op: read op) {
@@ -734,11 +856,20 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
                     local marg = indexing_movement_arg_for_node(cache: read cache, id: x)
                     in_rngs = indexing_apply_movement_op(cache: mut cache, op: read op, in_shape: read src_shape, arg: read marg, rngs: read out_rngs)
                 }
+                if op == EXPAND {
+                    local expanded_ended = indexing_collect_expand_ended_ranges(cache: read cache, out_ranges: read out_rngs, in_ranges: read in_rngs)
+                    let mut ee = 0
+                    while ee < List.len<Int>(list: read expanded_ended) {
+                        indexing_add_unique(items: mut ended_ranges, value: List.get<Int>(list: read expanded_ended, index: ee))
+                        ee = ee + 1
+                    }
+                }
                 if op == REDUCE { in_rngs = indexing_reduce_input_ranges(cache: mut cache, ctx: mut rctx, reduce: x, out_ranges: read out_rngs) }
                 local in_copy = copy_int_list(l: read in_rngs)
                 local out_copy = copy_int_list(l: read out_rngs)
                 local rec = IndexingRangeRecord(node: x, in_ranges: take in_copy, out_ranges: take out_copy)
                 List.push<IndexingRangeRecord>(list: mut records, value: read manage rec)
+                indexing_set_ending_ranges(endings: mut endings, node: x, ranges: read ended_ranges)
             }
         }
         oi = oi - 1

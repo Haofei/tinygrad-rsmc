@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,290 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,431 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -236,6 +236,7 @@ Integrated pieces:
   fast-path and per-coordinate symbolic rewriting, plus the first
   `run_rangeify` analysis half for realized output ranges, single-consumer inheritance,
   multi-consumer same-index validity merging with per-axis realization fallback,
+  EXPAND-origin ending-range propagation and default-PCONTIG elementwise/reduce realization,
   movement input-range swizzling, and `REDUCE` axis range injection, plus the first graph rewrite
   half for source `INDEX` insertion, realized `STAGE` insertion, movement removal, and `REDUCE`
   range-source conversion. Graph-backed `PAD`/`SHRINK` movement args are recovered from shape
@@ -366,7 +367,8 @@ Current integrated demo:
   and row-major `RESHAPE` div/mod index mapping plus identity simplification.
 - validates scheduler indexing rangeify analysis records for realized roots, inherited movement
   chains, `PERMUTE` input-range swizzling, same-index multi-consumer range merging without
-  unnecessary staging, and `REDUCE` `AXIS_REDUCE` injection.
+  unnecessary staging, EXPAND-triggered ending-range realization, and `REDUCE` `AXIS_REDUCE`
+  injection.
 - validates scheduler indexing rangeify graph rewrite for movement removal through `INDEX` and
   `REDUCE` metadata-to-range-source conversion, plus PAD-to-`WHERE` locality wrapping.
 - validates scheduler indexing rangeify `STAGE` option selection for full global staging,
@@ -719,6 +721,7 @@ Major missing integrated work:
   are integrated, and `schedule/indexing.rss` has realize-map generation, first range/movement
   helpers including PAD and RESHAPE, first RESHAPE identity/per-coordinate symbolic
   simplification, first rangeify analysis records including same-index multi-consumer merging,
+  first EXPAND-origin ending-range realization,
   and first rangeify graph
   rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, full upstream sink-level RESHAPE simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,

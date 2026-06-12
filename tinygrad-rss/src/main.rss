@@ -1859,6 +1859,18 @@ fn main() -> Unit {
     let mgater_load = mk_load(cache: mut mcache, ptr: mgater_ptr, srcs: read mgater_load_srcs, dt: read i32)
     let mgater_store = mk_store(cache: mut mcache, ptr: mgater_ptr, value: m3, gate: read None)
     let mgater_store_gated = mk_store(cache: mut mcache, ptr: mgater_ptr, value: m3, gate: read Some(mfalse))
+    let mgater_cast_ptr = mk_cast(cache: mut mcache, x: mgater_ptr, dt: read dt_float32())
+    local mgater_cast_load_srcs = List.new<Int>()
+    let mgater_cast_load = mk_load(cache: mut mcache, ptr: mgater_cast_ptr, srcs: read mgater_cast_load_srcs, dt: read dt_float32())
+    let mweak8 = mk_const_int(cache: mut mcache, dt: read dt_weakint(), v: 8)
+    let mvalid_idx_x = uop_valid(cache: mut mcache, id: mweak8, cond: mbool)
+    local mgater_idx2_srcs = List.new<Int>()
+    List.push<Int>(list: mut mgater_idx2_srcs, value: read mvalid_idx)
+    List.push<Int>(list: mut mgater_idx2_srcs, value: read mvalid_idx_x)
+    let mgater_ptr2 = mk_index(cache: mut mcache, base: mgater_buf, srcs: read mgater_idx2_srcs, ptr: true)
+    local mgater_load2_srcs = List.new<Int>()
+    let mgater_load2 = mk_load(cache: mut mcache, ptr: mgater_ptr2, srcs: read mgater_load2_srcs, dt: read i32)
+    let mgater_store2 = mk_store(cache: mut mcache, ptr: mgater_ptr2, value: m3, gate: read None)
     let mut mgater_load_ok = false
     match gater_move_gate_from_index(cache: mut mcache, id: mgater_load) {
         Some(gl) => {
@@ -1867,6 +1879,67 @@ fn main() -> Unit {
             let gl_alt = node_src_id(cache: read mcache, id: gl, k: 1)
             let gl_gate = node_src_id(cache: read mcache, id: gl, k: 2)
             mgater_load_ok = node_op(cache: read mcache, id: gl) == LOAD && node_num_src(cache: read mcache, id: gl) == 3 && node_op(cache: read mcache, id: gl_ptr) == INDEX && node_op(cache: read mcache, id: gl_idx) != WHERE && node_const_int(cache: read mcache, id: gl_alt) == 0 && gl_gate == mbool
+        }
+        None => {}
+    }
+    let mut mgater_cast_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_cast_load) {
+        Some(gcl) => {
+            let gcl_ptr = node_src_id(cache: read mcache, id: gcl, k: 0)
+            let gcl_idx = node_src_id(cache: read mcache, id: gcl_ptr, k: 0)
+            let gcl_gate = node_src_id(cache: read mcache, id: gcl, k: 2)
+            mgater_cast_ok = node_op(cache: read mcache, id: gcl) == LOAD && node_op(cache: read mcache, id: gcl_ptr) == CAST && node_op(cache: read mcache, id: gcl_idx) == INDEX && gcl_gate == mbool
+        }
+        None => {}
+    }
+    let mut mgater_2d_load_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_load2) {
+        Some(gl2) => {
+            let gl2_ptr = node_src_id(cache: read mcache, id: gl2, k: 0)
+            let gl2_y = node_src_id(cache: read mcache, id: gl2_ptr, k: 1)
+            let gl2_x = node_src_id(cache: read mcache, id: gl2_ptr, k: 2)
+            let gl2_gate = node_src_id(cache: read mcache, id: gl2, k: 2)
+            mgater_2d_load_ok = node_op(cache: read mcache, id: gl2) == LOAD && node_num_src(cache: read mcache, id: gl2_ptr) == 3 && node_op(cache: read mcache, id: gl2_y) != WHERE && node_op(cache: read mcache, id: gl2_x) != WHERE && gl2_gate == mbool
+        }
+        None => {}
+    }
+    let mut mgater_2d_store_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_store2) {
+        Some(gs2) => {
+            let gs2_ptr = node_src_id(cache: read mcache, id: gs2, k: 0)
+            let gs2_y = node_src_id(cache: read mcache, id: gs2_ptr, k: 1)
+            let gs2_x = node_src_id(cache: read mcache, id: gs2_ptr, k: 2)
+            let gs2_gate = node_src_id(cache: read mcache, id: gs2, k: 2)
+            mgater_2d_store_ok = node_op(cache: read mcache, id: gs2) == STORE && node_num_src(cache: read mcache, id: gs2_ptr) == 3 && node_op(cache: read mcache, id: gs2_y) != WHERE && node_op(cache: read mcache, id: gs2_x) != WHERE && gs2_gate == mbool && spec_type_verify(cache: read mcache, id: gs2)
+        }
+        None => {}
+    }
+    local mgater_load_gate_srcs = List.new<Int>()
+    List.push<Int>(list: mut mgater_load_gate_srcs, value: read mfalse)
+    List.push<Int>(list: mut mgater_load_gate_srcs, value: read mbool)
+    let mgater_gated_load = mk_load(cache: mut mcache, ptr: mgater_ptr, srcs: read mgater_load_gate_srcs, dt: read i32)
+    let mgater_where_load = mk_where(cache: mut mcache, dt: read i32, cond: mbool, tval: mgater_gated_load, fval: m2)
+    let mgater_not_gate = symbolic_bool_logical_not(cache: mut mcache, id: mbool)
+    local mgater_not_load_srcs = List.new<Int>()
+    List.push<Int>(list: mut mgater_not_load_srcs, value: read mfalse)
+    List.push<Int>(list: mut mgater_not_load_srcs, value: read mgater_not_gate)
+    let mgater_not_load = mk_load(cache: mut mcache, ptr: mgater_ptr, srcs: read mgater_not_load_srcs, dt: read i32)
+    let mgater_where_not_load = mk_where(cache: mut mcache, dt: read i32, cond: mbool, tval: m2, fval: mgater_not_load)
+    let mut mgater_where_load_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_where_load) {
+        Some(gwl) => {
+            let gwl_alt = node_src_id(cache: read mcache, id: gwl, k: 1)
+            let gwl_gate = node_src_id(cache: read mcache, id: gwl, k: 2)
+            mgater_where_load_ok = node_op(cache: read mcache, id: gwl) == LOAD && gwl_alt == m2 && gwl_gate == mbool
+        }
+        None => {}
+    }
+    let mut mgater_where_not_load_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_where_not_load) {
+        Some(gwnl) => {
+            let gwnl_alt = node_src_id(cache: read mcache, id: gwnl, k: 1)
+            let gwnl_gate = node_src_id(cache: read mcache, id: gwnl, k: 2)
+            mgater_where_not_load_ok = node_op(cache: read mcache, id: gwnl) == LOAD && gwnl_alt == m2 && gwnl_gate == mgater_not_gate
         }
         None => {}
     }
@@ -1891,6 +1964,11 @@ fn main() -> Unit {
     showb(label: read "codegen.gater load gate moved = ", v: mgater_load_ok)
     showb(label: read "codegen.gater store gate moved = ", v: mgater_store_ok)
     showb(label: read "codegen.gater combines store gates = ", v: mgater_combine_ok)
+    showb(label: read "codegen.gater casted index gate moved = ", v: mgater_cast_ok)
+    showb(label: read "codegen.gater 2d load gate moved = ", v: mgater_2d_load_ok)
+    showb(label: read "codegen.gater 2d store gate moved = ", v: mgater_2d_store_ok)
+    showb(label: read "codegen.gater where load alt moved = ", v: mgater_where_load_ok)
+    showb(label: read "codegen.gater where inverted load alt moved = ", v: mgater_where_not_load_ok)
     let minvalid3 = uop_invalid(cache: mut mcache, count: 3)
     showb(label: read "uop.invalid(3) is invalid = ", v: uop_is_invalid(cache: read mcache, id: minvalid3))
     showi(label: read "uop.invalid(3) dtype count = ", v: node_full_dtype(cache: read mcache, id: minvalid3).count)

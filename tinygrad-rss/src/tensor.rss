@@ -1272,6 +1272,144 @@ fn tensor_pad_constant(cache: mut UOpCache, x: Int, before: read List<Int>, afte
     return tensor_where(cache: mut cache, cond: mask, x: base, y: fill)
 }
 
+fn tensor_axis_slice(cache: mut UOpCache, x: Int, axis: Int, start: Int, end: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read shape)
+    let d = tensor_resolve_dim(ndim: ndim, dim: axis, extra: false)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    let mut i = 0
+    while i < ndim {
+        if i == d {
+            push1(l: mut starts, a: start)
+            push1(l: mut ends, a: end)
+        } else {
+            push1(l: mut starts, a: 0)
+            push1(l: mut ends, a: List.get<Int>(list: read shape, index: i))
+        }
+        i = i + 1
+    }
+    return mk_shrink(cache: mut cache, x: x, starts: read starts, ends: read ends)
+}
+
+fn tensor_axis_flip(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    local axes = List.new<Int>()
+    push1(l: mut axes, a: axis)
+    return tensor_flip(cache: mut cache, x: x, axes: read axes)
+}
+
+fn tensor_axis_expand_len(cache: mut UOpCache, x: Int, axis: Int, size: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read shape)
+    let d = tensor_resolve_dim(ndim: ndim, dim: axis, extra: false)
+    local out_shape = List.new<Int>()
+    let mut i = 0
+    while i < ndim {
+        if i == d { push1(l: mut out_shape, a: size) }
+        else { push1(l: mut out_shape, a: List.get<Int>(list: read shape, index: i)) }
+        i = i + 1
+    }
+    return tensor_expand(cache: mut cache, x: x, new_shape: read out_shape)
+}
+
+fn tensor_pad_circular(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    local pads_before = List.new<Int>()
+    local pads_after = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        let p_before = List.get<Int>(list: read before, index: i)
+        let p_after = List.get<Int>(list: read after, index: i)
+        let dim = List.get<Int>(list: read shape, index: i)
+        push1(l: mut starts, a: 0 - tensor_min_int(a: p_before, b: 0))
+        push1(l: mut ends, a: tensor_min_int(a: p_after + dim, b: dim))
+        push1(l: mut pads_before, a: tensor_max_int(a: p_before, b: 0))
+        push1(l: mut pads_after, a: tensor_max_int(a: p_after, b: 0))
+        i = i + 1
+    }
+    let shrunk = mk_shrink(cache: mut cache, x: x, starts: read starts, ends: read ends)
+    local shrunk_shape = uop_shape(cache: read cache, id: shrunk)
+    local reps = List.new<Int>()
+    let mut r = 0
+    while r < List.len<Int>(list: read shrunk_shape) {
+        let p_before = List.get<Int>(list: read pads_before, index: r)
+        let p_after = List.get<Int>(list: read pads_after, index: r)
+        let mut rep = 1
+        if p_before > 0 { rep = rep + 1 }
+        if p_after > 0 { rep = rep + 1 }
+        push1(l: mut reps, a: rep)
+        r = r + 1
+    }
+    let repeated = tensor_repeat(cache: mut cache, x: shrunk, repeats: read reps)
+    local repeated_shape = uop_shape(cache: read cache, id: repeated)
+    local final_starts = List.new<Int>()
+    local final_ends = List.new<Int>()
+    let mut f = 0
+    while f < List.len<Int>(list: read repeated_shape) {
+        let p_before = List.get<Int>(list: read pads_before, index: f)
+        let p_after = List.get<Int>(list: read pads_after, index: f)
+        let orig = List.get<Int>(list: read shrunk_shape, index: f)
+        let rep_dim = List.get<Int>(list: read repeated_shape, index: f)
+        if p_before == 0 { push1(l: mut final_starts, a: 0) }
+        else { push1(l: mut final_starts, a: orig - p_before) }
+        if p_after == 0 { push1(l: mut final_ends, a: rep_dim) }
+        else { push1(l: mut final_ends, a: rep_dim - orig + p_after) }
+        f = f + 1
+    }
+    return mk_shrink(cache: mut cache, x: repeated, starts: read final_starts, ends: read final_ends)
+}
+
+fn tensor_pad_reflect_replicate(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>, reflect: Bool) -> Int {
+    let mut cur = x
+    let ndim = List.len<Int>(list: read before)
+    let mut d = 0
+    while d < ndim {
+        let p_before = tensor_max_int(a: List.get<Int>(list: read before, index: d), b: 0)
+        let p_after = tensor_max_int(a: List.get<Int>(list: read after, index: d), b: 0)
+        if p_before > 0 || p_after > 0 {
+            local cur_shape = uop_shape(cache: read cache, id: cur)
+            let dim = List.get<Int>(list: read cur_shape, index: d)
+            local pieces = List.new<Int>()
+            if p_before > 0 {
+                if reflect {
+                    let left_slice = tensor_axis_slice(cache: mut cache, x: cur, axis: d, start: 1, end: p_before + 1)
+                    push1(l: mut pieces, a: tensor_axis_flip(cache: mut cache, x: left_slice, axis: d))
+                } else {
+                    let left_edge = tensor_axis_slice(cache: mut cache, x: cur, axis: d, start: 0, end: 1)
+                    push1(l: mut pieces, a: tensor_axis_expand_len(cache: mut cache, x: left_edge, axis: d, size: p_before))
+                }
+            }
+            push1(l: mut pieces, a: cur)
+            if p_after > 0 {
+                if reflect {
+                    let right_slice = tensor_axis_slice(cache: mut cache, x: cur, axis: d, start: dim - p_after - 1, end: dim - 1)
+                    push1(l: mut pieces, a: tensor_axis_flip(cache: mut cache, x: right_slice, axis: d))
+                } else {
+                    let right_edge = tensor_axis_slice(cache: mut cache, x: cur, axis: d, start: dim - 1, end: dim)
+                    push1(l: mut pieces, a: tensor_axis_expand_len(cache: mut cache, x: right_edge, axis: d, size: p_after))
+                }
+            }
+            cur = tensor_cat(cache: mut cache, tensors: read pieces, dim: d)
+        }
+        d = d + 1
+    }
+    local final_shape = uop_shape(cache: read cache, id: cur)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    let mut i = 0
+    while i < ndim {
+        let p_before = List.get<Int>(list: read before, index: i)
+        let p_after = List.get<Int>(list: read after, index: i)
+        let dim = List.get<Int>(list: read final_shape, index: i)
+        push1(l: mut starts, a: 0 - tensor_min_int(a: p_before, b: 0))
+        push1(l: mut ends, a: tensor_min_int(a: p_after + dim, b: dim))
+        i = i + 1
+    }
+    return mk_shrink(cache: mut cache, x: cur, starts: read starts, ends: read ends)
+}
+
 fn tensor_pad_or_shrink2d_nchw_constant(cache: mut UOpCache, x: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, value: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let bs = List.get<Int>(list: read sh, index: 0)
@@ -2118,6 +2256,11 @@ fn tensor_diag(cache: mut UOpCache, x: Int) -> Int {
 
 fn tensor_min_int(a: Int, b: Int) -> Int {
     if a < b { return a }
+    return b
+}
+
+fn tensor_max_int(a: Int, b: Int) -> Int {
+    if a > b { return a }
     return b
 }
 

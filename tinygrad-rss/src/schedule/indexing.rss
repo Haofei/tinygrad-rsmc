@@ -372,6 +372,16 @@ fn indexing_record_index(records: read List<IndexingRangeRecord>, node: Int) -> 
     return 0 - 1
 }
 
+fn indexing_realize_axis_index(records: read List<IndexingRealizeAxisRecord>, node: Int) -> Int {
+    let mut i = 0
+    while i < List.len<IndexingRealizeAxisRecord>(list: read records) {
+        let rec = List.get<IndexingRealizeAxisRecord>(list: read records, index: i)
+        if rec.node == node { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
 fn indexing_consumer_uses(cache: read UOpCache, consumer: Int, node: Int) -> Bool {
     let mut i = 0
     while i < node_num_src(cache: read cache, id: consumer) {
@@ -451,6 +461,107 @@ fn indexing_reduce_input_ranges(cache: mut UOpCache, ctx: mut IndexingContext, r
         i = i + 1
     }
     return take out
+}
+
+fn indexing_source_like(op: read Ops) -> Bool {
+    if op == PARAM || op == BUFFER || op == SLICE || op == MSTACK || op == MSELECT || op == AFTER { return true }
+    return false
+}
+
+fn indexing_select_axes(items: read List<Int>, axes: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read axes) {
+        let ax = List.get<Int>(list: read axes, index: i)
+        if ax >= 0 && ax < List.len<Int>(list: read items) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read items, index: ax))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_reduce_with_ranges(cache: mut UOpCache, id: Int, src0: Int, ranges: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read src0)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        List.push<Int>(list: mut src, value: read List.get<Int>(list: read ranges, index: i))
+        i = i + 1
+    }
+    local axes = List.new<Int>()
+    local r = ReduceArg(kind: node_reduce_kind(cache: read cache, id: id), axes: take axes)
+    local a = ArgReduce(value: take r)
+    return intern(cache: mut cache, op: REDUCE, dt: read node_full_dtype(cache: read cache, id: id), src: take src, arg: take a)
+}
+
+fn indexing_rewrite_child_for_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, parent_rec_i: Int, child_orig: Int, child_rewritten: Int) -> Int {
+    let child_op = node_op(cache: read cache, id: child_orig)
+    if parent_rec_i >= 0 && indexing_source_like(op: read child_op) {
+        let prec = List.get<IndexingRangeRecord>(list: read analysis.records, index: parent_rec_i)
+        return mk_index(cache: mut cache, base: child_rewritten, srcs: read prec.in_ranges, ptr: false)
+    }
+    let rai = indexing_realize_axis_index(records: read analysis.realize_axes, node: child_orig)
+    if rai >= 0 {
+        let child_rec_i = indexing_record_index(records: read analysis.records, node: child_orig)
+        if child_rec_i >= 0 {
+            let child_rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: child_rec_i)
+            let arec = List.get<IndexingRealizeAxisRecord>(list: read analysis.realize_axes, index: rai)
+            local closed = indexing_select_axes(items: read child_rec.out_ranges, axes: read arec.axes)
+            let opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: true)
+            let staged = mk_stage(cache: mut cache, x: child_rewritten, ranges: read closed, opts: read opts)
+            if parent_rec_i >= 0 {
+                let prec = List.get<IndexingRangeRecord>(list: read analysis.records, index: parent_rec_i)
+                return mk_index(cache: mut cache, base: staged, srcs: read prec.in_ranges, ptr: false)
+            }
+            return staged
+        }
+    }
+    return child_rewritten
+}
+
+fn indexing_rangeify_rewrite_node(cache: mut UOpCache, id: Int, analysis: read IndexingRangeifyResult, olds: mut List<Int>, news: mut List<Int>) -> Int {
+    let mut mi = 0
+    while mi < List.len<Int>(list: read olds) {
+        if id == List.get<Int>(list: read olds, index: mi) { return List.get<Int>(list: read news, index: mi) }
+        mi = mi + 1
+    }
+    let rec_i = indexing_record_index(records: read analysis.records, node: id)
+    let op = node_op(cache: read cache, id: id)
+    local rewritten_src = List.new<Int>()
+    let mut si = 0
+    while si < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: si)
+        let child_rewritten = indexing_rangeify_rewrite_node(cache: mut cache, id: child, analysis: read analysis, olds: mut olds, news: mut news)
+        let adjusted = indexing_rewrite_child_for_ranges(cache: mut cache, analysis: read analysis, parent_rec_i: rec_i, child_orig: child, child_rewritten: child_rewritten)
+        List.push<Int>(list: mut rewritten_src, value: read adjusted)
+        si = si + 1
+    }
+    let mut out = id
+    if op == REDUCE && rec_i >= 0 && List.len<Int>(list: read node_argints(cache: read cache, id: id)) > 0 {
+        let rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: rec_i)
+        local axes = node_argints(cache: read cache, id: id)
+        local reduce_ranges = indexing_select_axes(items: read rec.in_ranges, axes: read axes)
+        out = indexing_reduce_with_ranges(cache: mut cache, id: id, src0: List.get<Int>(list: read rewritten_src, index: 0), ranges: read reduce_ranges)
+    } else {
+        if group_movement(op: read op) && rec_i >= 0 {
+            out = List.get<Int>(list: read rewritten_src, index: 0)
+        } else {
+            if node_num_src(cache: read cache, id: id) > 0 {
+                local arg = node_arg(cache: read cache, id: id)
+                out = intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: id), src: take rewritten_src, arg: take arg)
+            }
+        }
+    }
+    List.push<Int>(list: mut olds, value: read id)
+    List.push<Int>(list: mut news, value: read out)
+    return out
+}
+
+fn indexing_apply_rangeify_rewrite(cache: mut UOpCache, root: Int, analysis: read IndexingRangeifyResult) -> Int {
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    return indexing_rangeify_rewrite_node(cache: mut cache, id: root, analysis: read analysis, olds: mut olds, news: mut news)
 }
 
 fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh IndexingRangeifyResult {

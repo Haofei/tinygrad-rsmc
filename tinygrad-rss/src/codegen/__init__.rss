@@ -1,9 +1,17 @@
 // Integrated source-shaped slice of tinygrad/codegen/__init__.py.
 //
 // This wires the linearized program form into estimates and renderer output.
-// Compile/binary materialization and the full schedule/device rewrite path
-// remain later slices.
+// Binary materialization and the full schedule/device rewrite path remain
+// later slices.
 features: local
+
+struct CodegenHostCompileResult derives(Clone) {
+    ok: Bool,
+    source_id: Int,
+    source_len: Int,
+    status: Int,
+    stderr_len: Int,
+}
 
 fn codegen_push_sorted_unique_int(vals: mut List<Int>, v: Int) -> Unit {
     let mut i = 0
@@ -376,6 +384,45 @@ fn codegen_do_render_cstyle(cache: mut UOpCache, prg: Int) -> Int {
     local prog = node_program_arg(cache: read cache, id: prg)
     local arg = ArgProgram(value: take prog)
     return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}
+
+fn codegen_program_source_id(cache: read UOpCache, prg: Int) -> Int {
+    if node_op(cache: read cache, id: prg) != PROGRAM { return 0 - 1 }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: prg) {
+        let s = node_src_id(cache: read cache, id: prg, k: i)
+        if node_op(cache: read cache, id: s) == SOURCE { return s }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn codegen_host_compile_check_c(cache: read UOpCache, prg: Int, path_text: read String) -> fresh CodegenHostCompileResult {
+    let source_id = codegen_program_source_id(cache: read cache, prg: prg)
+    if source_id < 0 {
+        return CodegenHostCompileResult(ok: false, source_id: source_id, source_len: 0, status: 0 - 1, stderr_len: 0)
+    }
+    let source = uop_arg_to_string(arg: read node_arg(cache: read cache, id: source_id))
+    let source_len = String.len(value: read source)
+    let path = Path.from_string(value: read path_text)
+    match Path.write_string(path: read path, text: read source) {
+        Ok(unit) => {
+        }
+        Err(error) => {
+            return CodegenHostCompileResult(ok: false, source_id: source_id, source_len: source_len, status: 0 - 2, stderr_len: 0)
+        }
+    }
+    let args: List<String> = ["-x", "c", "-std=c11", "-fsyntax-only", path_text]
+    match Process.run(command: read "clang", args: read args) {
+        Ok(output) => {
+            return CodegenHostCompileResult(ok: output.status == 0, source_id: source_id, source_len: source_len,
+                                            status: output.status, stderr_len: String.len(value: read output.stderr))
+        }
+        Err(error) => {
+            return CodegenHostCompileResult(ok: false, source_id: source_id, source_len: source_len,
+                                            status: 0 - 3, stderr_len: String.len(value: read error))
+        }
+    }
 }
 
 fn codegen_to_program_cstyle(cache: mut UOpCache, prg: Int) -> Int {

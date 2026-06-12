@@ -1088,6 +1088,8 @@ fn main() -> Unit {
     showb(label: read "codegen.to_program has SOURCE = ", v: node_num_src(cache: read mcache, id: ck_to_prog) > 3 && node_op(cache: read mcache, id: node_src_id(cache: read mcache, id: ck_to_prog, k: 3)) == SOURCE)
     showb(label: read "codegen.to_program idempotent = ", v: ck_to_again == ck_to_prog)
     showb(label: read "codegen.to_program program valid = ", v: spec_type_verify(cache: read mcache, id: ck_to_prog))
+    let ck_host_compile = codegen_host_compile_check_c(cache: read mcache, prg: ck_to_prog, path_text: read "/tmp/tinygrad-rss-ck-gated.c")
+    showb(label: read "codegen.host clang source = ", v: ck_host_compile.ok && ck_host_compile.source_id == node_src_id(cache: read mcache, id: ck_to_prog, k: 3) && ck_host_compile.source_len > 0 && ck_host_compile.status == 0 && ck_host_compile.stderr_len == 0)
     local ck_call_args = List.new<Int>()
     List.push<Int>(list: mut ck_call_args, value: read ck_out)
     List.push<Int>(list: mut ck_call_args, value: read ck_in)

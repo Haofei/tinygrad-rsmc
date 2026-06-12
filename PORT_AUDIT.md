@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 17,310 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 17,359 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -145,9 +145,13 @@ Integrated pieces:
   derives first `ProgramInfo.from_sink`-style program metadata (`vars`, `globals`, `outs`, `ins`,
   and integer `SPECIAL` launch dimensions for `g*`, `l*`, and `i*` names) for the current lowered
   sink shape, then appends a `SOURCE` child with the rendered kernel text. It also has the first
-  `to_program`-style orchestration for the supported C-style path:
+  host compile/syntax bridge for rendered CStyle source, writing the attached `SOURCE` to a path
+  and invoking `clang -x c -std=c11 -fsyntax-only` through RSScript `Path`/`Process`, returning
+  source id/length, exit status, stderr length, and ok/fail metadata for the current generated
+  kernel, plus the first `to_program`-style orchestration for the supported C-style path:
   `do_linearize -> do_estimates -> do_render_cstyle`. Full symbolic `sint` estimates,
-  aux metadata, compile/binary materialization, and full schedule/device rewrite orchestration remain unported.
+  aux metadata, compiled binary materialization, executable runtime invocation, and full
+  schedule/device rewrite orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `PARAM`/
   `DEFINE_LOCAL`/`DEFINE_REG` shape payloads, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
@@ -171,7 +175,7 @@ Integrated pieces:
   It also includes the first per-context runtime cache keyed by function/source metadata, returning
   stable runtime handles with hit/miss reporting. Local-size optimization, compiled numeric kernel
   invocation, validation execution, graph execution, full multi-buffer/device remapping, and
-  process/dynamic-library runtime plumbing remain unported.
+  dynamic-library runtime plumbing remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream

@@ -224,15 +224,27 @@ fn cstyle_indent(depth: Int, line: read String) -> fresh String {
 }
 
 fn cstyle_param_data_name(cache: read UOpCache, id: Int) -> fresh String {
-    return cstyle_cat(a: read "data", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
+    let mut out = cstyle_cat(a: read "data", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
+    let numel = cstyle_shape_numel(cache: read cache, id: id)
+    if numel > 0 {
+        out = cstyle_cat(a: read out, b: read "_")
+        out = cstyle_cat(a: read out, b: read Int.to_string(value: read numel))
+    }
+    return String.copy(value: read out)
 }
 
-fn cstyle_max_numel(cache: read UOpCache, id: Int) -> Int {
+fn cstyle_shape_numel(cache: read UOpCache, id: Int) -> Int {
     if node_num_src(cache: read cache, id: id) > 0 {
         let shape_id = node_src_id(cache: read cache, id: id, k: 0)
         local sh = node_argints(cache: read cache, id: shape_id)
         return prod(x: read sh)
     }
+    return 0
+}
+
+fn cstyle_max_numel(cache: read UOpCache, id: Int) -> Int {
+    let numel = cstyle_shape_numel(cache: read cache, id: id)
+    if numel > 0 { return numel }
     return 1
 }
 
@@ -388,7 +400,7 @@ fn cstyle_render_statement_ctx(cache: read UOpCache, names: read Map<Int, String
     return cstyle_render_node_expr_ctx(cache: read cache, names: read names, id: id)
 }
 
-fn cstyle_param_decl(cache: read UOpCache, id: Int) -> fresh String {
+fn cstyle_param_decl(cache: read UOpCache, id: Int, mutable: Bool) -> fresh String {
     if node_op(cache: read cache, id: id) == DEFINE_VAR {
         let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
         return cstyle_cat(a: read "const ", b: read cstyle_cat(a: read dt, b: read cstyle_cat(a: read " ", b: read uop_expr(cache: read cache, id: id))))
@@ -397,13 +409,37 @@ fn cstyle_param_decl(cache: read UOpCache, id: Int) -> fresh String {
     return cstyle_cat(a: read dt, b: read cstyle_cat(a: read "* ", b: read cstyle_param_data_name(cache: read cache, id: id)))
 }
 
-fn cstyle_param_decls(cache: read UOpCache, params: read List<Int>) -> fresh String {
+fn cstyle_reaches_param(cache: read UOpCache, root: Int, param: Int) -> Bool {
+    if root == param { return true }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        if cstyle_reaches_param(cache: read cache, root: child, param: param) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn cstyle_param_is_writable(cache: read UOpCache, order: read List<Int>, id: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let u = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: u) == STORE {
+            let ptr = node_src_id(cache: read cache, id: u, k: 0)
+            if cstyle_reaches_param(cache: read cache, root: ptr, param: id) { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn cstyle_param_decls(cache: read UOpCache, params: read List<Int>, order: read List<Int>) -> fresh String {
     let mut out = String.copy(value: read "")
     let mut i = 0
     while i < List.len<Int>(list: read params) {
         if i > 0 { out = cstyle_cat(a: read out, b: read ", ") }
         let p = List.get<Int>(list: read params, index: i)
-        out = cstyle_cat(a: read out, b: read cstyle_param_decl(cache: read cache, id: p))
+        out = cstyle_cat(a: read out, b: read cstyle_param_decl(cache: read cache, id: p, mutable: cstyle_param_is_writable(cache: read cache, order: read order, id: p)))
         i = i + 1
     }
     return String.copy(value: read out)
@@ -474,7 +510,7 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
         i = i + 1
     }
     local out = List.new<String>()
-    let header = cstyle_cat(a: read "void ", b: read cstyle_cat(a: read function_name, b: read cstyle_cat(a: read "(", b: read cstyle_cat(a: read cstyle_param_decls(cache: read cache, params: read params), b: read ") {"))))
+    let header = cstyle_cat(a: read "void ", b: read cstyle_cat(a: read function_name, b: read cstyle_cat(a: read "(", b: read cstyle_cat(a: read cstyle_param_decls(cache: read cache, params: read params, order: read order), b: read ") {"))))
     List.push<String>(list: mut out, value: read header)
     let mut j = 0
     while j < List.len<String>(list: read lines) {

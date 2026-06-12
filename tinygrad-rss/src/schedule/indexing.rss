@@ -219,6 +219,52 @@ fn indexing_apply_expand(cache: mut UOpCache, rngs: read List<Int>, in_shape: re
     return take out
 }
 
+fn indexing_bool_const(cache: mut UOpCache, v: Int) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dt_bool(), v: v)
+}
+
+fn indexing_ge_const(cache: mut UOpCache, r: Int, value: Int) -> Int {
+    if value <= 0 { return indexing_bool_const(cache: mut cache, v: 1) }
+    let dt = node_dtype(cache: read cache, id: r)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: value - 1)
+    return mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: c, y: r)
+}
+
+fn indexing_lt_const(cache: mut UOpCache, r: Int, value: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: r)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: value)
+    return mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: r, y: c)
+}
+
+fn indexing_apply_pad(cache: mut UOpCache, rngs: read List<Int>, in_shape: read List<Int>, pad_arg: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let rank = List.len<Int>(list: read in_shape)
+    let mut i = 0
+    while i < rank {
+        let r = List.get<Int>(list: read rngs, index: i)
+        let sh = List.get<Int>(list: read in_shape, index: i)
+        let before = List.get<Int>(list: read pad_arg, index: i)
+        let after = List.get<Int>(list: read pad_arg, index: i + rank)
+        if before == 0 && after == 0 {
+            List.push<Int>(list: mut out, value: read r)
+        } else {
+            let dt = node_dtype(cache: read cache, id: r)
+            let lo_ok = indexing_ge_const(cache: mut cache, r: r, value: before)
+            let hi_ok = indexing_lt_const(cache: mut cache, r: r, value: sh + before)
+            let cond = mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: lo_ok, y: hi_ok)
+            let mut idx = r
+            if before != 0 {
+                let off = mk_const_int(cache: mut cache, dt: read dt, v: before)
+                idx = mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: r, y: off)
+            }
+            let valid = uop_valid(cache: mut cache, id: idx, cond: cond)
+            List.push<Int>(list: mut out, value: read valid)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
 fn indexing_apply_movement_op(cache: mut UOpCache, op: Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
     if op == SHRINK {
         local starts = List.new<Int>()
@@ -233,6 +279,7 @@ fn indexing_apply_movement_op(cache: mut UOpCache, op: Ops, in_shape: read List<
     if op == PERMUTE { return indexing_apply_permute(rngs: read rngs, perm: read arg) }
     if op == FLIP { return indexing_apply_flip(cache: mut cache, rngs: read rngs, in_shape: read in_shape, axes: read arg) }
     if op == EXPAND { return indexing_apply_expand(cache: mut cache, rngs: read rngs, in_shape: read in_shape, out_shape: read arg) }
+    if op == PAD { return indexing_apply_pad(cache: mut cache, rngs: read rngs, in_shape: read in_shape, pad_arg: read arg) }
     local out = List.new<Int>()
     let mut j = 0
     while j < List.len<Int>(list: read rngs) {

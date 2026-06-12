@@ -540,6 +540,39 @@ fn uop_contiguous_backward(cache: mut UOpCache, id: Int) -> Int {
     return mk_contiguous_backward(cache: mut cache, x: id)
 }
 
+fn uop_reshape(cache: mut UOpCache, id: Int, new_shape: read List<Int>) -> Int {
+    return mk_reshape(cache: mut cache, x: id, new_shape: read new_shape)
+}
+
+fn uop_expand(cache: mut UOpCache, id: Int, new_shape: read List<Int>) -> Int {
+    if List.len<Int>(list: read new_shape) == 0 {
+        if List.len<Int>(list: read uop_shape(cache: read cache, id: id)) == 0 { return id }
+    }
+    return mk_expand(cache: mut cache, x: id, new_shape: read new_shape)
+}
+
+fn uop_permute(cache: mut UOpCache, id: Int, perm: read List<Int>) -> Int {
+    return mk_permute(cache: mut cache, x: id, perm: read perm)
+}
+
+fn uop_flip(cache: mut UOpCache, id: Int, axes: read List<Int>) -> Int {
+    return mk_flip(cache: mut cache, x: id, axes: read axes)
+}
+
+fn uop_shrink(cache: mut UOpCache, id: Int, starts: read List<Int>, ends: read List<Int>) -> Int {
+    if List.len<Int>(list: read starts) == 0 && List.len<Int>(list: read ends) == 0 {
+        if List.len<Int>(list: read uop_shape(cache: read cache, id: id)) == 0 { return id }
+    }
+    return mk_shrink(cache: mut cache, x: id, starts: read starts, ends: read ends)
+}
+
+fn uop_pad(cache: mut UOpCache, id: Int, before: read List<Int>, after: read List<Int>) -> Int {
+    if List.len<Int>(list: read before) == 0 && List.len<Int>(list: read after) == 0 {
+        if List.len<Int>(list: read uop_shape(cache: read cache, id: id)) == 0 { return id }
+    }
+    return mk_pad(cache: mut cache, x: id, before: read before, after: read after)
+}
+
 fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
     if id == old_id { return new_id }
     local new_src = List.new<Int>()

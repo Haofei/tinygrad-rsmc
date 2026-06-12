@@ -2385,11 +2385,12 @@ fn node_axis_size_pairs_valid(cache: read UOpCache, id: Int) -> Bool {
 
 // shape_to_shape_arg: encode an all-int shape as a CONST vector node (tinygrad uses weakint.vec)
 fn shape_to_shape_arg(cache: mut UOpCache, dims: read List<Int>) -> Int {
-    let i32 = dt_int32()
+    let weak = dt_weakint()
+    let dt = dtype_vec(base: read weak, sz: List.len<Int>(list: read dims))
     local e = List.new<Int>()
     local d = copy_int_list(l: read dims)
     local a = ArgInts(values: take d)
-    return intern(cache: mut cache, op: CONST, dt: read i32, src: take e, arg: take a)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
 }
 
 // a BUFFER leaf carrying its shape as src[0] (a shape-const)
@@ -2403,7 +2404,7 @@ fn mk_buffer(cache: mut UOpCache, dt: read DType, shape: read List<Int>) -> Int 
 
 // RESHAPE/EXPAND: src[1] = the target shape-const
 fn mk_reshape(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
     local e = List.new<Int>()
     List.push<Int>(list: mut e, value: read x)
@@ -2412,7 +2413,7 @@ fn mk_reshape(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
     return intern(cache: mut cache, op: RESHAPE, dt: read dt, src: take e, arg: take a)
 }
 fn mk_expand(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
     local e = List.new<Int>()
     List.push<Int>(list: mut e, value: read x)
@@ -2423,7 +2424,7 @@ fn mk_expand(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
 
 // PERMUTE/FLIP: the axis order is the arg
 fn mk_permute(cache: mut UOpCache, x: Int, perm: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local e = List.new<Int>()
     List.push<Int>(list: mut e, value: read x)
     local d = copy_int_list(l: read perm)
@@ -2432,7 +2433,7 @@ fn mk_permute(cache: mut UOpCache, x: Int, perm: read List<Int>) -> Int {
 }
 
 fn mk_flip(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local e = List.new<Int>()
     List.push<Int>(list: mut e, value: read x)
     local d = copy_int_list(l: read axes)
@@ -2441,7 +2442,7 @@ fn mk_flip(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
 }
 
 fn mk_shrink(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let st = shape_to_shape_arg(cache: mut cache, dims: read starts)
     let en = shape_to_shape_arg(cache: mut cache, dims: read ends)
     local e = List.new<Int>()
@@ -2453,7 +2454,7 @@ fn mk_shrink(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read Lis
 }
 
 fn mk_pad(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let bf = shape_to_shape_arg(cache: mut cache, dims: read before)
     let af = shape_to_shape_arg(cache: mut cache, dims: read after)
     local e = List.new<Int>()

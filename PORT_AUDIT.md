@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,547 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,638 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -222,8 +222,10 @@ Integrated pieces:
   `_unwrap_src`-style input unwrapping, `_split_after` for `AFTER` kernels/dependencies, dependency
   edge construction from `CALL`/`END` inputs and nested `AFTER` nodes, topological emission of a
   `LINEAR` node, and source-shaped rebuilding of emitted `CALL`s with non-`BIND` inputs converted
-  through `buf_uop`. Schedule caching, rangeify graph generation, linear-call resolution, variable
-  binding extraction, and JIT capture plumbing remain unported.
+  through `buf_uop`. It also has the first `CALL(LINEAR, args...)` resolver, replacing scheduled
+  `PARAM` nodes with call arguments and flattening nested `LINEAR` nodes. Schedule caching,
+  rangeify graph generation, full linear-call resolution, variable binding extraction, and JIT
+  capture plumbing remain unported.
 - `schedule/memory.rss`: first integrated source-shaped `tinygrad/schedule/memory.py` slice:
   buffer collection through `BUFFER`/`MSELECT`/`MSTACK`, held-buffer and disk/tinyfs rejection,
   first/last lifetime tracking, copy-vs-compute lane separation, per-device/per-lane int8 arenas,
@@ -360,6 +362,8 @@ Current integrated demo:
   `CONTIGUOUS_BACKWARD` wraps the adjoint in `CONTIGUOUS`, and `DETACH`/`BITCAST` stop gradients.
 - validates the first source-shaped scheduler dependency slice: `AFTER` splitting, movement unwrap
   back to `AFTER`, dependent `CALL` ordering into a `LINEAR` node, and rebuilt `CALL` buffer args.
+- validates the first post-schedule linear-call resolver: `CALL(LINEAR, arg)` replaces slot-0
+  `PARAM` with the call argument and flattens nested `LINEAR` nodes.
 - validates the first source-shaped scheduler memory planner slice: compute/copy lane separation,
   int8 arena `SLICE` rewrites that pass the integrated spec verifier, and held-buffer exclusion.
 - validates the first source-shaped scheduler indexing slice: `ALWAYS_CONTIGUOUS` classification,

@@ -18,6 +18,11 @@ struct ScheduleBuild derives(Clone) {
     ok: Bool,
 }
 
+struct ScheduleResolve derives(Clone) {
+    linear: Int,
+    ok: Bool,
+}
+
 fn schedule_is_unwrap_stop(op: read Ops) -> Bool {
     if op == AFTER { return true }
     if op == BUFFER { return true }
@@ -167,6 +172,77 @@ fn schedule_rebuild_call_with_bufs(cache: mut UOpCache, call: Int) -> Int {
     }
     local call_arg = node_call_arg(cache: read cache, id: call)
     return mk_call(cache: mut cache, body: node_src_id(cache: read cache, id: call, k: 0), args: read args, call: read call_arg)
+}
+
+fn schedule_resolve_node(cache: mut UOpCache, id: Int, call_args: read List<Int>, olds: mut List<Int>, news: mut List<Int>, ok_flags: mut List<Int>) -> Int {
+    let mut mi = 0
+    while mi < List.len<Int>(list: read olds) {
+        if id == List.get<Int>(list: read olds, index: mi) { return List.get<Int>(list: read news, index: mi) }
+        mi = mi + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM {
+        let slot = node_param_slot(cache: read cache, id: id)
+        if slot >= 0 && slot < List.len<Int>(list: read call_args) {
+            let repl = List.get<Int>(list: read call_args, index: slot)
+            List.push<Int>(list: mut olds, value: read id)
+            List.push<Int>(list: mut news, value: read repl)
+            return repl
+        }
+        schedule_mark_bad(ok_flags: mut ok_flags)
+    }
+    local srcs = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let r = schedule_resolve_node(cache: mut cache, id: child, call_args: read call_args, olds: mut olds, news: mut news, ok_flags: mut ok_flags)
+        if op == LINEAR && node_op(cache: read cache, id: r) == LINEAR {
+            let mut j = 0
+            while j < node_num_src(cache: read cache, id: r) {
+                List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: r, k: j))
+                j = j + 1
+            }
+        } else {
+            List.push<Int>(list: mut srcs, value: read r)
+        }
+        i = i + 1
+    }
+    let mut out = id
+    if op == LINEAR {
+        out = mk_linear(cache: mut cache, srcs: read srcs)
+    } else {
+        local arg = node_arg(cache: read cache, id: id)
+        out = intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: id), src: take srcs, arg: take arg)
+    }
+    List.push<Int>(list: mut olds, value: read id)
+    List.push<Int>(list: mut news, value: read out)
+    return out
+}
+
+fn schedule_resolve_linear_call(cache: mut UOpCache, linear_call: Int) -> fresh ScheduleResolve {
+    local ok_flags = List.new<Int>()
+    List.push<Int>(list: mut ok_flags, value: read 1)
+    if node_op(cache: read cache, id: linear_call) != CALL {
+        schedule_mark_bad(ok_flags: mut ok_flags)
+        local empty = List.new<Int>()
+        return ScheduleResolve(linear: mk_linear(cache: mut cache, srcs: read empty), ok: false)
+    }
+    if node_num_src(cache: read cache, id: linear_call) == 0 || node_op(cache: read cache, id: node_src_id(cache: read cache, id: linear_call, k: 0)) != LINEAR {
+        schedule_mark_bad(ok_flags: mut ok_flags)
+        local empty2 = List.new<Int>()
+        return ScheduleResolve(linear: mk_linear(cache: mut cache, srcs: read empty2), ok: false)
+    }
+    local args = List.new<Int>()
+    let mut ai = 1
+    while ai < node_num_src(cache: read cache, id: linear_call) {
+        List.push<Int>(list: mut args, value: read node_src_id(cache: read cache, id: linear_call, k: ai))
+        ai = ai + 1
+    }
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    let linear = schedule_resolve_node(cache: mut cache, id: node_src_id(cache: read cache, id: linear_call, k: 0), call_args: read args, olds: mut olds, news: mut news, ok_flags: mut ok_flags)
+    let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
+    return ScheduleResolve(linear: linear, ok: ok)
 }
 
 fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {

@@ -577,9 +577,36 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mex_stack2_srcs = List.new<Int>()
+    List.push<Int>(list: mut mex_stack2_srcs, value: read m2)
+    List.push<Int>(list: mut mex_stack2_srcs, value: read m3)
+    let mex_stack2dt = dtype_vec(base: read i32, sz: 2)
+    let mex_stack2 = uop_stack(cache: mut mcache, dt: read mex_stack2dt, srcs: read mex_stack2_srcs)
+    let mex_unroll_axis0 = mk_unroll(cache: mut mcache, x: mex_stack2, pairs: read mex_pair0_2)
+    let mex_unroll_axis1 = mk_unroll(cache: mut mcache, x: mex_stack2, pairs: read mex_pair1_2)
+    let mex_add_mixed = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: mex_unroll_axis0, y: mex_unroll_axis1)
+    let mut mex_expand_mixed_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_add_mixed) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let lhs = node_src_id(cache: read mcache, id: inner, k: 0)
+            let rhs = node_src_id(cache: read mcache, id: inner, k: 1)
+            local lhs_idxs = node_argints(cache: read mcache, id: lhs)
+            local rhs_idxs = node_argints(cache: read mcache, id: rhs)
+            let mixed_root_ok = node_op(cache: read mcache, id: r) == UNROLL && node_axis_size_product(cache: read mcache, id: r) == 4
+            let mixed_inner_ok = node_op(cache: read mcache, id: inner) == ADD && node_full_dtype(cache: read mcache, id: inner).count == 4
+            let mixed_geps_ok = node_op(cache: read mcache, id: lhs) == GEP && node_op(cache: read mcache, id: rhs) == GEP
+            let mixed_lens_ok = List.len<Int>(list: read lhs_idxs) == 4 && List.len<Int>(list: read rhs_idxs) == 4
+            let mixed_lhs_ok = List.get<Int>(list: read lhs_idxs, index: 1) == 0 && List.get<Int>(list: read lhs_idxs, index: 2) == 1
+            let mixed_rhs_ok = List.get<Int>(list: read rhs_idxs, index: 1) == 1 && List.get<Int>(list: read rhs_idxs, index: 2) == 0
+            mex_expand_mixed_ok = mixed_root_ok && mixed_inner_ok && mixed_geps_ok && mixed_lens_ok && mixed_lhs_ok && mixed_rhs_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "codegen.expander expands add unroll = ", v: mex_expand_add_ok)
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)
+    showb(label: read "codegen.expander swizzles mixed unroll axes = ", v: mex_expand_mixed_ok)
     let mmulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: m3, z: m4)
     let mf_codegen = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let mbad_mulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: mf_codegen, z: m4)

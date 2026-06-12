@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 21 RSS files, 16,202 LOC.
+  - integrated `tinygrad-rss/src`: 22 RSS files, 16,323 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -148,10 +148,16 @@ Integrated pieces:
   `to_program`-style orchestration for the supported C-style path:
   `do_linearize -> do_estimates -> do_render_cstyle`. Full symbolic `sint` estimates,
   aux metadata, compile/binary materialization, and full schedule/device rewrite orchestration remain unported.
-- `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
+- `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `PARAM`/
+  `DEFINE_LOCAL`/`DEFINE_REG` shape payloads, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
   checks.
+- `engine/realize.rss`: first integrated source-shaped `tinygrad/engine/realize.py` metadata
+  slice, covering `get_call_arg_uops`, `get_call_outs_ins` for `PROGRAM`, `COPY`, `SLICE`, and
+  `CUSTOM_FUNCTION("encdec")`, plus `estimate_uop` for `PROGRAM`, `COPY`, and `encdec`. Runtime
+  caches, local-size optimization, actual kernel execution, validation execution, graph execution,
+  and full `run_linear` remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream
@@ -514,7 +520,8 @@ Major missing integrated work:
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.
-- `device.py`, `runtime/*`, `runtime/support/*`: handwritten device/runtime/compiler layers.
+- `engine/*`, `device.py`, `runtime/*`, `runtime/support/*`: handwritten execution,
+  device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.
 - `nn/*`: layers, optimizers, state, datasets where in scope. `nn/onnx.py` may be scoped as a

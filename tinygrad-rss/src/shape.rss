@@ -76,6 +76,16 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
         if dt.count > 1 { List.push<Int>(list: mut out, value: read dt.count) }
         return take out
     }
+    if op == PARAM || op == DEFINE_LOCAL || op == DEFINE_REG {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            let sh = node_src_id(cache: read cache, id: id, k: 0)
+            return node_argints(cache: read cache, id: sh)
+        }
+        local out = List.new<Int>()
+        let dt = node_full_dtype(cache: read cache, id: id)
+        if dt.count > 1 { List.push<Int>(list: mut out, value: read dt.count) }
+        return take out
+    }
     if op == BUFFER {
         if node_is_upstream_buffer(cache: read cache, id: id) {
             local out = List.new<Int>()

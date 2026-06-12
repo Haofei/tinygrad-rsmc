@@ -1,0 +1,83 @@
+// Integrated source-shaped slice of tinygrad/engine/realize.py.
+//
+// This is the first runtime-facing metadata surface used before actual device
+// execution: call argument projection, output/input classification, and
+// high-level estimate lookup. Real runtime caches, compilation, buffer
+// execution, and graph execution remain later slices.
+features: local
+
+struct RealizeCallIO derives(Clone) {
+    outs: List<Int>,
+    ins: List<Int>,
+}
+
+fn realize_get_call_arg_uops(cache: read UOpCache, call: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if node_op(cache: read cache, id: call) != CALL { return take out }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: call) {
+        let src = node_src_id(cache: read cache, id: call, k: i)
+        if node_op(cache: read cache, id: src) != BIND {
+            List.push<Int>(list: mut out, value: read src)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn realize_custom_function_name(cache: read UOpCache, id: Int) -> fresh String {
+    if node_op(cache: read cache, id: id) != CUSTOM_FUNCTION { return String.copy(value: read "") }
+    return uop_arg_to_string(arg: read node_arg(cache: read cache, id: id))
+}
+
+fn realize_get_call_outs_ins(cache: read UOpCache, call: Int) -> fresh RealizeCallIO {
+    local outs = List.new<Int>()
+    local ins = List.new<Int>()
+    if node_op(cache: read cache, id: call) != CALL {
+        return RealizeCallIO(outs: take outs, ins: take ins)
+    }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    let op = node_op(cache: read cache, id: ast)
+    if op == PROGRAM {
+        local p = node_program_arg(cache: read cache, id: ast)
+        return RealizeCallIO(outs: copy_int_list(l: read p.outs), ins: copy_int_list(l: read p.ins))
+    }
+    if op == COPY || op == SLICE {
+        List.push<Int>(list: mut outs, value: read 0)
+        List.push<Int>(list: mut ins, value: read 1)
+        return RealizeCallIO(outs: take outs, ins: take ins)
+    }
+    if op == CUSTOM_FUNCTION && realize_custom_function_name(cache: read cache, id: ast) == "encdec" {
+        List.push<Int>(list: mut outs, value: read 0)
+        local args = realize_get_call_arg_uops(cache: read cache, call: call)
+        let mut i = 1
+        while i < List.len<Int>(list: read args) {
+            List.push<Int>(list: mut ins, value: read i)
+            i = i + 1
+        }
+        return RealizeCallIO(outs: take outs, ins: take ins)
+    }
+    return RealizeCallIO(outs: take outs, ins: take ins)
+}
+
+fn realize_nbytes(cache: read UOpCache, id: Int) -> Int {
+    local sh = uop_shape(cache: read cache, id: id)
+    let numel = prod(x: read sh)
+    let sz = DType.itemsize(self: read dtype_scalar(d: read node_full_dtype(cache: read cache, id: id)))
+    return numel * sz
+}
+
+fn realize_estimate_uop(cache: read UOpCache, call: Int) -> fresh Estimates {
+    if node_op(cache: read cache, id: call) != CALL { return Estimates(ops: 0, lds: 0, mem: 0) }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    let op = node_op(cache: read cache, id: ast)
+    if op == PROGRAM { return node_program_estimates(cache: read cache, id: ast) }
+    if op == COPY || (op == CUSTOM_FUNCTION && realize_custom_function_name(cache: read cache, id: ast) == "encdec") {
+        local args = realize_get_call_arg_uops(cache: read cache, call: call)
+        if List.len<Int>(list: read args) > 1 {
+            let nbytes = realize_nbytes(cache: read cache, id: List.get<Int>(list: read args, index: 1))
+            return Estimates(ops: 0, lds: nbytes, mem: nbytes)
+        }
+    }
+    return Estimates(ops: 0, lds: 0, mem: 0)
+}

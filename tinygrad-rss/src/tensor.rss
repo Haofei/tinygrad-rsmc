@@ -281,6 +281,49 @@ fn tensor_state_empty_like(cache: mut UOpCache, t: read TensorState, dt: read DT
     return TensorState(uop: u, is_param: t.is_param, has_grad: false, grad: 0 - 1)
 }
 
+fn tensor_invalids(cache: mut UOpCache, shape: read List<Int>) -> Int {
+    let inv = uop_invalid(cache: mut cache, count: 1)
+    local one_shape = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        push1(l: mut one_shape, a: 1)
+        i = i + 1
+    }
+    let reshaped = mk_reshape(cache: mut cache, x: inv, new_shape: read one_shape)
+    return mk_expand(cache: mut cache, x: reshaped, new_shape: read shape)
+}
+
+fn tensor_repr(cache: read UOpCache, x: Int) -> fresh String {
+    local shape = tensor_shape(cache: read cache, x: x)
+    let dt = tensor_dtype(cache: read cache, x: x)
+    local dev = tensor_device(cache: read cache, x: x)
+    let mut s = String.copy(value: read "<Tensor <UOp ")
+    s = String.concat(left: read s, right: read dev)
+    s = String.concat(left: read s, right: read " ")
+    s = String.concat(left: read s, right: read uop_int_list_to_string(vals: read shape))
+    s = String.concat(left: read s, right: read " ")
+    s = String.concat(left: read s, right: read dt.name)
+    return String.concat(left: read s, right: read ">>")
+}
+
+fn tensor_len(cache: read UOpCache, x: Int) -> Int {
+    local shape = tensor_shape(cache: read cache, x: x)
+    if List.len<Int>(list: read shape) == 0 { return 0 - 1 }
+    return List.get<Int>(list: read shape, index: 0)
+}
+
+fn tensor_bool(cache: read UOpCache, x: Int) -> Bool {
+    return false
+}
+
+fn tensor_buffer(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_contiguous(cache: mut cache, x: x)
+}
+
+fn tensor_numpy(cache: read UOpCache, x: Int) -> fresh List<Float> {
+    return tensor_data(cache: read cache, x: x)
+}
+
 fn tensor_data(cache: read UOpCache, x: Int) -> fresh List<Float> {
     return eval_tensor(cache: read cache, id: x)
 }

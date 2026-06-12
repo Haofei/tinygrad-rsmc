@@ -3148,6 +3148,39 @@ fn tensor_log_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     return tensor_sub(cache: mut cache, a: m, b: lss)
 }
 
+fn tensor_logcumsumexp_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    local sh = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read sh)
+    if ndim == 0 { return x }
+    let d = tensor_resolve_dim(ndim: ndim, dim: axis, extra: false)
+    let xt = tensor_transpose(cache: mut cache, x: x, dim0: d, dim1: 0 - 1)
+    local tshape = uop_shape(cache: read cache, id: xt)
+    let n = List.get<Int>(list: read tshape, index: ndim - 1)
+    let x_uns = tensor_unsqueeze(cache: mut cache, x: xt, dim: 0 - 2)
+    local expanded_shape = List.new<Int>()
+    let mut i = 0
+    while i < ndim + 1 {
+        if i < ndim - 1 {
+            push1(l: mut expanded_shape, a: List.get<Int>(list: read tshape, index: i))
+        } else {
+            push1(l: mut expanded_shape, a: n)
+        }
+        i = i + 1
+    }
+    let x_exp = tensor_expand(cache: mut cache, x: x_uns, new_shape: read expanded_shape)
+    let x_cummax = tensor_cummax_values_axis(cache: mut cache, x: xt, axis: 0 - 1)
+    let x_cummax_uns = tensor_unsqueeze(cache: mut cache, x: x_cummax, dim: 0 - 1)
+    let shifted = tensor_sub(cache: mut cache, a: x_exp, b: x_cummax_uns)
+    let mask = tensor_ones_tril_bool(cache: mut cache, n: n)
+    let low = tensor_full(cache: mut cache, dt: read node_dtype(cache: read cache, id: x), shape: read expanded_shape, value: 0.0 - 1000000000000000000.0)
+    let selected = tensor_where(cache: mut cache, cond: mask, x: shifted, y: low)
+    let expd = tensor_exp(cache: mut cache, x: selected)
+    let summed = tensor_sum_axis(cache: mut cache, x: expd, axis: 0 - 1)
+    let logged = tensor_log(cache: mut cache, x: summed)
+    let ret = tensor_add(cache: mut cache, a: logged, b: x_cummax)
+    return tensor_transpose(cache: mut cache, x: ret, dim0: 0 - 1, dim1: d)
+}
+
 fn tensor_ones_tril_bool(cache: mut UOpCache, n: Int) -> Int {
     local shape = List.new<Int>()
     push1(l: mut shape, a: n)

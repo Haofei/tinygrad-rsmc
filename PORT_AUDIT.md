@@ -21,10 +21,15 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,683 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,729 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
+- rough source coverage inventory:
+  - command: `python3 tools/port_coverage.py --limit 8`
+  - result: `tensor.py` 18/106 symbols, `mixin/__init__.py` 39/82 symbols,
+    `uop/ops.py` 68/221 symbols; 125/409 total rough symbols covered.
+  - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
 - RSScript now exposes `Math.cos`, `Math.exp`, `Math.log`, and `Math.tanh` in the stdlib,
@@ -354,8 +359,8 @@ Integrated pieces:
   inference, `view`, `permute`, `flip`, `pad`, `pad_to`, `expand`, `shrink` through explicit
   per-axis `slice`, `shrink_to`, `split`, `chunk`, `meshgrid` for 1D/scalar tensors, and
   `diag` for 1D tensors, `diagonal`, `triu`, `tril`, `repeat_interleave`, `repeat`, `roll`, `unfold`, `cat`,
-  `stack`, ADD-backed `cumsum`, MUL-backed `cumprod`, MAX-backed `cummax` values/indices, and
-  negated-MAX-backed `cummin` values/indices),
+  `stack`, ADD-backed `cumsum`, MUL-backed `cumprod`, MAX-backed `cummax` values/indices,
+  negated-MAX-backed `cummin` values/indices, and upstream-shaped stable `logcumsumexp`),
   composed movement helpers (`unsqueeze`, `squeeze(dim)`,
   `squeeze()`, `transpose`, `flatten`, and `unflatten`), reduce helpers (`sum(axis)`, `sum()`,
   `prod(axis)`, `prod()`, `max(axis)`, `max()`, `min(axis)`, `min()`, bool `any`/`all`,
@@ -686,6 +691,8 @@ Current integrated demo:
   reconstruction.
 - validates Tensor `cummin` for the same 1D axis-0 and 2D axis-1 cases, including returned
   values and indices, backed by negating through the `cummax` values/index reconstruction.
+- validates Tensor `logcumsumexp` for axis-0 and axis-1 cases against real tinygrad, backed by
+  the current upstream stable cumulative-max, triangular-mask, exp/sum/log composition.
 - validates representative Tensor casts against real tinygrad: float-to-int truncates toward zero,
   float-to-bool uses nonzero truthiness, and int-to-float preserves values.
 - validates Tensor `BITCAST` graph construction and spec behavior for same-itemsize
@@ -840,9 +847,10 @@ Keep:
 
 ## Recommended Next Order
 
-1. Speed up the port by batching upstream slices: generate a function/symbol inventory diff for
-   one upstream module or feature cluster, port the dependency closure together, then use compiler
-   failures and real tinygrad oracle checks to find language/runtime gaps once per batch.
+1. Speed up the port by batching upstream slices: use `tools/port_coverage.py` to generate a
+   function/symbol inventory diff for one upstream module or feature cluster, port the dependency
+   closure together, then use compiler failures and real tinygrad oracle checks to find
+   language/runtime gaps once per batch.
 2. Continue `uop/*` integration: complete remaining `UOp` methods, symbolic/decomposition
    coverage, `spec.py`, and `validate.py` against the upstream source layout.
 3. Continue Tensor mixin integration: full dtype/bitcast coverage, remaining random APIs, full

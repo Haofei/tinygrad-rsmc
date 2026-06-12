@@ -227,6 +227,25 @@ fn cstyle_param_data_name(cache: read UOpCache, id: Int) -> fresh String {
     return cstyle_cat(a: read "data", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
 }
 
+fn cstyle_max_numel(cache: read UOpCache, id: Int) -> Int {
+    if node_num_src(cache: read cache, id: id) > 0 {
+        let shape_id = node_src_id(cache: read cache, id: id, k: 0)
+        local sh = node_argints(cache: read cache, id: shape_id)
+        return prod(x: read sh)
+    }
+    return 1
+}
+
+fn cstyle_define_decl(cache: read UOpCache, id: Int, name: read String) -> fresh String {
+    let dt = dtype_scalar(d: read node_full_dtype(cache: read cache, id: id))
+    let mut out = cstyle_dtype_name(dt: read dt)
+    out = cstyle_cat(a: read out, b: read " ")
+    out = cstyle_cat(a: read out, b: read name)
+    out = cstyle_cat(a: read out, b: read "[")
+    out = cstyle_cat(a: read out, b: read Int.to_string(value: read cstyle_max_numel(cache: read cache, id: id)))
+    return cstyle_cat(a: read out, b: read "];")
+}
+
 fn cstyle_prefix_for_op(op: read Ops) -> fresh String {
     if op == WMMA { return "wmma" }
     if op == DEFINE_LOCAL { return "temp" }
@@ -412,6 +431,13 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
                 let alias = cstyle_operand(cache: read cache, names: read names, id: src)
                 Map.insert<Int, String>(map: mut names, key: read id, value: read alias)
             } else {
+            if op == DEFINE_LOCAL || op == DEFINE_REG {
+                let prefix = cstyle_prefix_for_op(op: read op)
+                let nm = cstyle_next_name(counts: mut counts, prefix: read prefix)
+                Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
+                let line = cstyle_define_decl(cache: read cache, id: id, name: read nm)
+                List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read line))
+            } else {
             if op == RANGE || op == IF {
                 let nm = cstyle_cat(a: read "r", b: read uop_range_str(cache: read cache, id: id))
                 if op == RANGE { Map.insert<Int, String>(map: mut names, key: read id, value: read nm) }
@@ -441,6 +467,7 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
                         }
                     }
                 }
+            }
             }
             }
         }

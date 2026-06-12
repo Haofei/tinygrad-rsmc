@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 19 RSS files, 14,764 LOC.
+  - integrated `tinygrad-rss/src`: 19 RSS files, 14,797 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -116,7 +116,8 @@ Integrated pieces:
   statements, custom text passthrough, `_render`-style name assignment over topologically sorted
   UOps, buffer and scalar `DEFINE_VAR` parameter collection, scoped loop/body emission, and a first
   `render_kernel`-style C function wrapper. It now also renders `IF`/`ENDIF` blocks and aliases
-  `AFTER` nodes to their ordered source. It still lacks upstream's full linearizer ordering, inline heuristics,
+  `AFTER` nodes to their ordered source, plus `DEFINE_LOCAL`/`DEFINE_REG` declarations with
+  shape-derived array extents such as `float temp0[4];` and `float acc0[4];`. It still lacks upstream's full linearizer ordering, inline heuristics,
   writable-param analysis, vector typedefs, target subclasses, and schedule integration.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
@@ -247,9 +248,10 @@ Current integrated demo:
   `((dp+3)*4)`, `((dp<4)?dp:3)`, `__builtin_bit_cast(unsigned int, (int)(dp))`,
   `(*(buf+dp))`, and `*(buf+dp) = fa;`.
 - validates first integrated C-style kernel rendering over a real UOp graph with `PARAM`, `RANGE`,
-  `INDEX`, `LOAD`, ALU, `STORE`, `END`, and `SINK`, rendering a parseable C function for
-  `out[i] = (in[i] + 2.0f) * 3.0f`, including a scalar `DEFINE_VAR n` kernel argument used as
-  the dynamic loop bound and an `IF`/`ENDIF` block around the store.
+  `DEFINE_LOCAL`/`DEFINE_REG`, `INDEX`, `LOAD`, ALU, `STORE`, `END`, and `SINK`, rendering a
+  parseable C function for `out[i] = (in[i] + 2.0f) * 3.0f`, including local/register array
+  declarations, a scalar `DEFINE_VAR n` kernel argument used as the dynamic loop bound, and an
+  `IF`/`ENDIF` block around the store.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a

@@ -100,11 +100,33 @@ fn tensor_binop(cache: mut UOpCache, op: Ops, x: Int, y: Int, reverse: Bool) -> 
     return tensor_binary(cache: mut cache, op: op, a: pair.first, b: pair.second)
 }
 
+fn tensor_alu(cache: mut UOpCache, op: Ops, x: Int, y: Int) -> Int {
+    return tensor_binary(cache: mut cache, op: op, a: x, b: y)
+}
+
 fn tensor_ufix_keep_dtype(cache: read UOpCache, x: Int, scalar_is_int_or_invalid: Bool) -> Bool {
     let dt = node_dtype(cache: read cache, id: x)
     if dtype_is_float(d: read dt) { return true }
     if dtype_is_int(d: read dt) && scalar_is_int_or_invalid { return true }
     return false
+}
+
+fn tensor_ufix(cache: mut UOpCache, x: Int, value: Float, scalar_is_int_or_invalid: Bool) -> Int {
+    if tensor_ufix_keep_dtype(cache: read cache, x: x, scalar_is_int_or_invalid: scalar_is_int_or_invalid) {
+        return tensor_const_like(cache: mut cache, x: x, value: value)
+    }
+    if scalar_is_int_or_invalid {
+        return tensor_const(cache: mut cache, dt: read dt_default_int(), value: value)
+    }
+    return tensor_const(cache: mut cache, dt: read dt_default_float(), value: value)
+}
+
+fn tensor_contiguous(cache: mut UOpCache, x: Int) -> Int {
+    return mk_contiguous(cache: mut cache, x: x)
+}
+
+fn tensor_to(cache: mut UOpCache, x: Int, device: read String) -> Int {
+    return mk_copy_to_device(cache: mut cache, x: x, device: read device)
 }
 
 fn tensor_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {

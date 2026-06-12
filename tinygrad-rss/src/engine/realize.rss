@@ -370,17 +370,26 @@ fn realize_host_dtype_supported(dt: read DType) -> Bool {
     return false
 }
 
-fn realize_host_oneout_main(function_name: read String, output_type: read String, input_types: read List<String>,
-                            input_inits: read List<String>, input_nbytes: Int, output_nbytes: Int, n: Int) -> fresh String {
+fn realize_host_multiout_main(function_name: read String, output_types: read List<String>, input_types: read List<String>,
+                              input_inits: read List<String>, input_nbytes: Int, output_nbytes: Int, n: Int) -> fresh String {
     let mut s = String.copy(value: read "int main(void) {\n")
-    s = String.concat(left: read s, right: read "  unsigned char out_bytes[")
-    s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
-    s = String.concat(left: read s, right: read "] = {0};\n")
-    s = String.concat(left: read s, right: read "  ")
-    s = String.concat(left: read s, right: read output_type)
-    s = String.concat(left: read s, right: read " out_vals[")
-    s = String.concat(left: read s, right: read Int.to_string(value: read n))
-    s = String.concat(left: read s, right: read "] = {0};\n")
+    let mut oi = 0
+    while oi < List.len<String>(list: read output_types) {
+        let oidx = Int.to_string(value: read oi)
+        s = String.concat(left: read s, right: read "  unsigned char out")
+        s = String.concat(left: read s, right: read oidx)
+        s = String.concat(left: read s, right: read "_bytes[")
+        s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
+        s = String.concat(left: read s, right: read "] = {0};\n")
+        s = String.concat(left: read s, right: read "  ")
+        s = String.concat(left: read s, right: read List.get<String>(list: read output_types, index: oi))
+        s = String.concat(left: read s, right: read " out")
+        s = String.concat(left: read s, right: read oidx)
+        s = String.concat(left: read s, right: read "_vals[")
+        s = String.concat(left: read s, right: read Int.to_string(value: read n))
+        s = String.concat(left: read s, right: read "] = {0};\n")
+        oi = oi + 1
+    }
     let mut i = 0
     while i < List.len<String>(list: read input_inits) {
         let idx = Int.to_string(value: read i)
@@ -409,7 +418,15 @@ fn realize_host_oneout_main(function_name: read String, output_type: read String
     }
     s = String.concat(left: read s, right: read "  ")
     s = String.concat(left: read s, right: read function_name)
-    s = String.concat(left: read s, right: read "(out_vals")
+    s = String.concat(left: read s, right: read "(")
+    let mut ok = 0
+    while ok < List.len<String>(list: read output_types) {
+        if ok > 0 { s = String.concat(left: read s, right: read ", ") }
+        s = String.concat(left: read s, right: read "out")
+        s = String.concat(left: read s, right: read Int.to_string(value: read ok))
+        s = String.concat(left: read s, right: read "_vals")
+        ok = ok + 1
+    }
     let mut j = 0
     while j < List.len<String>(list: read input_inits) {
         s = String.concat(left: read s, right: read ", in")
@@ -420,12 +437,23 @@ fn realize_host_oneout_main(function_name: read String, output_type: read String
     s = String.concat(left: read s, right: read ", ")
     s = String.concat(left: read s, right: read Int.to_string(value: read n))
     s = String.concat(left: read s, right: read ");\n")
-    s = String.concat(left: read s, right: read "  memcpy(out_bytes, out_vals, ")
-    s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
-    s = String.concat(left: read s, right: read ");\n")
-    s = String.concat(left: read s, right: read "  for (int i = 0; i < ")
-    s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
-    s = String.concat(left: read s, right: read "; i++) { printf(\"%u \", (unsigned)out_bytes[i]); }\n")
+    let mut om = 0
+    while om < List.len<String>(list: read output_types) {
+        let midx = Int.to_string(value: read om)
+        s = String.concat(left: read s, right: read "  memcpy(out")
+        s = String.concat(left: read s, right: read midx)
+        s = String.concat(left: read s, right: read "_bytes, out")
+        s = String.concat(left: read s, right: read midx)
+        s = String.concat(left: read s, right: read "_vals, ")
+        s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
+        s = String.concat(left: read s, right: read ");\n")
+        s = String.concat(left: read s, right: read "  for (int i = 0; i < ")
+        s = String.concat(left: read s, right: read Int.to_string(value: read output_nbytes))
+        s = String.concat(left: read s, right: read "; i++) { printf(\"%u \", (unsigned)out")
+        s = String.concat(left: read s, right: read midx)
+        s = String.concat(left: read s, right: read "_bytes[i]); }\n")
+        om = om + 1
+    }
     s = String.concat(left: read s, right: read "  return 0;\n}\n")
     return String.copy(value: read s)
 }
@@ -487,38 +515,58 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                               runtime_cache_hit: cache_hit, runtime_handle: runtime_handle)
 }
 
-fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
-                                           c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
+fn realize_exec_program_host_scalar(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
+                                    c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
     local staged = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
     if staged.ok == false { return realize_empty_host_exec(staged: read staged, compile_status: 0 - 1, run_status: 0 - 1, stderr_len: 0) }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
     local prog = node_program_arg(cache: read cache, id: ast)
-    if List.len<Int>(list: read prog.outs) != 1 || List.len<Int>(list: read prog.ins) < 1 || List.len<Int>(list: read prog.globals) != (1 + List.len<Int>(list: read prog.ins)) {
+    let out_count = List.len<Int>(list: read prog.outs)
+    let in_count = List.len<Int>(list: read prog.ins)
+    if out_count < 1 || in_count < 1 || List.len<Int>(list: read prog.globals) != (out_count + in_count) {
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 2, run_status: 0 - 1, stderr_len: 0)
     }
-    let out_slot = List.get<Int>(list: read prog.outs, index: 0)
-    if List.get<Int>(list: read prog.globals, index: 0) != out_slot {
-        return realize_empty_host_exec(staged: read staged, compile_status: 0 - 3, run_status: 0 - 1, stderr_len: 0)
+    let mut go = 0
+    while go < out_count {
+        if List.get<Int>(list: read prog.globals, index: go) != List.get<Int>(list: read prog.outs, index: go) {
+            return realize_empty_host_exec(staged: read staged, compile_status: 0 - 3, run_status: 0 - 1, stderr_len: 0)
+        }
+        go = go + 1
     }
     let mut gi = 0
     while gi < List.len<Int>(list: read prog.ins) {
-        if List.get<Int>(list: read prog.globals, index: gi + 1) != List.get<Int>(list: read prog.ins, index: gi) {
+        if List.get<Int>(list: read prog.globals, index: out_count + gi) != List.get<Int>(list: read prog.ins, index: gi) {
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 3, run_status: 0 - 1, stderr_len: 0)
         }
         gi = gi + 1
     }
-    let out_idx = realize_exec_context_get_slot(ctx: read ctx, slot: out_slot)
-    let out0 = realize_exec_context_get_buffer(ctx: read ctx, index: out_idx)
-    if realize_host_dtype_supported(dt: read out0.dtype) == false {
+    let first_out_slot = List.get<Int>(list: read prog.outs, index: 0)
+    let first_out_idx = realize_exec_context_get_slot(ctx: read ctx, slot: first_out_slot)
+    let first_out = realize_exec_context_get_buffer(ctx: read ctx, index: first_out_idx)
+    if realize_host_dtype_supported(dt: read first_out.dtype) == false {
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
     }
-    let output_type = realize_host_c_scalar_type(dt: read out0.dtype)
-    let out_itemsize = DType.itemsize(self: read dtype_scalar(d: read out0.dtype))
-    let mut out_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read out0)
-    let out_nbytes = buffer_nbytes(buf: read out_buf)
+    let out_itemsize = DType.itemsize(self: read dtype_scalar(d: read first_out.dtype))
+    let first_out_nbytes = buffer_nbytes(buf: read first_out)
+    let out_nbytes = first_out_nbytes
     if out_nbytes <= 0 || out_nbytes % out_itemsize != 0 {
-        realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
+    }
+    local output_indices = List.new<Int>()
+    local output_types = List.new<String>()
+    let mut oo = 0
+    while oo < out_count {
+        let out_slot = List.get<Int>(list: read prog.outs, index: oo)
+        let out_idx = realize_exec_context_get_slot(ctx: read ctx, slot: out_slot)
+        let out0 = realize_exec_context_get_buffer(ctx: read ctx, index: out_idx)
+        if realize_host_dtype_supported(dt: read out0.dtype) == false || DType.itemsize(self: read dtype_scalar(d: read out0.dtype)) != out_itemsize || buffer_nbytes(buf: read out0) != out_nbytes {
+            return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
+        }
+        local out_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read out0)
+        realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
+        List.push<Int>(list: mut output_indices, value: read out_idx)
+        List.push<String>(list: mut output_types, value: read realize_host_c_scalar_type(dt: read out0.dtype))
+        oo = oo + 1
     }
     local input_inits = List.new<String>()
     local input_types = List.new<String>()
@@ -528,18 +576,15 @@ fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut Realiz
         let in_idx = realize_exec_context_get_slot(ctx: read ctx, slot: in_slot)
         let in0 = realize_exec_context_get_buffer(ctx: read ctx, index: in_idx)
         if realize_host_dtype_supported(dt: read in0.dtype) == false {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
         }
         if DType.itemsize(self: read dtype_scalar(d: read in0.dtype)) != out_itemsize {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
         }
         List.push<String>(list: mut input_types, value: read realize_host_c_scalar_type(dt: read in0.dtype))
         local in_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read in0)
         let in_nbytes = buffer_nbytes(buf: read in_buf)
         if in_nbytes != out_nbytes {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             realize_exec_context_set_buffer(ctx: mut ctx, index: in_idx, buf: read in_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
         }
@@ -550,16 +595,15 @@ fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut Realiz
     }
     let n = out_nbytes / out_itemsize
     let source = uop_arg_to_string(arg: read node_arg(cache: read cache, id: staged.source_id))
-    let harness = realize_host_oneout_main(function_name: read staged.function_name, output_type: read output_type,
-                                           input_types: read input_types, input_inits: read input_inits,
-                                           input_nbytes: out_nbytes, output_nbytes: out_nbytes, n: n)
+    let harness = realize_host_multiout_main(function_name: read staged.function_name, output_types: read output_types,
+                                             input_types: read input_types, input_inits: read input_inits,
+                                             input_nbytes: out_nbytes, output_nbytes: out_nbytes, n: n)
     let combined = ["#include <stdio.h>\n#include <string.h>\n", source, "\n", harness].join("")
     let c_path = Path.from_string(value: read c_path_text)
     match Path.write_string(path: read c_path, text: read combined) {
         Ok(unit) => {
         }
         Err(error) => {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 6, run_status: 0 - 1, stderr_len: String.len(value: read error.message()))
         }
     }
@@ -567,14 +611,12 @@ fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut Realiz
     match Process.run(command: read "clang", args: read compile_args) {
         Ok(compile_output) => {
             if compile_output.status != 0 {
-                realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
                 return realize_host_program_exec_new(ok: false, staged: read staged, compile_status: compile_output.status,
                                                      run_status: 0 - 1, output_nbytes: out_nbytes, parsed_nbytes: 0,
                                                      stderr_len: String.len(value: read compile_output.stderr))
             }
         }
         Err(error) => {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 7, run_status: 0 - 1, stderr_len: String.len(value: read error))
         }
     }
@@ -582,31 +624,37 @@ fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut Realiz
     match Process.run(command: read exe_path_text, args: read run_args) {
         Ok(run_output) => {
             local out_bytes = realize_parse_decimal_bytes(text: read run_output.stdout)
-            if run_output.status == 0 && List.len<Int>(list: read out_bytes) == out_nbytes {
-                out_buf = buffer_copyin(store: mut ctx.store, buf: read out_buf, src: read out_bytes)
-                realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
+            let total_out_nbytes = out_nbytes * out_count
+            if run_output.status == 0 && List.len<Int>(list: read out_bytes) == total_out_nbytes {
+                let mut oi2 = 0
+                while oi2 < out_count {
+                    let out_idx2 = List.get<Int>(list: read output_indices, index: oi2)
+                    let out_existing = realize_exec_context_get_buffer(ctx: read ctx, index: out_idx2)
+                    local piece = bytes_slice(bytes: read out_bytes, start: oi2 * out_nbytes, len: out_nbytes)
+                    local out_written = buffer_copyin(store: mut ctx.store, buf: read out_existing, src: read piece)
+                    realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx2, buf: read out_written)
+                    oi2 = oi2 + 1
+                }
                 return realize_host_program_exec_new(ok: true, staged: read staged, compile_status: 0,
-                                                     run_status: run_output.status, output_nbytes: out_nbytes,
+                                                     run_status: run_output.status, output_nbytes: total_out_nbytes,
                                                      parsed_nbytes: List.len<Int>(list: read out_bytes),
                                                      stderr_len: String.len(value: read run_output.stderr))
             }
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_host_program_exec_new(ok: false, staged: read staged, compile_status: 0,
-                                                 run_status: run_output.status, output_nbytes: out_nbytes,
+                                                 run_status: run_output.status, output_nbytes: total_out_nbytes,
                                                  parsed_nbytes: List.len<Int>(list: read out_bytes),
                                                  stderr_len: String.len(value: read run_output.stderr))
         }
         Err(error) => {
-            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0, run_status: 0 - 2, stderr_len: String.len(value: read error))
         }
     }
 }
 
 fn realize_exec_program_host_default(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeHostProgramExec {
-    return realize_exec_program_host_oneout_scalar(cache: read cache, ctx: mut ctx, call: call,
-                                                  c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
-                                                  exe_path_text: read "/tmp/tinygrad-rss-realize-program")
+    return realize_exec_program_host_scalar(cache: read cache, ctx: mut ctx, call: call,
+                                           c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
+                                           exe_path_text: read "/tmp/tinygrad-rss-realize-program")
 }
 
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {

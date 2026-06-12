@@ -4167,6 +4167,55 @@ fn tensor_scaled_dot_product_attention_gqa(cache: mut UOpCache, query: Int, key:
     return tensor_scaled_dot_product_attention(cache: mut cache, query: query, key: key_rep, value: value_rep, dropout_p: dropout_p, training: training, seed: seed)
 }
 
+fn tensor_newton_schulz_term(cache: mut UOpCache, g: Int, order: Int) -> Int {
+    let gt = tensor_transpose(cache: mut cache, x: g, dim0: 0 - 2, dim1: 0 - 1)
+    let a = tensor_matmul(cache: mut cache, a: g, b: gt)
+    let mut out = g
+    let mut i = 0
+    while i < order {
+        out = tensor_matmul(cache: mut cache, a: a, b: out)
+        i = i + 1
+    }
+    return out
+}
+
+fn tensor_newton_schulz(cache: mut UOpCache, x: Int, steps: Int, p0: Float, p1: Float, p2: Float, eps: Float) -> Int {
+    local sh = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read sh)
+    let rows = List.get<Int>(list: read sh, index: ndim - 2)
+    let cols = List.get<Int>(list: read sh, index: ndim - 1)
+    if rows > cols {
+        let xt = tensor_transpose(cache: mut cache, x: x, dim0: 0 - 2, dim1: 0 - 1)
+        let yt = tensor_newton_schulz(cache: mut cache, x: xt, steps: steps, p0: p0, p1: p1, p2: p2, eps: eps)
+        return tensor_transpose(cache: mut cache, x: yt, dim0: 0 - 2, dim1: 0 - 1)
+    }
+    let sq = tensor_square(cache: mut cache, x: x)
+    local axes = List.new<Int>()
+    push1(l: mut axes, a: ndim - 2)
+    push1(l: mut axes, a: ndim - 1)
+    let norm_sq = tensor_sum_axes_keepdim(cache: mut cache, x: sq, axes: read axes)
+    let norm = tensor_sqrt(cache: mut cache, x: norm_sq)
+    let epsc = tensor_const_like_float(cache: mut cache, x: norm, value: eps)
+    let denom = tensor_add(cache: mut cache, a: norm, b: epsc)
+    let mut g = tensor_div(cache: mut cache, a: x, b: denom)
+    let mut step = 0
+    while step < steps {
+        let t0_base = tensor_newton_schulz_term(cache: mut cache, g: g, order: 0)
+        let t0_scale = tensor_const_like_float(cache: mut cache, x: g, value: p0)
+        let t0 = tensor_mul(cache: mut cache, a: t0_base, b: t0_scale)
+        let t1_base = tensor_newton_schulz_term(cache: mut cache, g: g, order: 1)
+        let t1_scale = tensor_const_like_float(cache: mut cache, x: g, value: p1)
+        let t1 = tensor_mul(cache: mut cache, a: t1_base, b: t1_scale)
+        let t2_base = tensor_newton_schulz_term(cache: mut cache, g: g, order: 2)
+        let t2_scale = tensor_const_like_float(cache: mut cache, x: g, value: p2)
+        let t2 = tensor_mul(cache: mut cache, a: t2_base, b: t2_scale)
+        let s01 = tensor_add(cache: mut cache, a: t0, b: t1)
+        g = tensor_add(cache: mut cache, a: s01, b: t2)
+        step = step + 1
+    }
+    return g
+}
+
 fn tensor_linear(cache: mut UOpCache, x: Int, weight: Int, bias: Int) -> Int {
     let y = tensor_dot(cache: mut cache, x: x, w: weight)
     return tensor_add(cache: mut cache, a: y, b: bias)

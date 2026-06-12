@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,952 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 26,010 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 20/106 symbols, `mixin/__init__.py` 42/82 symbols,
-    `uop/ops.py` 68/221 symbols; 130/409 total rough symbols covered.
+  - result: `tensor.py` 20/106 symbols, `mixin/__init__.py` 43/82 symbols,
+    `uop/ops.py` 68/221 symbols; 131/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -354,7 +354,8 @@ Integrated pieces:
   `ceil`, `floor`, `sigmoid`, `exp`, `log`, `cos`, `tan`, `tanh`, `leaky_relu`, `quick_gelu`, default
   tanh-approx `gelu`, `swish`/`silu`, `hardswish`, `hardsigmoid`, `softplus`, `mish`,
   `logsigmoid`, `elu`, `celu`, `selu`, `softsign`, `lerp`, `hardtanh`, `relu6`,
-  explicit-seed `dropout`, and no-mask `scaled_dot_product_attention`,
+  explicit-seed `dropout`, no-mask `scaled_dot_product_attention`, and polynomial
+  `newton_schulz`,
   bitwise/logical `AND`/`OR`/`XOR`, integer shifts, floor/truncating div and modulo variants,
   `WHERE` mask selection, movement helpers (`reshape` with single `-1`
   inference, `view`, `permute`, `flip`, `pad`, `pad_to`, `expand`, `shrink` through explicit
@@ -680,6 +681,8 @@ Current integrated demo:
   eval/no-op behavior, and training `p=1` zeroing.
 - validates Tensor `scaled_dot_product_attention` against real tinygrad for no-mask/no-dropout,
   causal/no-dropout, boolean-mask, additive-mask, and grouped-query-attention batched cases.
+- validates Tensor `newton_schulz(steps=2, params=(2,-1.5,0.5))` against real tinygrad on a
+  2x2 float32 matrix.
 - validates Tensor normalization helpers against real tinygrad: `normalize(p=2, dim=1)`,
   `normalize(p=1, dim=0)`, `normalize(p=0, dim=1)`, and `layernorm(axis=1, eps=1e-5)`.
 - validates tuple-axis Tensor statistics/normalization against real tinygrad: `mean(axis=(1,2))`,

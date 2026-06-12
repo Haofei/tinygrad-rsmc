@@ -439,6 +439,61 @@ fn indexing_all_axes(rank: Int) -> fresh List<Int> {
     return take axes
 }
 
+fn indexing_consumer_axis_same_idx(cache: read UOpCache, records: read List<IndexingRangeRecord>, consumers: read List<Int>, axis: Int) -> Bool {
+    if List.len<Int>(list: read consumers) == 0 { return false }
+    let first_rec = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: 0))
+    if axis >= List.len<Int>(list: read first_rec.in_ranges) { return false }
+    let first_idx = uop_get_idx(cache: read cache, id: List.get<Int>(list: read first_rec.in_ranges, index: axis))
+    let mut i = 1
+    while i < List.len<Int>(list: read consumers) {
+        let rec = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: i))
+        if axis >= List.len<Int>(list: read rec.in_ranges) { return false }
+        let idx = uop_get_idx(cache: read cache, id: List.get<Int>(list: read rec.in_ranges, index: axis))
+        if idx != first_idx { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn indexing_merge_consumer_axis(cache: mut UOpCache, records: read List<IndexingRangeRecord>, consumers: read List<Int>, axis: Int) -> Int {
+    let first_rec = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: 0))
+    let first_range = List.get<Int>(list: read first_rec.in_ranges, index: axis)
+    let idx = uop_get_idx(cache: read cache, id: first_range)
+    let mut valid = mk_const_int(cache: mut cache, dt: read dt_bool(), v: 0)
+    let mut i = 0
+    while i < List.len<Int>(list: read consumers) {
+        let rec = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: i))
+        let r = List.get<Int>(list: read rec.in_ranges, index: axis)
+        let rv = uop_get_valid(cache: mut cache, id: r)
+        valid = mk_alu2(cache: mut cache, op: OR, dt: read dt_bool(), x: valid, y: rv)
+        i = i + 1
+    }
+    let simplified_valid = graph_rewrite(cache: mut cache, id: valid)
+    let merged = uop_valid(cache: mut cache, id: idx, cond: simplified_valid)
+    return graph_rewrite(cache: mut cache, id: merged)
+}
+
+fn indexing_merge_multi_consumer_ranges(cache: mut UOpCache, ctx: mut IndexingContext, records: read List<IndexingRangeRecord>, realize_axes: mut List<IndexingRealizeAxisRecord>, node: Int, shape: read List<Int>, consumers: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local axes = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        if indexing_consumer_axis_same_idx(cache: read cache, records: read records, consumers: read consumers, axis: i) {
+            let merged = indexing_merge_consumer_axis(cache: mut cache, records: read records, consumers: read consumers, axis: i)
+            List.push<Int>(list: mut out, value: read merged)
+        } else {
+            let nr = indexing_new_range(cache: mut cache, ctx: mut ctx, size: List.get<Int>(list: read shape, index: i), axis_type: read AXIS_LOOP)
+            List.push<Int>(list: mut out, value: read nr)
+            List.push<Int>(list: mut axes, value: read i)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read axes) > 0 {
+        indexing_add_realize_axes(realize_axes: mut realize_axes, node: node, axes: read axes)
+    }
+    return take out
+}
+
 fn indexing_add_realize_axes(realize_axes: mut List<IndexingRealizeAxisRecord>, node: Int, axes: read List<Int>) -> Unit {
     let mut i = 0
     while i < List.len<IndexingRealizeAxisRecord>(list: read realize_axes) {
@@ -666,9 +721,7 @@ fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh Index
                     out_rngs = copy_int_list(l: read cr.in_ranges)
                 } else {
                     if List.len<Int>(list: read consumers) > 1 {
-                        out_rngs = indexing_ranges_for_shape(cache: mut cache, ctx: mut rctx, shape: read shape, axis_type: read AXIS_LOOP)
-                        local axes = indexing_all_axes(rank: List.len<Int>(list: read shape))
-                        indexing_add_realize_axes(realize_axes: mut realize_axes, node: x, axes: read axes)
+                        out_rngs = indexing_merge_multi_consumer_ranges(cache: mut cache, ctx: mut rctx, records: read records, realize_axes: mut realize_axes, node: x, shape: read shape, consumers: read consumers)
                     }
                 }
             }

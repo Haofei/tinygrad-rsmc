@@ -10,6 +10,14 @@ struct IndexingRealizeResult derives(Clone) {
     nodes: List<Int>,
 }
 
+struct IndexingContext derives(Clone) {
+    next_range: Int,
+}
+
+fn indexing_context_new() -> fresh IndexingContext {
+    return IndexingContext(next_range: 0)
+}
+
 fn indexing_always_contiguous(op: read Ops) -> Bool {
     if op == CONTIGUOUS { return true }
     if op == AFTER { return true }
@@ -123,4 +131,113 @@ fn indexing_generate_realize_map(cache: read UOpCache, root: Int) -> fresh Index
         i = i + 1
     }
     return IndexingRealizeResult(nodes: take realize)
+}
+
+fn indexing_new_range(cache: mut UOpCache, ctx: mut IndexingContext, size: Int, axis_type: read AxisType) -> Int {
+    let dt = dt_weakint()
+    if size == 1 { return mk_const_int(cache: mut cache, dt: read dt, v: 0) }
+    let axis = ctx.next_range
+    ctx.next_range = ctx.next_range + 1
+    return mk_range_int(cache: mut cache, end: size, axis_id: axis, axis_type: read axis_type, dt: read dt)
+}
+
+fn indexing_ranges_for_shape(cache: mut UOpCache, ctx: mut IndexingContext, shape: read List<Int>, axis_type: read AxisType) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        let sz = List.get<Int>(list: read shape, index: i)
+        let r = indexing_new_range(cache: mut cache, ctx: mut ctx, size: sz, axis_type: read axis_type)
+        List.push<Int>(list: mut out, value: read r)
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_apply_shrink(cache: mut UOpCache, rngs: read List<Int>, starts: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read rngs) {
+        let r = List.get<Int>(list: read rngs, index: i)
+        let off = List.get<Int>(list: read starts, index: i)
+        if off == 0 {
+            List.push<Int>(list: mut out, value: read r)
+        } else {
+            let c = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: r), v: off)
+            let nr = mk_alu2(cache: mut cache, op: ADD, dt: read node_dtype(cache: read cache, id: r), x: r, y: c)
+            List.push<Int>(list: mut out, value: read nr)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_apply_permute(rngs: read List<Int>, perm: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read perm) {
+        let p = List.get<Int>(list: read perm, index: i)
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rngs, index: p))
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_apply_flip(cache: mut UOpCache, rngs: read List<Int>, in_shape: read List<Int>, axes: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read rngs) {
+        let r = List.get<Int>(list: read rngs, index: i)
+        if int_contains(items: read axes, v: i) {
+            let dt = node_dtype(cache: read cache, id: r)
+            let sz = List.get<Int>(list: read in_shape, index: i)
+            let c = mk_const_int(cache: mut cache, dt: read dt, v: sz - 1)
+            let nr = mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: c, y: r)
+            List.push<Int>(list: mut out, value: read nr)
+        } else {
+            List.push<Int>(list: mut out, value: read r)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_apply_expand(cache: mut UOpCache, rngs: read List<Int>, in_shape: read List<Int>, out_shape: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read rngs) {
+        let r = List.get<Int>(list: read rngs, index: i)
+        let ish = List.get<Int>(list: read in_shape, index: i)
+        let osh = List.get<Int>(list: read out_shape, index: i)
+        if ish == osh {
+            List.push<Int>(list: mut out, value: read r)
+        } else {
+            let z = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: r), v: 0)
+            List.push<Int>(list: mut out, value: read z)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_apply_movement_op(cache: mut UOpCache, op: Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
+    if op == SHRINK {
+        local starts = List.new<Int>()
+        let rank = List.len<Int>(list: read in_shape)
+        let mut i = 0
+        while i < rank {
+            List.push<Int>(list: mut starts, value: read List.get<Int>(list: read arg, index: i))
+            i = i + 1
+        }
+        return indexing_apply_shrink(cache: mut cache, rngs: read rngs, starts: read starts)
+    }
+    if op == PERMUTE { return indexing_apply_permute(rngs: read rngs, perm: read arg) }
+    if op == FLIP { return indexing_apply_flip(cache: mut cache, rngs: read rngs, in_shape: read in_shape, axes: read arg) }
+    if op == EXPAND { return indexing_apply_expand(cache: mut cache, rngs: read rngs, in_shape: read in_shape, out_shape: read arg) }
+    local out = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read rngs) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rngs, index: j))
+        j = j + 1
+    }
+    return take out
 }

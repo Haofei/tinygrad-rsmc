@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 28,197 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 28,260 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 93/106 symbols, `mixin/__init__.py` 82/82 symbols,
-    `uop/ops.py` 216/221 symbols; 391/409 total rough symbols covered.
+  - result: `tensor.py` 94/106 symbols, `mixin/__init__.py` 82/82 symbols,
+    `uop/ops.py` 216/221 symbols; 392/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -770,6 +770,10 @@ Current integrated demo:
   data, `image_dot` through `tensor_dot`, and `image_conv2d`/`_conv2d_winograd` through the
   generic direct NCHW convolution path. This is API-surface compatibility for the current backend,
   not upstream packed image kernels or Winograd transform parity.
+- validates an explicit-state `_apply_map_to_tensors` equivalent: callers pass `TensorState`
+  objects plus old/new UOp ids, affected graphs are detected with `topovisit`, and states are
+  returned with recursive graph substitution applied. This does not yet replicate Python weakref
+  discovery of all live tensors or distinct `walk=True` substitution semantics.
 - validates Tensor `cumsum` against real tinygrad for axis-0 and axis-1 cases, backed by the
   upstream `_cumalu` ADD composition using zero-padding, pooling, and sum.
 - validates Tensor `cumprod` against real tinygrad for axis-0 and axis-1 cases, backed by the

@@ -449,6 +449,59 @@ fn tensor_state_callify(cache: mut UOpCache, t: read TensorState, args: read Lis
     return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
 }
 
+fn tensor_graph_contains_any(cache: read UOpCache, root: Int, needles: read List<Int>) -> Bool {
+    local topo = uop_topovisit(cache: read cache, id: root)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        if int_contains(items: read needles, v: List.get<Int>(list: read topo, index: i)) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn tensor_replace_many(cache: mut UOpCache, id: Int, olds: read List<Int>, news: read List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read olds) {
+        if id == List.get<Int>(list: read olds, index: i) { return List.get<Int>(list: read news, index: i) }
+        i = i + 1
+    }
+    local new_src = List.new<Int>()
+    let mut j = 0
+    while j < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: j)
+        let repl = tensor_replace_many(cache: mut cache, id: child, olds: read olds, news: read news)
+        List.push<Int>(list: mut new_src, value: read repl)
+        j = j + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+}
+
+fn _apply_map_to_tensors(cache: mut UOpCache, tensors: read List<TensorState>, olds: read List<Int>, news: read List<Int>, name: read String, walk: Bool) -> fresh List<TensorState> {
+    local out = List.new<TensorState>()
+    let mut i = 0
+    if walk { i = i + 0 }
+    if String.len(value: read name) < 0 { i = i + 0 }
+    while i < List.len<TensorState>(list: read tensors) {
+        local t = List.get<TensorState>(list: read tensors, index: i)
+        if tensor_graph_contains_any(cache: read cache, root: t.uop, needles: read olds) {
+            let u = tensor_replace_many(cache: mut cache, id: t.uop, olds: read olds, news: read news)
+            local nt = TensorState(uop: u, is_param: take t.is_param, has_grad: take t.has_grad, grad: take t.grad)
+            List.push<TensorState>(list: mut out, value: read (manage nt))
+        } else {
+            List.push<TensorState>(list: mut out, value: read (manage t))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn tensor_apply_map_to_tensors(cache: mut UOpCache, tensors: read List<TensorState>, olds: read List<Int>, news: read List<Int>, name: read String, walk: Bool) -> fresh List<TensorState> {
+    return _apply_map_to_tensors(cache: mut cache, tensors: read tensors, olds: read olds, news: read news, name: read name, walk: walk)
+}
+
 fn tensor_assign(cache: mut UOpCache, target: Int, value: Int) -> Int {
     local dst_shape = tensor_shape(cache: read cache, x: target)
     local src_shape = tensor_shape(cache: read cache, x: value)

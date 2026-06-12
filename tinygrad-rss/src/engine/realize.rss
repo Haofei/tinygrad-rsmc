@@ -512,6 +512,12 @@ fn realize_exec_program_host_f32_1in1out(cache: read UOpCache, ctx: mut RealizeE
     }
 }
 
+fn realize_exec_program_host_default(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeHostProgramExec {
+    return realize_exec_program_host_f32_1in1out(cache: read cache, ctx: mut ctx, call: call,
+                                                c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
+                                                exe_path_text: read "/tmp/tinygrad-rss-realize-program")
+}
+
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
     if node_op(cache: read cache, id: call) != CALL { return false }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
@@ -525,8 +531,9 @@ fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: In
         return true
     }
     if op == PROGRAM {
-        local exec = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
-        return exec.ok
+        local host_exec = realize_exec_program_host_default(cache: read cache, ctx: mut ctx, call: call)
+        if host_exec.ok { return true }
+        return host_exec.staged.ok
     }
     return false
 }
@@ -559,8 +566,9 @@ fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext,
         return true
     }
     if op == PROGRAM {
-        local exec = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
-        return exec.ok
+        local host_exec = realize_exec_program_host_default(cache: read cache, ctx: mut ctx, call: call)
+        if host_exec.ok { return true }
+        return host_exec.staged.ok
     }
     return false
 }

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,471 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,503 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -79,7 +79,8 @@ Integrated pieces:
   source-aligned `addrspace` key propagation for `PARAM`/`BUFFER`/`DEFINE_LOCAL`/`DEFINE_REG`/`LOAD`,
   pointer/movement propagation, and all-same `STACK`/elementwise/`WMMA` merging,
   param/addrspace display helpers, source-aligned vector-dtype `broadcast`/`STACK`, full-dtype
-  `gettuple`, `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`, `split_uop`, movement `base`,
+  `gettuple`, `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`,
+  source-shaped `load`/`store`/`wait`/`end`/`after`/`barrier`, `split_uop`, movement `base`,
   `multibase`, scheduler-facing `buf_uop` projection through movement/`AFTER`/`MSELECT`/`MSTACK`,
   source-aligned `has_buffer_identity`, source-aligned `contiguous` no-op behavior and `bufferize`
   as `STAGE`, concrete `as_shape`,
@@ -308,7 +309,8 @@ Current integrated demo:
 - validates dtype, helpers, view/shape, UOp helpers, UOp spec checks, UPat matching, and
   rules-as-data graph rewrite.
 - validates UOp method helpers for `STACK` splitting/gettuple, source-shaped
-  `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`, concrete shape extraction,
+  `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`,
+  `load`/`store`/`wait`/`end`/`after`/`barrier`, concrete shape extraction,
   movement base recovery, and movement argument extraction.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar

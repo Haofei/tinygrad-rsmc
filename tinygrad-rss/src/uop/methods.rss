@@ -480,6 +480,30 @@ fn uop_gep_int(cache: mut UOpCache, id: Int, idx: Int) -> Int {
     return uop_gep(cache: mut cache, id: id, idxs: read idxs)
 }
 
+fn uop_load(cache: mut UOpCache, id: Int, srcs: read List<Int>, dt: read DType) -> Int {
+    return mk_load(cache: mut cache, ptr: id, srcs: read srcs, dt: read dt)
+}
+
+fn uop_store(cache: mut UOpCache, id: Int, value: Int, gate: read Option<Int>) -> Int {
+    return mk_store(cache: mut cache, ptr: id, value: value, gate: read gate)
+}
+
+fn uop_wait(cache: mut UOpCache, id: Int, value: Int) -> Int {
+    return mk_wait(cache: mut cache, id: id, value: value)
+}
+
+fn uop_end(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    return mk_end(cache: mut cache, id: id, srcs: read srcs)
+}
+
+fn uop_after(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    return mk_after(cache: mut cache, id: id, srcs: read srcs)
+}
+
+fn uop_barrier(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    return mk_barrier(cache: mut cache, id: id, srcs: read srcs)
+}
+
 fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
     if id == old_id { return new_id }
     local new_src = List.new<Int>()

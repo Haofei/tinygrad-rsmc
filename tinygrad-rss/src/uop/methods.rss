@@ -338,7 +338,7 @@ fn uop_unbind_all_rewrite(cache: mut UOpCache, id: Int, bindings: mut List<UOpBi
     }
     if changed == false { return id }
     let op = node_op(cache: read cache, id: id)
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local arg = node_arg(cache: read cache, id: id)
     return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
 }
@@ -391,7 +391,7 @@ fn uop_variables(cache: read UOpCache, id: Int) -> fresh List<Int> {
 
 fn uop_replace_arg(cache: mut UOpCache, id: Int, arg: take Arg) -> Int {
     let op = node_op(cache: read cache, id: id)
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local src = uop_copy_src(cache: read cache, id: id)
     return intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
 }
@@ -422,6 +422,64 @@ fn uop_broadcast(cache: mut UOpCache, id: Int, count: Int) -> Int {
     return uop_stack(cache: mut cache, dt: read dt, srcs: read src)
 }
 
+fn uop_sink(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let child = List.get<Int>(list: read srcs, index: i)
+        if child >= 0 { List.push<Int>(list: mut src, value: read child) }
+        i = i + 1
+    }
+    local arg = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: SINK, dt: read vdt, src: take src, arg: take arg)
+}
+
+fn uop_maketuple(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    return mk_tuple(cache: mut cache, srcs: read srcs)
+}
+
+fn uop_group(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    return mk_group(cache: mut cache, srcs: read srcs)
+}
+
+fn uop_vectorize(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    let scalar = node_dtype(cache: read cache, id: id)
+    let dt = dtype_vec(base: read scalar, sz: List.len<Int>(list: read srcs) + 1)
+    local all = List.new<Int>()
+    List.push<Int>(list: mut all, value: read id)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        List.push<Int>(list: mut all, value: read List.get<Int>(list: read srcs, index: i))
+        i = i + 1
+    }
+    return uop_stack(cache: mut cache, dt: read dt, srcs: read all)
+}
+
+fn uop_cast(cache: mut UOpCache, id: Int, dt_in: read DType) -> Int {
+    let mut dt = dtype_copy(d: read dt_in)
+    let self_dt = node_full_dtype(cache: read cache, id: id)
+    if dt.count == 1 && self_dt.count != 1 {
+        let scalar = dtype_scalar(d: read dt)
+        dt = dtype_vec(base: read scalar, sz: self_dt.count)
+    }
+    return mk_cast(cache: mut cache, x: id, dt: read dt)
+}
+
+fn uop_bitcast(cache: mut UOpCache, id: Int, dt: read DType) -> Int {
+    return mk_bitcast(cache: mut cache, x: id, dt: read dt)
+}
+
+fn uop_gep(cache: mut UOpCache, id: Int, idxs: read List<Int>) -> Int {
+    return mk_gep(cache: mut cache, x: id, idxs: read idxs)
+}
+
+fn uop_gep_int(cache: mut UOpCache, id: Int, idx: Int) -> Int {
+    local idxs = List.new<Int>()
+    List.push<Int>(list: mut idxs, value: read idx)
+    return uop_gep(cache: mut cache, id: id, idxs: read idxs)
+}
+
 fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
     if id == old_id { return new_id }
     local new_src = List.new<Int>()
@@ -433,7 +491,7 @@ fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int
         i = i + 1
     }
     let op = node_op(cache: read cache, id: id)
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local arg = node_arg(cache: read cache, id: id)
     return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
 }

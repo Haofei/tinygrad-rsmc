@@ -1122,7 +1122,7 @@ fn uop_tuple_source_for_gettuple(cache: read UOpCache, id: Int) -> Int {
 fn mk_gettuple(cache: mut UOpCache, tuple_id: Int, idx: Int) -> Int {
     let in_tuple = uop_tuple_source_for_gettuple(cache: read cache, id: tuple_id)
     let child = node_src_id(cache: read cache, id: in_tuple, k: idx)
-    let dt = node_dtype(cache: read cache, id: child)
+    let dt = node_full_dtype(cache: read cache, id: child)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read tuple_id)
     local a = ArgInt(value: idx)

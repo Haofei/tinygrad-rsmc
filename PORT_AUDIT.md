@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,378 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,471 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -78,11 +78,12 @@ Integrated pieces:
   canonical device key/count helpers for `PARAM`/`DEVICE`/`STAGE`/`BUFFER`/`COPY`/`ALLREDUCE`/`MSELECT`/`MSTACK`,
   source-aligned `addrspace` key propagation for `PARAM`/`BUFFER`/`DEFINE_LOCAL`/`DEFINE_REG`/`LOAD`,
   pointer/movement propagation, and all-same `STACK`/elementwise/`WMMA` merging,
-  param/addrspace display helpers, source-aligned vector-dtype `broadcast`/`STACK`, `gettuple`, `split_uop`, movement `base`,
+  param/addrspace display helpers, source-aligned vector-dtype `broadcast`/`STACK`, full-dtype
+  `gettuple`, `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`, `split_uop`, movement `base`,
   `multibase`, scheduler-facing `buf_uop` projection through movement/`AFTER`/`MSELECT`/`MSTACK`,
   source-aligned `has_buffer_identity`, source-aligned `contiguous` no-op behavior and `bufferize`
   as `STAGE`, concrete `as_shape`,
-  movement-argument extraction, replace-by-arg/dtype, structural key rendering, substitute,
+  movement-argument extraction, full-dtype-preserving replace-by-arg/substitute, replace-by-dtype, structural key rendering,
   toposort/backward-slice helpers including upstream `enter_calls=false` body-skipping for `CALL`/`FUNCTION`, shared-parent counting, and source-aligned `ranges`/`ended_ranges` propagation for
   range-carrying and range-ending UOps.
 - `uop/upat.rss`: integrated UPat/PatternMatcher over real interned node ids, with named captures,
@@ -306,10 +307,12 @@ Integrated pieces:
 Current integrated demo:
 - validates dtype, helpers, view/shape, UOp helpers, UOp spec checks, UPat matching, and
   rules-as-data graph rewrite.
-- validates UOp method helpers for `STACK` splitting/gettuple, concrete shape extraction,
+- validates UOp method helpers for `STACK` splitting/gettuple, source-shaped
+  `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`, concrete shape extraction,
   movement base recovery, and movement argument extraction.
-- validates vector-dtype `broadcast` and full-dtype-aware `CAST`, including vector-to-scalar
-  casts that must not be skipped by scalar dtype-name comparison.
+- validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
+  `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
+  constructor casts that must not be skipped by scalar dtype-name comparison.
 - validates source-aligned masked-index helpers: `valid(idx, cond)` builds a verifier-accepted
   `WHERE`, `get_idx` unwraps the payload, `get_valid` unwraps the mask, and vector-count
   `invalid` preserves weak-index dtype count.

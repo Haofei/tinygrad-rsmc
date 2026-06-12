@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,719 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,787 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 79/106 symbols, `mixin/__init__.py` 79/82 symbols,
-    `uop/ops.py` 215/221 symbols; 373/409 total rough symbols covered.
+  - result: `tensor.py` 82/106 symbols, `mixin/__init__.py` 80/82 symbols,
+    `uop/ops.py` 215/221 symbols; 377/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -419,9 +419,12 @@ Integrated pieces:
   with duplicate last-wins masked merge, `scatter_reduce` for sum/prod/mean/amax/amin,
   scalar `scatter(..., reduce="add"/"multiply")`, upstream-shaped wrappers for `_pre_scatter`,
   `_masked_merge`, `scatter_reduce`, `_tri`, `_ufix_keep_dtype`, constrained materialized
-  `__getitem__`/`_getitem`, and implicit-scalar `gradient` over the integrated `grad_wrt` slice,
-  plus boundary wrappers for `alu`, scalar `ufix`, `contiguous`, and `to` over existing UOp
-  graph primitives,
+  `__getitem__`/`_getitem`, implicit-scalar `gradient`/`backward` wrappers over the integrated
+  `grad_wrt` slice, `_apply_uop` dispatch for movement/reduce/unary/binary/where graph
+  construction, Tensor `_rop` reduce forwarding, source-shaped `sequential` over graph function
+  UOps, plus boundary wrappers for `alu`, scalar `ufix`, `contiguous`, and `to` over existing UOp
+  graph primitives. The RSS `backward` wrapper returns gradients for explicit target UOps; it does
+  not yet mutate Python Tensor `.grad` fields or discover targets through a weakref registry,
   a first graph-level `TensorState` lifecycle spine with `uop`/param/grad flags, state
   `replace`/`as_param` helpers, graph-backed `shape`/`dtype`/`device`/`numel`/`nbytes`,
   `empty`/`empty_like` over UOp buffer construction, no-op-aware same-device `to`, single-tensor
@@ -858,7 +861,7 @@ Major missing integrated work:
   partially integrated now, but exact upstream class-global RNG mutation/counter identity,
   Python exception behavior for `__bool__`/`__len__`, true ndarray/buffer object parity,
   full Python `Tensor.__init__`/object identity behavior,
-  weakref/all-tensor registry updates, full view-assign substitution, exact global
+  weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution, exact global
   seed/counter APIs, broader distribution helpers,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
   on runtime `.item()` shape discovery, graph-backed NaN/Inf predicate lowering,
@@ -869,8 +872,9 @@ Major missing integrated work:
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and
   selected unary/math VJPs. `tensor_gradient` now wraps the supported implicit scalar-gradient
-  path for a list of target UOps, but full Function-style APIs, explicit incoming-gradient
-  handling, complete VJP coverage, gradient accumulation APIs, and exact tinygrad gradient
+  path for a list of target UOps and `backward` forwards to that explicit-target path, but full
+  Function-style APIs, explicit incoming-gradient handling, complete VJP coverage,
+  gradient accumulation APIs, Python Tensor `.grad` mutation/discovery, and exact tinygrad gradient
   semantics are still missing.
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a broader method-helper/alias slice are integrated now, but

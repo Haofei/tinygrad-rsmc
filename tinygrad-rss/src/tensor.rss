@@ -367,6 +367,21 @@ fn tensor_state_call(cache: mut UOpCache, t: read TensorState, args: read List<I
     return TensorState(uop: u, is_param: t.is_param, has_grad: false, grad: 0 - 1)
 }
 
+fn sequential(cache: mut UOpCache, x: Int, functions: read List<Int>) -> Int {
+    let mut cur = x
+    local empty = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read functions) {
+        cur = tensor_call(cache: mut cache, x: cur, args: read empty, fxn: List.get<Int>(list: read functions, index: i))
+        i = i + 1
+    }
+    return cur
+}
+
+fn tensor_sequential(cache: mut UOpCache, x: Int, functions: read List<Int>) -> Int {
+    return sequential(cache: mut cache, x: x, functions: read functions)
+}
+
 fn tensor_linear_with_vars(cache: mut UOpCache, x: Int, args: read List<Int>) -> fresh ScheduleLinearVars {
     local ids = List.new<Int>()
     push1(l: mut ids, a: x)
@@ -542,6 +557,59 @@ fn tensor_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>) -> f
         i = i + 1
     }
     return take out
+}
+
+fn backward(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {
+    return tensor_gradient(cache: mut cache, root: root, targets: read targets)
+}
+
+fn tensor_backward(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {
+    return backward(cache: mut cache, root: root, targets: read targets)
+}
+
+fn _rop(cache: mut UOpCache, x: Int, op: Ops, axes: read List<Int>) -> Int {
+    return uop_rop(cache: mut cache, id: x, op: op, axes: read axes)
+}
+
+fn tensor_rop(cache: mut UOpCache, x: Int, op: Ops, axes: read List<Int>) -> Int {
+    return _rop(cache: mut cache, x: x, op: op, axes: read axes)
+}
+
+fn _apply_uop(cache: mut UOpCache, op: Ops, srcs: read List<Int>, args: read List<Int>) -> Int {
+    if List.len<Int>(list: read srcs) == 0 {
+        return mk_const_int(cache: mut cache, dt: read dt_int32(), v: 0)
+    }
+    let x = List.get<Int>(list: read srcs, index: 0)
+    if group_movement(op: read op) {
+        return _mop(cache: mut cache, id: x, op: op, arg: read args)
+    }
+    if op == REDUCE {
+        let mut rop = 0
+        if List.len<Int>(list: read args) > 0 { rop = List.get<Int>(list: read args, index: 0) }
+        local axes = List.new<Int>()
+        let mut i = 1
+        while i < List.len<Int>(list: read args) {
+            push1(l: mut axes, a: List.get<Int>(list: read args, index: i))
+            i = i + 1
+        }
+        if rop == 1 { return _rop(cache: mut cache, x: x, op: MUL, axes: read axes) }
+        if rop == 2 { return _rop(cache: mut cache, x: x, op: MAX, axes: read axes) }
+        return _rop(cache: mut cache, x: x, op: ADD, axes: read axes)
+    }
+    if List.len<Int>(list: read srcs) == 1 {
+        return tensor_unary(cache: mut cache, op: op, x: x)
+    }
+    if List.len<Int>(list: read srcs) == 2 {
+        return tensor_binary(cache: mut cache, op: op, a: x, b: List.get<Int>(list: read srcs, index: 1))
+    }
+    if List.len<Int>(list: read srcs) == 3 {
+        return tensor_where(cache: mut cache, cond: x, x: List.get<Int>(list: read srcs, index: 1), y: List.get<Int>(list: read srcs, index: 2))
+    }
+    return x
+}
+
+fn tensor_apply_uop(cache: mut UOpCache, op: Ops, srcs: read List<Int>, args: read List<Int>) -> Int {
+    return _apply_uop(cache: mut cache, op: op, srcs: read srcs, args: read args)
 }
 
 fn tensor_nbytes(cache: read UOpCache, x: Int) -> Int {

@@ -265,6 +265,70 @@ fn multi_store_after(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     return MultiRewrite(result: out, changed: true, ok: true)
 }
 
+fn multi_rewrite_function(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != FUNCTION || node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local call = node_call_arg(cache: read cache, id: root)
+    if call.precompile {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let body = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: body) != TUPLE {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local new_body_srcs = List.new<Int>()
+    let mut has_multi_body = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: body) {
+        let child = node_src_id(cache: read cache, id: body, k: i)
+        if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
+            List.push<Int>(list: mut new_body_srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
+            has_multi_body = true
+        } else {
+            List.push<Int>(list: mut new_body_srcs, value: read child)
+        }
+        i = i + 1
+    }
+    local new_args = List.new<Int>()
+    let mut changed = has_multi_body
+    let mut j = 1
+    while j < node_num_src(cache: read cache, id: root) {
+        let arg = node_src_id(cache: read cache, id: root, k: j)
+        if node_op(cache: read cache, id: arg) == MULTI && node_num_src(cache: read cache, id: arg) > 0 {
+            List.push<Int>(list: mut new_args, value: read node_src_id(cache: read cache, id: arg, k: 0))
+            changed = true
+        } else {
+            List.push<Int>(list: mut new_args, value: read arg)
+        }
+        j = j + 1
+    }
+    if changed == false {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let new_body = mk_tuple(cache: mut cache, srcs: read new_body_srcs)
+    let shard_fn = mk_function(cache: mut cache, body_tuple: new_body, args: read new_args, call: read call)
+    if has_multi_body == false {
+        return MultiRewrite(result: shard_fn, changed: true, ok: true)
+    }
+    local out_srcs = List.new<Int>()
+    let mut k = 0
+    while k < node_num_src(cache: read cache, id: body) {
+        let child = node_src_id(cache: read cache, id: body, k: k)
+        let got = mk_gettuple(cache: mut cache, tuple_id: shard_fn, idx: k)
+        if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
+            let wrapped = mk_multi(cache: mut cache, x: got, axis: node_const_int(cache: read cache, id: child))
+            List.push<Int>(list: mut out_srcs, value: read wrapped)
+        } else {
+            List.push<Int>(list: mut out_srcs, value: read got)
+        }
+        k = k + 1
+    }
+    let out = mk_tuple(cache: mut cache, srcs: read out_srcs)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
 fn multi_root_payload(cache: read UOpCache, root: Int) -> Int {
     if node_num_src(cache: read cache, id: root) == 0 { return -1 }
     let multi = node_src_id(cache: read cache, id: root, k: 0)

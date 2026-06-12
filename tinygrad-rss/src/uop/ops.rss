@@ -2063,6 +2063,17 @@ fn node_effective_device_count(cache: read UOpCache, id: Int) -> Int {
     if op == MSTACK {
         return node_num_src(cache: read cache, id: id)
     }
+    if op == GETTUPLE {
+        if node_num_src(cache: read cache, id: id) == 0 { return 0 }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let tuple_src = uop_tuple_source_for_gettuple(cache: read cache, id: src)
+        if node_op(cache: read cache, id: tuple_src) == TUPLE {
+            let idx = node_const_int(cache: read cache, id: id)
+            if idx >= 0 && idx < node_num_src(cache: read cache, id: tuple_src) {
+                return node_effective_device_count(cache: read cache, id: node_src_id(cache: read cache, id: tuple_src, k: idx))
+            }
+        }
+    }
     if op == PARAM {
         return node_param_device_count(cache: read cache, id: id)
     }
@@ -2101,6 +2112,18 @@ fn node_effective_device_name(cache: read UOpCache, id: Int, index: Int) -> fres
         if index >= 0 && index < node_num_src(cache: read cache, id: id) {
             let src = node_src_id(cache: read cache, id: id, k: index)
             return node_effective_device_name(cache: read cache, id: src, index: 0)
+        }
+        return ""
+    }
+    if op == GETTUPLE {
+        if node_num_src(cache: read cache, id: id) == 0 { return "" }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let tuple_src = uop_tuple_source_for_gettuple(cache: read cache, id: src)
+        if node_op(cache: read cache, id: tuple_src) == TUPLE {
+            let idx = node_const_int(cache: read cache, id: id)
+            if idx >= 0 && idx < node_num_src(cache: read cache, id: tuple_src) {
+                return node_effective_device_name(cache: read cache, id: node_src_id(cache: read cache, id: tuple_src, k: idx), index: index)
+            }
         }
         return ""
     }

@@ -1474,6 +1474,26 @@ fn tensor_rand(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed:
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
 }
 
+fn tensor_shape_all_nonnegative(shape: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        if List.get<Int>(list: read shape, index: i) < 0 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn tensor_rand_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed: Int) -> fresh TensorNodeResult {
+    if dtype_is_float(d: read dt) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "rand only supports float dtypes"))
+    }
+    if tensor_shape_all_nonnegative(shape: read shape) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "invalid input shape"))
+    }
+    let value = tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
+    return TensorNodeResult(ok: true, value: value, message: String.copy(value: read ""))
+}
+
 fn tensor_rand_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     return tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
@@ -1496,6 +1516,17 @@ fn tensor_uniform(cache: mut UOpCache, dt: read DType, shape: read List<Int>, lo
         i = i + 1
     }
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
+}
+
+fn tensor_uniform_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Float, high: Float, seed: Int) -> fresh TensorNodeResult {
+    if tensor_shape_all_nonnegative(shape: read shape) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "invalid input shape"))
+    }
+    if low >= high {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "Tensor.uniform requires low < high"))
+    }
+    let value = tensor_uniform(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: seed)
+    return TensorNodeResult(ok: true, value: value, message: String.copy(value: read ""))
 }
 
 fn tensor_randn_into(shape: read List<Int>, seed: Int, mean: Float, std: Float, out: mut List<Float>) -> Unit {
@@ -1521,6 +1552,14 @@ fn tensor_randn(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
 }
 
+fn tensor_randn_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed: Int) -> fresh TensorNodeResult {
+    if tensor_shape_all_nonnegative(shape: read shape) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "invalid input shape"))
+    }
+    let value = tensor_randn(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
+    return TensorNodeResult(ok: true, value: value, message: String.copy(value: read ""))
+}
+
 fn tensor_randn_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     return tensor_randn(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
@@ -1535,6 +1574,17 @@ fn tensor_normal(cache: mut UOpCache, dt: read DType, shape: read List<Int>, mea
     local data = List.new<Float>()
     tensor_randn_into(shape: read shape, seed: seed, mean: mean, std: std, out: mut data)
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
+}
+
+fn tensor_normal_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, mean: Float, std: Float, seed: Int) -> fresh TensorNodeResult {
+    if tensor_shape_all_nonnegative(shape: read shape) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "invalid input shape"))
+    }
+    if std < 0.0 {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "Tensor.normal requires std >= 0"))
+    }
+    let value = tensor_normal(cache: mut cache, dt: read dt, shape: read shape, mean: mean, std: std, seed: seed)
+    return TensorNodeResult(ok: true, value: value, message: String.copy(value: read ""))
 }
 
 fn tensor_normal_like(cache: mut UOpCache, x: Int, dt: read DType, mean: Float, std: Float, seed: Int) -> Int {
@@ -1592,6 +1642,20 @@ fn tensor_randint(cache: mut UOpCache, dt: read DType, shape: read List<Int>, lo
         i = i + 1
     }
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
+}
+
+fn tensor_randint_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Int, high: Int, seed: Int) -> fresh TensorNodeResult {
+    if tensor_shape_all_nonnegative(shape: read shape) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "invalid input shape"))
+    }
+    if dtype_is_int(d: read dt) == false {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "dtype must be int"))
+    }
+    if low >= high {
+        return TensorNodeResult(ok: false, value: 0 - 1, message: String.copy(value: read "Tensor.randint requires low < high"))
+    }
+    let value = tensor_randint(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: seed)
+    return TensorNodeResult(ok: true, value: value, message: String.copy(value: read ""))
 }
 
 fn tensor_argsort_float(vals: read List<Float>) -> fresh List<Int> {

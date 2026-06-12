@@ -385,7 +385,8 @@ Integrated pieces:
   `arange(start, stop, step)`, `linspace`, `eye`, bit-exact explicit-seed `rand`,
   `rand_like`, `uniform`, `randint`, `randperm`, `randn`, `randn_like`, `normal`,
   `normal_like`, `scaled_uniform`, `glorot_uniform`, `kaiming_uniform`, and
-  `kaiming_normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
+  `kaiming_normal`, plus checked argument-validation wrappers for `rand`, `uniform`,
+  `randint`, `randn`, and `normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
   `const`, `const_like`, `unique_const`, `_broadcasted`, and `_binop`),
   Python-facing public wrapper aliases for reverse/truediv/mod/fmod arithmetic,
   bitwise/shift helpers, `clamp`, `copysign`, `masked_fill`, `detach`,
@@ -709,6 +710,10 @@ Current integrated demo:
 - validates explicit RSS RNG state threading through a chained smoke path: `manual_seed(42)`,
   state-returning `rand`, `uniform`, `randint`, `randn`, and `normal`, with the final counter
   state surfaced to callers.
+- validates upstream-shaped random distribution argument checks through result wrappers:
+  `rand` rejects non-float dtype and negative shape, `uniform` rejects `low >= high`,
+  `randint` rejects non-int dtype and `low >= high`, `normal` rejects negative `std`, and
+  valid `uniform` returns `ok`.
 - validates basic Tensor indexing against real tinygrad for `x[Tensor([1,0])]` and
   graph-backed `SHRINK` slicing for `x[0:2,1:3]` on a `[2,3]` tensor, including spec validation.
 - validates graph-backed Tensor `one_hot(5)`, `gather(dim=1, index)`, and `gather(dim=0, index)`

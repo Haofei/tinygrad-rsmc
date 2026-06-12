@@ -546,6 +546,40 @@ fn main() -> Unit {
     showb(label: read "codegen.expander empty unroll unwraps = ", v: mex_empty_unroll_ok)
     showb(label: read "codegen.expander double unroll merges axes = ", v: mex_double_unroll_ok)
     showb(label: read "codegen.expander end consumes unroll axes = ", v: mex_end_unroll_ok)
+    let mex_add_unroll = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: munroll, y: munroll)
+    let mut mex_expand_add_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_add_unroll) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            mex_expand_add_ok = node_op(cache: read mcache, id: r) == UNROLL && node_op(cache: read mcache, id: inner) == ADD && node_full_dtype(cache: read mcache, id: inner).count == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mex_add_broadcast = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: munroll, y: m2)
+    let mut mex_expand_broadcast_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_add_broadcast) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let rhs = node_src_id(cache: read mcache, id: inner, k: 1)
+            mex_expand_broadcast_ok = node_op(cache: read mcache, id: r) == UNROLL && node_op(cache: read mcache, id: rhs) == STACK && node_num_src(cache: read mcache, id: rhs) == 4 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mex_gep_idx = List.new<Int>()
+    List.push<Int>(list: mut mex_gep_idx, value: read 0)
+    let mex_gep_unroll = mk_gep(cache: mut mcache, x: munroll, idxs: read mex_gep_idx)
+    let mut mex_expand_gep_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_gep_unroll) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            local gidxs = node_argints(cache: read mcache, id: inner)
+            mex_expand_gep_ok = node_op(cache: read mcache, id: r) == UNROLL && node_op(cache: read mcache, id: inner) == GEP && List.len<Int>(list: read gidxs) == 4 && List.get<Int>(list: read gidxs, index: 3) == 3 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    showb(label: read "codegen.expander expands add unroll = ", v: mex_expand_add_ok)
+    showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
+    showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)
     let mmulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: m3, z: m4)
     let mf_codegen = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let mbad_mulacc = mk_alu3(cache: mut mcache, op: MULACC, dt: read i32, x: m2, y: mf_codegen, z: m4)

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 26 RSS files, 20,077 LOC.
+  - integrated `tinygrad-rss/src`: 26 RSS files, 20,253 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -158,9 +158,11 @@ Integrated pieces:
   value for direct and inverted gate forms.
 - `codegen/late/expander.rss`: first integrated source-shaped `tinygrad/codegen/late/expander.py`
   slice, covering axis-size choice/index helpers and the compact normalization rewrites for
-  `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. Full vectorized
-  `do_expand`, WMMA expansion, group-for-reduce, and BufferizeOpts-local rewrites remain later
-  expander slices.
+  `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. It also has the common
+  same-axis `do_expand` path for non-WMMA roots, including `UNROLL` source stripping, scalar
+  broadcast, vector `VCAT` repetition, range-arg passthrough, and `GEP` arg expansion. WMMA,
+  register-pointer special-casing, mixed-axis swizzles, group-for-reduce, and BufferizeOpts-local
+  rewrites remain later expander slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
@@ -394,7 +396,8 @@ Current integrated demo:
   around direct/inverted gated loads is folded into the load alt value.
 - validates the first expander slice: scalar `CONTRACT` lowers to `STACK`, `CONTRACT` of
   `UNROLL` lowers to indexed `GEP`, empty `UNROLL` unwraps, double `UNROLL` merges axes,
-  and `END` consumes `UNROLL` axes through `CONTRACT`.
+  `END` consumes `UNROLL` axes through `CONTRACT`, same-axis elementwise `UNROLL` sources are
+  expanded, scalar non-unroll sources are broadcast, and `GEP` args expand across lanes.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample
@@ -612,7 +615,7 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
-  gate-from-index movement, first expander CONTRACT/UNROLL/END normalization,
+  gate-from-index movement, first expander CONTRACT/UNROLL/END normalization and same-axis expansion,
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing

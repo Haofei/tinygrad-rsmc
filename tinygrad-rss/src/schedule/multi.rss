@@ -280,6 +280,18 @@ fn multi_strip_multi_srcs(cache: mut UOpCache, root: Int) -> fresh MultiRewrite 
     return MultiRewrite(result: rebuilt, changed: true, ok: true)
 }
 
+fn multi_call_void_strip(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != CALL {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let dt = node_full_dtype(cache: read cache, id: root)
+    if dt.name != "void" {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    return multi_strip_multi_srcs(cache: mut cache, root: root)
+}
+
 fn multi_store_after(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let fallback = multi_empty_result(cache: mut cache)
     if node_op(cache: read cache, id: root) != AFTER || node_num_src(cache: read cache, id: root) < 2 {

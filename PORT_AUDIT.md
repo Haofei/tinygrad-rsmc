@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,365 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,384 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -268,7 +268,7 @@ Integrated pieces:
   concatenating along the sharded axis, copying a multi-device value to a tuple device through
   symbolic unshard plus `ALLREDUCE(ADD)`, eliminating `MSELECT(MSTACK)`, moving `MSELECT` before movement ops, passthrough
   rebuilds for boundary ops with a leading `MULTI` child, source stripping for non-value-producing
-  roots such as `STORE`, multi-aware `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and the first movement rewrite family for
+  roots such as `STORE` and void `CALL`, multi-aware `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and the first movement rewrite family for
   `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP`, nonzero shard-partition `SHRINK(MULTI)` lowering through
   `MSELECT` plus tuple-device `COPY`, plus early `SHRINK(MSTACK)` splitting and tuple routing for
   `GETTUPLE(TUPLE)` and `GETTUPLE(MULTI(TUPLE|FUNCTION))`, FUNCTION-body multi stripping/rewrapping, and source-shaped `REDUCE(MULTI)`
@@ -459,7 +459,7 @@ Current integrated demo:
   axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one concatenation, multi-device
   COPY-to-tuple unshard/allreduce, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
   `SHRINK(MSTACK)` splitting, nonzero shard-partition `SHRINK(MULTI)` selection/copy lowering,
-  `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` source stripping,
+  `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` and void `CALL` source stripping,
   `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and
   `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP` movement rewrites, tuple and function
   `GETTUPLE` routing through `MULTI`, FUNCTION-body multi stripping/rewrapping, and piecewise vs. shard-axis `REDUCE(MULTI)` rewrites,

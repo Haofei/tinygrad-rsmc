@@ -65,6 +65,12 @@ fn tensor_const_like_float(cache: mut UOpCache, x: Int, value: Float) -> Int {
     return mk_const_float(cache: mut cache, dt: read dt, v: value)
 }
 
+fn tensor_nbytes(cache: read UOpCache, x: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let dt = node_dtype(cache: read cache, id: x)
+    return numel(shape: read shape) * DType.itemsize(self: read dt)
+}
+
 fn push1(l: mut List<Int>, a: Int) -> Unit {
     List.push<Int>(list: mut l, value: read a)
     return Unit

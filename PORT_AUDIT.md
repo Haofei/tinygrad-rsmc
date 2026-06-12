@@ -222,14 +222,16 @@ Integrated pieces:
   scopes are grouped by nesting owner and dependent `RANGE` nodes receive an extra ordering
   source edge before linearization.
   The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`
-  and is idempotent when the program already has a `LINEAR` child.
+  and is idempotent when the program already has a `LINEAR` child. Source-shaped `do_split_ends`
+  now delegates to the integrated `pm_split_ends` helper.
   Pre-existing IF rejection, ISA register allocation, compile/binary, and full schedule/device
   rewrite orchestration remain unported.
 - `codegen/late/regalloc.rss`: first source-shaped boundary slice for
   `tinygrad/codegen/late/regalloc.py`, covering upstream's pseudo-op set
   (`CONST`, `NOOP`, `AFTER`, `BARRIER`, `GROUP`) and an explicit capability predicate that keeps
   real linear-scan allocation disabled until the RSS IR carries ISA `Register` tags from a target
-  renderer.
+  renderer. Source-shaped `vdef` and `regalloc_rewrite` entry points are present as current-IR
+  metadata/passthrough helpers, not a real ISA register allocator.
 - `codegen/late/gater.rss`: integrated source-shaped `tinygrad/codegen/late/gater.py`
   slice, covering the `pm_move_gates_from_index` rewrites for 1D and 2D
   `INDEX(WHERE(gate, idx, INVALID))` nodes feeding `LOAD` or `STORE`, including optional
@@ -268,16 +270,19 @@ Integrated pieces:
   metadata for the current interned UOps (`ops`, load/store bytes, and unique capped buffer memory),
   derives first `ProgramInfo.from_sink`-style program metadata (`vars`, `globals`, `outs`, `ins`,
   and integer `SPECIAL` launch dimensions for `g*`, `l*`, and `i*` names) for the current lowered
-  sink shape, then appends a `SOURCE` child with the rendered kernel text. It also has the first
+  sink shape, then appends a `SOURCE` child with the rendered kernel text. Source-shaped entry
+  points now cover `full_rewrite_to_sink`, `line_rewrite`, `do_linearize`, `do_estimates`,
+  `do_assemble`, `do_render`, `do_compile`, `do_to_program`, and `to_program` for the supported
+  C-style path. It also has the first
   host compile/syntax bridge for rendered CStyle source, writing the attached `SOURCE` to a path
   and invoking `clang -x c -std=c11 -fsyntax-only` through RSScript `Path`/`Process`, returning
   source id/length, exit status, stderr length, and ok/fail metadata. It also has the first hosted
   executable C harness bridge for the current generated kernel shape: combine `SOURCE` with a
   supplied C `main`, compile with `clang`, run the executable through `Process`, and capture stdout
   plus compile/run status. The first `to_program`-style orchestration for the supported C-style path is:
-  `do_linearize -> do_estimates -> do_render_cstyle`. Full symbolic `sint` estimates,
-  aux metadata, compiled binary materialization, general buffer-backed runtime invocation, and full
-  schedule/device rewrite orchestration remain unported.
+  `do_linearize -> do_estimates -> do_render`. Full symbolic `sint` estimates,
+  aux metadata, real compiler-backed `BINARY` materialization, general buffer-backed runtime invocation,
+  and full schedule/device rewrite orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `PARAM`/
   `DEFINE_LOCAL`/`DEFINE_REG` shape payloads, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, upstream-style global shape for

@@ -492,3 +492,98 @@ fn codegen_to_program_cstyle(cache: mut UOpCache, prg: Int) -> Int {
     let est = codegen_do_estimates(cache: mut cache, prg: lin)
     return codegen_do_render_cstyle(cache: mut cache, prg: est)
 }
+
+fn full_rewrite_to_sink(cache: mut UOpCache, ast: Int, optimize: Bool) -> Int {
+    if node_op(cache: read cache, id: ast) == PROGRAM && node_num_src(cache: read cache, id: ast) > 0 {
+        return node_src_id(cache: read cache, id: ast, k: 0)
+    }
+    return ast
+}
+
+fn line_rewrite(cache: mut UOpCache, order: read List<Int>) -> fresh List<Int> {
+    return linearizer_line_rewrite_cleanups(cache: mut cache, order: read order)
+}
+
+fn do_linearize(cache: mut UOpCache, prg: Int) -> Int {
+    return linearizer_do_linearize(cache: mut cache, prg: prg)
+}
+
+fn do_estimates(cache: mut UOpCache, prg: Int) -> Int {
+    return codegen_do_estimates(cache: mut cache, prg: prg)
+}
+
+fn do_assemble(cache: mut UOpCache, prg: Int) -> Int {
+    if node_op(cache: read cache, id: prg) != PROGRAM { return prg }
+    if node_num_src(cache: read cache, id: prg) < 3 { return prg }
+    let lin = node_src_id(cache: read cache, id: prg, k: 2)
+    if node_op(cache: read cache, id: lin) != LINEAR { return prg }
+    if node_num_src(cache: read cache, id: prg) > 4 { return prg }
+    let mut text = ""
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: lin) {
+        if i > 0 { text = String.concat(left: read text, right: read "\n") }
+        let id = node_src_id(cache: read cache, id: lin, k: i)
+        text = String.concat(left: read text, right: read uop_arg_to_string(arg: read node_arg(cache: read cache, id: id)))
+        i = i + 1
+    }
+    let source = mk_source(cache: mut cache, text: read text)
+    let binary = mk_binary(cache: mut cache, text: read "")
+    local src = List.new<Int>()
+    let mut j = 0
+    while j < node_num_src(cache: read cache, id: prg) {
+        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: j))
+        j = j + 1
+    }
+    if node_num_src(cache: read cache, id: prg) == 3 { List.push<Int>(list: mut src, value: read source) }
+    List.push<Int>(list: mut src, value: read binary)
+    let dt = node_full_dtype(cache: read cache, id: prg)
+    local prog = node_program_arg(cache: read cache, id: prg)
+    local arg = ArgProgram(value: take prog)
+    return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}
+
+fn do_render(cache: mut UOpCache, prg: Int) -> Int {
+    return codegen_do_render_cstyle(cache: mut cache, prg: prg)
+}
+
+fn do_compile(cache: mut UOpCache, prg: Int) -> Int {
+    if node_op(cache: read cache, id: prg) != PROGRAM { return prg }
+    if node_num_src(cache: read cache, id: prg) < 4 { return prg }
+    if node_num_src(cache: read cache, id: prg) > 4 { return prg }
+    let source = node_src_id(cache: read cache, id: prg, k: 3)
+    if node_op(cache: read cache, id: source) != SOURCE { return prg }
+    let binary = mk_binary(cache: mut cache, text: read "")
+    local src = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: prg) {
+        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: i))
+        i = i + 1
+    }
+    List.push<Int>(list: mut src, value: read binary)
+    let dt = node_full_dtype(cache: read cache, id: prg)
+    local prog = node_program_arg(cache: read cache, id: prg)
+    local arg = ArgProgram(value: take prog)
+    return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}
+
+fn do_to_program(cache: mut UOpCache, ast: Int) -> Int {
+    if node_op(cache: read cache, id: ast) == PROGRAM {
+        return codegen_to_program_cstyle(cache: mut cache, prg: ast)
+    }
+    if node_op(cache: read cache, id: ast) == SINK {
+        local info = codegen_program_arg_from_sink(cache: read cache, sink: ast, name: read "kernel")
+        local src = List.new<Int>()
+        List.push<Int>(list: mut src, value: read ast)
+        let dev = mk_device(cache: mut cache, device: read "CPU")
+        List.push<Int>(list: mut src, value: read dev)
+        let dt = dt_void()
+        local arg = ArgProgram(value: take info)
+        let prg = intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+        return codegen_to_program_cstyle(cache: mut cache, prg: prg)
+    }
+    return ast
+}
+
+fn to_program(cache: mut UOpCache, ast: Int) -> Int {
+    return do_to_program(cache: mut cache, ast: ast)
+}

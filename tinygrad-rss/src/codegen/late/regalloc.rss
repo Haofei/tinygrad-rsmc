@@ -38,3 +38,20 @@ fn regalloc_count_non_pseudo(cache: read UOpCache, order: read List<Int>) -> Int
     }
     return count
 }
+
+fn vdef(cache: read UOpCache, order: read List<Int>, index: Int) -> Int {
+    if index < 0 { return 0 - 1 }
+    if index >= List.len<Int>(list: read order) { return 0 - 1 }
+    return List.get<Int>(list: read order, index: index)
+}
+
+fn regalloc_rewrite(cache: read UOpCache, order: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        List.push<Int>(list: mut out, value: read id)
+        i = i + 1
+    }
+    return take out
+}

@@ -485,15 +485,31 @@ fn from_blob(cache: mut UOpCache, ptr: Int, shape: read List<Int>, dt: read DTyp
     return tensor_empty(cache: mut cache, shape: read shape, dt: read dt, device: read device, num: ptr)
 }
 
+fn from_url_bytes(cache: mut UOpCache, bytes: read Bytes, dt: read DType, device: read String) -> Int {
+    let raw = tensor_bytes_to_1d(cache: mut cache, bytes: read bytes)
+    if dt.name == dt_uint8().name { return tensor_to(cache: mut cache, x: raw, device: read device) }
+    let casted = tensor_bitcast(cache: mut cache, x: raw, dt: read dt)
+    return tensor_to(cache: mut cache, x: casted, device: read device)
+}
+
 fn from_url(cache: mut UOpCache, url: read String, gunzip: Bool, dt: read DType, device: read String) -> Int {
     let u = Url.from_string(value: read url)
     match Http.get(url: read u) {
         Ok(response) => {
             let bytes = HttpResponse.bytes(response: read response)
-            let raw = tensor_bytes_to_1d(cache: mut cache, bytes: read bytes)
-            if dt.name == dt_uint8().name { return tensor_to(cache: mut cache, x: raw, device: read device) }
-            let casted = tensor_bitcast(cache: mut cache, x: raw, dt: read dt)
-            return tensor_to(cache: mut cache, x: casted, device: read device)
+            if gunzip {
+                match Gzip.decompress_bytes(value: read bytes) {
+                    Ok(decoded) => {
+                        return from_url_bytes(cache: mut cache, bytes: read decoded, dt: read dt, device: read device)
+                    }
+                    Err(error) => {
+                        local empty_shape = shp1(a: 0)
+                        local empty_data = List.new<Float>()
+                        return mk_data_tensor(cache: mut cache, dt: read dt, shape: read empty_shape, data: read empty_data)
+                    }
+                }
+            }
+            return from_url_bytes(cache: mut cache, bytes: read bytes, dt: read dt, device: read device)
         }
         Err(error) => {
             local empty_shape = shp1(a: 0)

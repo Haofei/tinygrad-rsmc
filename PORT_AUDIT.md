@@ -464,7 +464,8 @@ Integrated pieces:
   a materialized `_hash_1mb` SHAKE-128 chunk/reduce helper over the current evaluator byte path,
   materialized byte/file boundary helpers for current local execution (`fs_load`/`fs_store`
   through `File.read_bytes`/`File.write_bytes`, `from_blob` as an external-pointer-shaped empty
-  buffer placeholder, `from_url` through sync `Http.get`/`HttpResponse.bytes`,
+  buffer placeholder, `from_url` through sync `Http.get`/`HttpResponse.bytes` with gzip byte
+  decompression through `Gzip.decompress_bytes`,
   and `decode_hevc_frame` as an `encdec` `CUSTOM_FUNCTION` call dependency graph wrapper),
   explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
   compaction,
@@ -903,7 +904,7 @@ Major missing integrated work:
   full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
   exact lazy hash graph semantics and strict `_hash_1mb` size enforcement,
   exact tinyfs chunk-tree storage semantics for `fs_load`/`fs_store`, real external-pointer buffer
-  ownership/lifetime for `from_blob`, gzip extraction and cache/progress behavior for `from_url`, and
+  ownership/lifetime for `from_blob`, exact cache/progress behavior for `from_url`, and
   actual HEVC decode runtime execution behind the `encdec` custom function,
   real packed image convolution kernels and lazy Winograd convolution integration rather than the
   current direct-conv fallback,

@@ -2695,6 +2695,21 @@ fn main() -> Unit {
     List.push<Int>(list: mut sched_bad_sink_srcs, value: read sched_bind_n_bad)
     let sched_bad_sink = uop_sink(cache: mut mcache, srcs: read sched_bad_sink_srcs)
     local sched_bad_vars = schedule_extract_var_vals(cache: read mcache, big_sink: sched_bad_sink, linear: sched_var_linear)
+    local sched_wrap_call_args = List.new<Int>()
+    let sched_wrap_buf = mk_new_buffer(cache: mut mcache, device: read "CPU", size: 8, dt: read i32, num: 490)
+    List.push<Int>(list: mut sched_wrap_call_args, value: read sched_wrap_buf)
+    let sched_wrap_call = mk_call(cache: mut mcache, body: sched_var_expr, args: read sched_wrap_call_args, call: read sched_call_arg_a)
+    local sched_wrap_linear_srcs = List.new<Int>()
+    List.push<Int>(list: mut sched_wrap_linear_srcs, value: read sched_wrap_call)
+    let sched_wrap_linear = mk_linear(cache: mut mcache, srcs: read sched_wrap_linear_srcs)
+    local sched_wrap_sink_srcs = List.new<Int>()
+    List.push<Int>(list: mut sched_wrap_sink_srcs, value: read sched_wrap_linear)
+    List.push<Int>(list: mut sched_wrap_sink_srcs, value: read sched_bind_n)
+    List.push<Int>(list: mut sched_wrap_sink_srcs, value: read sched_bind_m)
+    let sched_wrap_sink = uop_sink(cache: mut mcache, srcs: read sched_wrap_sink_srcs)
+    local sched_wrapped_linear = schedule_create_linear_with_vars(cache: mut mcache, big_sink: sched_wrap_sink)
+    let sched_wrapped_call = node_src_id(cache: read mcache, id: sched_wrapped_linear.linear, k: 0)
+    let sched_wrapped_arg0 = node_src_id(cache: read mcache, id: sched_wrapped_call, k: 1)
     showb(label: read "schedule.split_after kernels/deps = ", v: sched_split.ok && List.len<Int>(list: read sched_split.kernels) == 1 && List.len<Int>(list: read sched_split.deps) == 1)
     showb(label: read "schedule.unwrap movement reaches AFTER = ", v: schedule_unwrap_src(cache: read mcache, id: sched_wrapped) == sched_after_a)
     showb(label: read "schedule.create orders dependent calls = ", v: sched_build.ok && node_op(cache: read mcache, id: sched_build.linear) == LINEAR && node_num_src(cache: read mcache, id: sched_build.linear) == 2 && node_op(cache: read mcache, id: sched_linear0) == CALL && node_op(cache: read mcache, id: sched_linear1) == CALL && node_call_arg(cache: read mcache, id: sched_linear0).name == "sched_a" && node_call_arg(cache: read mcache, id: sched_linear1).name == "sched_b")
@@ -2705,6 +2720,10 @@ fn main() -> Unit {
         None => { showb(label: read "schedule.extract var vals used bind = ", v: false) }
     }
     showb(label: read "schedule.extract var vals mismatch = ", v: sched_bad_vars.ok == false)
+    match Map.get<String, Int>(map: read sched_wrapped_linear.var_vals, key: read "sched_n") {
+        Some(wv) => { showb(label: read "schedule.create_linear_with_vars plans and binds = ", v: sched_wrapped_linear.ok && wv == 7 && sched_wrapped_linear.planned == 1 && node_op(cache: read mcache, id: sched_wrapped_arg0) == SLICE && Map.get<String, Int>(map: read sched_wrapped_linear.var_vals, key: read "sched_m") == None) }
+        None => { showb(label: read "schedule.create_linear_with_vars plans and binds = ", v: false) }
+    }
     let mem_tmp_a = mk_new_buffer(cache: mut mcache, device: read "CPU", size: 16, dt: read dt_float32(), num: 501)
     let mem_tmp_b = mk_new_buffer(cache: mut mcache, device: read "CPU", size: 32, dt: read dt_float32(), num: 502)
     local mem_compute_args = List.new<Int>()

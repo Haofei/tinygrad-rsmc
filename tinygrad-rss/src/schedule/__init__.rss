@@ -28,6 +28,14 @@ struct ScheduleVars derives(Clone) {
     ok: Bool,
 }
 
+struct ScheduleLinearVars derives(Clone) {
+    linear: Int,
+    var_vals: Map<String, Int>,
+    planned: Int,
+    arenas: Int,
+    ok: Bool,
+}
+
 fn schedule_is_unwrap_stop(op: read Ops) -> Bool {
     if op == AFTER { return true }
     if op == BUFFER { return true }
@@ -317,6 +325,57 @@ fn schedule_extract_var_vals(cache: read UOpCache, big_sink: Int, linear: Int) -
     }
     let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
     return ScheduleVars(var_vals: take vals, ok: ok)
+}
+
+fn schedule_collect_held_buffers_from_call(cache: read UOpCache, linear_call: Int) -> fresh List<Int> {
+    local held = List.new<Int>()
+    if node_op(cache: read cache, id: linear_call) != CALL { return take held }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: linear_call) {
+        let s = node_src_id(cache: read cache, id: linear_call, k: i)
+        if node_op(cache: read cache, id: s) == BUFFER {
+            List.push<Int>(list: mut held, value: read s)
+        }
+        i = i + 1
+    }
+    return take held
+}
+
+fn schedule_create_linear_with_vars(cache: mut UOpCache, big_sink: Int) -> fresh ScheduleLinearVars {
+    local ok_flags = List.new<Int>()
+    List.push<Int>(list: mut ok_flags, value: read 1)
+    let mut held = List.new<Int>()
+    local empty = List.new<Int>()
+    let mut linear = mk_linear(cache: mut cache, srcs: read empty)
+    if node_op(cache: read cache, id: big_sink) != SINK || node_num_src(cache: read cache, id: big_sink) == 0 {
+        schedule_mark_bad(ok_flags: mut ok_flags)
+    } else {
+        let root = node_src_id(cache: read cache, id: big_sink, k: 0)
+        let root_op = node_op(cache: read cache, id: root)
+        if root_op == CALL && node_num_src(cache: read cache, id: root) > 0 && node_op(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 0)) == LINEAR {
+            local resolved = schedule_resolve_linear_call(cache: mut cache, linear_call: root)
+            linear = resolved.linear
+            if resolved.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+            held = schedule_collect_held_buffers_from_call(cache: read cache, linear_call: root)
+        } else {
+            if root_op == LINEAR {
+                linear = root
+            } else {
+                local build = schedule_create(cache: mut cache, sched_sink: big_sink)
+                linear = build.linear
+                if build.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+            }
+        }
+    }
+    local vars = schedule_extract_var_vals(cache: read cache, big_sink: big_sink, linear: linear)
+    if vars.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+    local planned = memory_plan_rewrite(cache: mut cache, linear: linear, held: read held)
+    if planned.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+    let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
+    let out_linear = planned.linear
+    let out_planned = planned.planned
+    let out_arenas = planned.arenas
+    return ScheduleLinearVars(linear: out_linear, var_vals: take vars.var_vals, planned: out_planned, arenas: out_arenas, ok: ok)
 }
 
 fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {

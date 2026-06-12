@@ -153,6 +153,22 @@ fn schedule_kernel_body(cache: read UOpCache, kernel: Int) -> Int {
     return kernel
 }
 
+fn schedule_rebuild_call_with_bufs(cache: mut UOpCache, call: Int) -> Int {
+    local args = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: call) {
+        let s = node_src_id(cache: read cache, id: call, k: i)
+        if node_op(cache: read cache, id: s) != BIND {
+            let unwrapped = schedule_unwrap_src(cache: read cache, id: s)
+            let buf = uop_buf_uop(cache: mut cache, id: unwrapped)
+            List.push<Int>(list: mut args, value: read buf)
+        }
+        i = i + 1
+    }
+    local call_arg = node_call_arg(cache: read cache, id: call)
+    return mk_call(cache: mut cache, body: node_src_id(cache: read cache, id: call, k: 0), args: read args, call: read call_arg)
+}
+
 fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {
     local kernels = List.new<Int>()
     local indeg = List.new<Int>()
@@ -211,9 +227,12 @@ fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild 
             }
         } else {
             if kop == END {
-                List.push<Int>(list: mut linearized, value: read node_src_id(cache: read cache, id: kid, k: 0))
+                let body_call = node_src_id(cache: read cache, id: kid, k: 0)
+                let rebuilt = schedule_rebuild_call_with_bufs(cache: mut cache, call: body_call)
+                List.push<Int>(list: mut linearized, value: read rebuilt)
             } else {
-                List.push<Int>(list: mut linearized, value: read kid)
+                let rebuilt = schedule_rebuild_call_with_bufs(cache: mut cache, call: kid)
+                List.push<Int>(list: mut linearized, value: read rebuilt)
             }
         }
         let mut ei = 0

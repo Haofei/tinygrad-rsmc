@@ -816,6 +816,28 @@ fn mk_call(cache: mut UOpCache, body: Int, args: read List<Int>, call: read Call
     return intern(cache: mut cache, op: CALL, dt: read vdt, src: take src, arg: take a)
 }
 
+fn node_call_arg(cache: read UOpCache, id: Int) -> fresh CallArg {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgCall(c) => { return mk_call_arg(name: read c.name, has_name: c.has_name, precompile: c.precompile, precompile_backward: c.precompile_backward) }
+        ArgNone => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgInt(v) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgFloat(f) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgBool(b) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgStr(t) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgInts(vals) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgReduce(r) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgVar(v) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgRange(r) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgParam(p) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgAxisSizes(a) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgDevice(dv) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgOp(o) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgBufferize(b) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+        ArgProgram(p) => { return mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false) }
+    }
+}
+
 fn mk_function(cache: mut UOpCache, body_tuple: Int, args: read List<Int>, call: read CallArg) -> Int {
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read body_tuple)

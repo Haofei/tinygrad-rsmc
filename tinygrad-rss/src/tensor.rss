@@ -65,6 +65,41 @@ fn tensor_const_like_float(cache: mut UOpCache, x: Int, value: Float) -> Int {
     return mk_const_float(cache: mut cache, dt: read dt, v: value)
 }
 
+fn tensor_uop(x: Int) -> Int {
+    return x
+}
+
+fn tensor_wrap_uop(u: Int) -> Int {
+    return u
+}
+
+fn tensor_const(cache: mut UOpCache, dt: read DType, value: Float) -> Int {
+    return mk_const_float(cache: mut cache, dt: read dt, v: value)
+}
+
+fn tensor_const_like(cache: mut UOpCache, x: Int, value: Float) -> Int {
+    return tensor_const_like_float(cache: mut cache, x: x, value: value)
+}
+
+fn tensor_unique_const(cache: mut UOpCache, dt: read DType, value: Float) -> Int {
+    return tensor_const(cache: mut cache, dt: read dt, value: value)
+}
+
+fn tensor_broadcasted(cache: mut UOpCache, x: Int, y: Int, reverse: Bool) -> TensorPair {
+    local sx = uop_shape(cache: read cache, id: x)
+    local sy = uop_shape(cache: read cache, id: y)
+    local out_shape = broadcast_shape(s1: read sx, s2: read sy)
+    let xb = broadcast_to(cache: mut cache, x: x, target: read out_shape)
+    let yb = broadcast_to(cache: mut cache, x: y, target: read out_shape)
+    if reverse { return TensorPair(first: yb, second: xb) }
+    return TensorPair(first: xb, second: yb)
+}
+
+fn tensor_binop(cache: mut UOpCache, op: Ops, x: Int, y: Int, reverse: Bool) -> Int {
+    let pair = tensor_broadcasted(cache: mut cache, x: x, y: y, reverse: reverse)
+    return tensor_binary(cache: mut cache, op: op, a: pair.first, b: pair.second)
+}
+
 fn tensor_nbytes(cache: read UOpCache, x: Int) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     let dt = node_dtype(cache: read cache, id: x)
@@ -3675,6 +3710,28 @@ fn tensor_cummin_indices_axis(cache: mut UOpCache, x: Int, values: Int, axis: In
     let nx = tensor_neg(cache: mut cache, x: x)
     let nvalues = tensor_neg(cache: mut cache, x: values)
     return tensor_cummax_indices_axis(cache: mut cache, x: nx, values: nvalues, axis: axis)
+}
+
+fn tensor_cumalu(cache: mut UOpCache, x: Int, axis: Int, op: Ops) -> Int {
+    if op == ADD { return tensor_cumsum_axis(cache: mut cache, x: x, axis: axis) }
+    if op == MUL { return tensor_cumprod_axis(cache: mut cache, x: x, axis: axis) }
+    return tensor_cummax_values_axis(cache: mut cache, x: x, axis: axis)
+}
+
+fn tensor_split_cumalu(cache: mut UOpCache, x: Int, axis: Int, op: Ops) -> Int {
+    return tensor_cumalu(cache: mut cache, x: x, axis: axis, op: op)
+}
+
+fn tensor_cummax(cache: mut UOpCache, x: Int, axis: Int) -> TensorPair {
+    let values = tensor_split_cumalu(cache: mut cache, x: x, axis: axis, op: MAX)
+    let indices = tensor_cummax_indices_axis(cache: mut cache, x: x, values: values, axis: axis)
+    return TensorPair(first: values, second: indices)
+}
+
+fn tensor_cummin(cache: mut UOpCache, x: Int, axis: Int) -> TensorPair {
+    let values = tensor_cummin_values_axis(cache: mut cache, x: x, axis: axis)
+    let indices = tensor_cummin_indices_axis(cache: mut cache, x: x, values: values, axis: axis)
+    return TensorPair(first: values, second: indices)
 }
 
 fn shape_drop_axis(shape: read List<Int>, axis: Int) -> fresh List<Int> {

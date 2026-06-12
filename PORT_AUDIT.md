@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 26,010 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 26,085 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 20/106 symbols, `mixin/__init__.py` 43/82 symbols,
-    `uop/ops.py` 68/221 symbols; 131/409 total rough symbols covered.
+  - result: `tensor.py` 25/106 symbols, `mixin/__init__.py` 53/82 symbols,
+    `uop/ops.py` 75/221 symbols; 153/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -346,7 +346,9 @@ Integrated pieces:
   `arange(start, stop, step)`, `linspace`, `eye`, bit-exact explicit-seed `rand`,
   `rand_like`, `uniform`, `randint`, `randperm`, `randn`, `randn_like`, `normal`,
   `normal_like`, `scaled_uniform`, `glorot_uniform`, `kaiming_uniform`, and
-  `kaiming_normal`), dtype conversion through `CAST` for core float/int/bool cases, same-itemsize
+  `kaiming_normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
+  `const`, `const_like`, `unique_const`, `_broadcasted`, and `_binop`),
+  dtype conversion through `CAST` for core float/int/bool cases, same-itemsize
   `BITCAST` graph construction plus upstream-style shape-changing bitcast composition through
   unsigned integer packing/unpacking, broadcast elementwise arithmetic/comparison ops, unary
   `EXP2`/`LOG2`/`SIN`/`SQRT`/`RECIPROCAL`/`NEG`/
@@ -683,6 +685,9 @@ Current integrated demo:
   causal/no-dropout, boolean-mask, additive-mask, and grouped-query-attention batched cases.
 - validates Tensor `newton_schulz(steps=2, params=(2,-1.5,0.5))` against real tinygrad on a
   2x2 float32 matrix.
+- validates upstream-shaped Tensor wrapper aliases for `_uop`/`_wrap_uop`, scalar `const`,
+  `unique_const`, reverse `_binop` with `const_like`, `_split_cumalu` for ADD/MUL, and pair
+  returns for `cummax`/`cummin` on the active tensor smoke.
 - validates Tensor normalization helpers against real tinygrad: `normalize(p=2, dim=1)`,
   `normalize(p=1, dim=0)`, `normalize(p=0, dim=1)`, and `layernorm(axis=1, eps=1e-5)`.
 - validates tuple-axis Tensor statistics/normalization against real tinygrad: `mean(axis=(1,2))`,

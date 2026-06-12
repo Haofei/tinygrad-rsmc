@@ -269,7 +269,7 @@ fn pattern_graph_rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternR
         i = i + 1
     }
     let op = node_op(cache: read cache, id: id)
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local arg = node_arg(cache: read cache, id: id)
     let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
     return pattern_fixpoint(cache: mut cache, id: rebuilt, rules: read rules)

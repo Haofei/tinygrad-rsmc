@@ -177,6 +177,45 @@ fn symbolic_const_rhs(cache: read UOpCache, id: Int) -> fresh UOpTermConst {
     return UOpTermConst(term: id, value: 0, ok: false)
 }
 
+fn symbolic_dtype_same(a: read DType, b: read DType) -> Bool {
+    if a.name != b.name { return false }
+    if a.scalar_name != b.scalar_name { return false }
+    if a.count != b.count { return false }
+    if a.bitsize != b.bitsize { return false }
+    if a.priority != b.priority { return false }
+    return true
+}
+
+fn symbolic_const_vector_int(cache: mut UOpCache, dt: read DType, vals: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    local payload = copy_int_list(l: read vals)
+    local arg = ArgInts(values: take payload)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take src, arg: take arg)
+}
+
+fn symbolic_side_effect_op(op: read Ops) -> Bool {
+    if op == RANGE { return true }
+    if op == STORE { return true }
+    if op == CALL { return true }
+    if op == FUNCTION { return true }
+    if op == BARRIER { return true }
+    if op == END { return true }
+    if op == UNROLL { return true }
+    if op == LINEAR { return true }
+    if op == STAGE { return true }
+    return false
+}
+
+fn symbolic_int_list_same(a: read List<Int>, b: read List<Int>) -> Bool {
+    if List.len<Int>(list: read a) != List.len<Int>(list: read b) { return false }
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        if List.get<Int>(list: read a, index: i) != List.get<Int>(list: read b, index: i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
 fn uop_is_increasing(cache: read UOpCache, id: Int) -> Bool {
     let op = node_op(cache: read cache, id: id)
     if group_irreducible(op: read op) { return true }
@@ -516,7 +555,7 @@ fn rule_simplify_bool_alu_to_logic(cache: mut UOpCache, id: Int) -> Option<Int> 
     let bdt = node_dtype(cache: read cache, id: b)
     if dtype_is_bool(d: read adt) == false { return None }
     if dtype_is_bool(d: read bdt) == false { return None }
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     if op == MUL { return Some(mk_alu2(cache: mut cache, op: AND, dt: read dt, x: a, y: b)) }
     return Some(mk_alu2(cache: mut cache, op: OR, dt: read dt, x: a, y: b))
 }
@@ -548,7 +587,7 @@ fn symbolic_is_logical_not_of(cache: read UOpCache, not_id: Int, x: Int) -> Bool
 fn rule_simplify_combine_add_terms(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != ADD { return None }
     if node_num_src(cache: read cache, id: id) != 2 { return None }
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     let a = node_src_id(cache: read cache, id: id, k: 0)
     let b = node_src_id(cache: read cache, id: id, k: 1)
     match symbolic_try_combine_add_pair(cache: mut cache, dt: read dt, a: a, b: b) {
@@ -731,6 +770,95 @@ fn rule_simplify_move_const_to_end(cache: mut UOpCache, id: Int) -> Option<Int> 
     return Some(mk_alu2(cache: mut cache, op: op.clone(), dt: read dt, x: mid, y: c))
 }
 
+fn rule_simplify_range_own_end(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != FLOORMOD && op != FLOORDIV { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let r = node_src_id(cache: read cache, id: id, k: 0)
+    let end = node_src_id(cache: read cache, id: id, k: 1)
+    if node_op(cache: read cache, id: r) != RANGE { return None }
+    if node_num_src(cache: read cache, id: r) != 1 { return None }
+    if node_src_id(cache: read cache, id: r, k: 0) != end { return None }
+    if op == FLOORMOD { return Some(r) }
+    let dt = node_dtype(cache: read cache, id: id)
+    return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+}
+
+fn rule_simplify_cast_chain(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CAST { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let inner = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: inner) != CAST { return None }
+    if node_num_src(cache: read cache, id: inner) != 1 { return None }
+    let x = node_src_id(cache: read cache, id: inner, k: 0)
+    let xdt = node_full_dtype(cache: read cache, id: x)
+    let innerdt = node_full_dtype(cache: read cache, id: inner)
+    let outdt = node_full_dtype(cache: read cache, id: id)
+    if symbolic_dtype_same(a: read xdt, b: read outdt) {
+        if can_lossless_cast(dt0: read outdt, dt1: read innerdt) { return Some(x) }
+    }
+    if can_lossless_cast(dt0: read xdt, dt1: read innerdt) {
+        return Some(mk_cast(cache: mut cache, x: x, dt: read outdt))
+    }
+    if dtype_is_int(d: read xdt) && dtype_is_int(d: read innerdt) {
+        let r = uop_min_max(cache: read cache, id: x)
+        if dtype_imin(d: read innerdt) <= r.lo {
+            if r.hi <= dtype_imax(d: read innerdt) {
+                return Some(mk_cast(cache: mut cache, x: x, dt: read outdt))
+            }
+        }
+    }
+    return None
+}
+
+fn rule_simplify_after_cleanup(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != AFTER { return None }
+    let n = node_num_src(cache: read cache, id: id)
+    if n == 0 { return None }
+    let root = node_src_id(cache: read cache, id: id, k: 0)
+    if n == 1 { return Some(root) }
+    local deps = List.new<Int>()
+    let mut changed = false
+    let mut i = 1
+    while i < n {
+        let dep = node_src_id(cache: read cache, id: id, k: i)
+        let dop = node_op(cache: read cache, id: dep)
+        if symbolic_side_effect_op(op: read dop) {
+            List.push<Int>(list: mut deps, value: read dep)
+        } else {
+            changed = true
+            let mut j = 0
+            while j < node_num_src(cache: read cache, id: dep) {
+                let s = node_src_id(cache: read cache, id: dep, k: j)
+                List.push<Int>(list: mut deps, value: read s)
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    local deduped = dedup(x: read deps)
+    if symbolic_int_list_same(a: read deps, b: read deduped) == false { changed = true }
+    if changed == false { return None }
+    return Some(mk_after(cache: mut cache, id: root, srcs: read deduped))
+}
+
+fn rule_simplify_stack_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STACK { return None }
+    let n = node_num_src(cache: read cache, id: id)
+    if n <= 0 { return None }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dt.count != n { return None }
+    local vals = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        if node_is_const_int(cache: read cache, id: child) == false { return None }
+        List.push<Int>(list: mut vals, value: read node_const_int(cache: read cache, id: child))
+        i = i + 1
+    }
+    return Some(symbolic_const_vector_int(cache: mut cache, dt: read dt, vals: read vals))
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -847,6 +975,10 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
+    match rule_simplify_range_own_end(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match divmod_fold_general(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
@@ -919,6 +1051,18 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
+    match rule_simplify_cast_chain(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_after_cleanup(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_stack_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match rule_identities(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
@@ -937,7 +1081,7 @@ fn graph_rewrite(cache: mut UOpCache, id: Int) -> Int {
         i = i + 1
     }
     let op = node_op(cache: read cache, id: id)
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local ag = node_arg(cache: read cache, id: id)
     let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take ag)
     match simplify_rule(cache: mut cache, id: rebuilt) {

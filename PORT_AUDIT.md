@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,910 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 19,086 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -205,7 +205,8 @@ Integrated pieces:
   bool-ALU-to-logic folding, boolean contradiction folding, additive coefficient combining,
   constant-times-sum distribution, exact min/max constantization, bound-proven `MAX` folding,
   associative constant-chain folding, comparison threshold normalization, chained floor-div
-  folding, constant-last reordering, inverted-condition `WHERE` folding, simple `WHERE` folding,
+  folding, constant-last reordering, range/end division folding, cast-chain folding,
+  `AFTER` dependency cleanup, vector `STACK(CONST...)` folding, inverted-condition `WHERE` folding, simple `WHERE` folding,
   constant-exponent `POW` simplification for integer exponents,
   monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
@@ -327,6 +328,10 @@ Current integrated demo:
   ranges, `(x+2)+3 -> x+5`, `(x*2)*3 -> x*6`, `2+x<7 -> x<5`,
   `(x//2)//3 -> x//6`, `3*x<10 -> x<4`, `x//2<5 -> x<10`, and
   `(x+2)+y -> (x+y)+2`.
+- validates a grouped upstream symbolic cleanup batch: `RANGE%end -> RANGE`,
+  `RANGE//end -> 0`, lossless cast-chain collapse, range-proven integer cast-chain collapse,
+  `AFTER` dependency flattening, and vector `STACK(CONST...) -> CONST` folding while preserving
+  full vector dtype through `graph_rewrite` and `pattern_graph_rewrite`.
 - validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
   constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

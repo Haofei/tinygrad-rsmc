@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,836 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,883 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -275,7 +275,10 @@ Integrated pieces:
   `SOURCE` is compiled and run through `Path`/`Process`, stdout decimal bytes are parsed and split
   across output buffers, and the output bytes are copied back into the existing `TGBuffer` store.
   `run_linear` now tries this hosted path for supported `PROGRAM` calls and falls back to metadata
-  staging for unsupported shapes. Local-size optimization, general compiled numeric kernel invocation,
+  staging for unsupported shapes. A first scheduler-to-realize bridge now runs supported scheduled
+  sinks by calling `schedule_create_linear_with_vars` and then `run_linear`; resolved concrete
+  buffer arguments fall back to their call-argument position when no `PARAM` slot remapping is
+  needed. Local-size optimization, general compiled numeric kernel invocation,
   validation execution, graph execution, full multi-buffer/device remapping, and dynamic-library
   runtime plumbing remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
@@ -377,6 +380,9 @@ Current integrated demo:
   through the current monotonic-offset memory planner. It also validates the `CALL(LINEAR, arg)`
   root path: slot-0 `PARAM` is resolved to the outer call argument and the held concrete buffer is
   not rewritten by memory planning.
+- validates the first scheduler-to-realize bridge: a supported scheduled `CALL(LINEAR, dest, src)`
+  copy sink resolves the inner `PARAM` args, runs through `realize_run_linear`, and writes the
+  expected bytes into the destination `TGBuffer`.
 - validates the first source-shaped scheduler memory planner slice: compute/copy lane separation,
   int8 arena `SLICE` rewrites that pass the integrated spec verifier, and held-buffer exclusion.
 - validates the first source-shaped scheduler indexing slice: `ALWAYS_CONTIGUOUS` classification,

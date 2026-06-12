@@ -45,6 +45,14 @@ struct RealizeHostProgramExec derives(Clone) {
     stderr_len: Int,
 }
 
+struct RealizeScheduledRun derives(Clone) {
+    executed: Int,
+    planned: Int,
+    arenas: Int,
+    var_count: Int,
+    ok: Bool,
+}
+
 fn realize_exec_context_new(store: take DeviceMemoryStore, buffers: take List<TGBuffer>) -> fresh RealizeExecContext {
     local input_slots = List.new<Int>()
     let mut i = 0
@@ -678,14 +686,18 @@ fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: In
 }
 
 fn realize_call_arg_buffer_index(cache: read UOpCache, ctx: read RealizeExecContext, arg: Int) -> Int {
+    return realize_call_arg_buffer_index_default(cache: read cache, ctx: read ctx, arg: arg, default_index: 0)
+}
+
+fn realize_call_arg_buffer_index_default(cache: read UOpCache, ctx: read RealizeExecContext, arg: Int, default_index: Int) -> Int {
     let op = node_op(cache: read cache, id: arg)
     if op == PARAM {
         return realize_exec_context_get_slot(ctx: read ctx, slot: node_param_slot(cache: read cache, id: arg))
     }
     if (op == SLICE || op == MSELECT) && node_num_src(cache: read cache, id: arg) > 0 {
-        return realize_call_arg_buffer_index(cache: read cache, ctx: read ctx, arg: node_src_id(cache: read cache, id: arg, k: 0))
+        return realize_call_arg_buffer_index_default(cache: read cache, ctx: read ctx, arg: node_src_id(cache: read cache, id: arg, k: 0), default_index: default_index)
     }
-    return 0
+    return default_index
 }
 
 fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
@@ -694,8 +706,8 @@ fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext,
     if List.len<Int>(list: read args) < 2 { return realize_exec_call(cache: read cache, ctx: mut ctx, call: call) }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
     let op = node_op(cache: read cache, id: ast)
-    let dest_idx = realize_call_arg_buffer_index(cache: read cache, ctx: read ctx, arg: List.get<Int>(list: read args, index: 0))
-    let src_idx = realize_call_arg_buffer_index(cache: read cache, ctx: read ctx, arg: List.get<Int>(list: read args, index: 1))
+    let dest_idx = realize_call_arg_buffer_index_default(cache: read cache, ctx: read ctx, arg: List.get<Int>(list: read args, index: 0), default_index: 0)
+    let src_idx = realize_call_arg_buffer_index_default(cache: read cache, ctx: read ctx, arg: List.get<Int>(list: read args, index: 1), default_index: 1)
     if op == COPY {
         realize_exec_copy_indices(ctx: mut ctx, dest_idx: dest_idx, src_idx: src_idx)
         return true
@@ -724,4 +736,15 @@ fn realize_run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear:
         i = i + 1
     }
     return executed
+}
+
+fn realize_run_scheduled(cache: mut UOpCache, ctx: mut RealizeExecContext, big_sink: Int) -> fresh RealizeScheduledRun {
+    local scheduled = schedule_create_linear_with_vars(cache: mut cache, big_sink: big_sink)
+    let executed = realize_run_linear(cache: read cache, ctx: mut ctx, linear: scheduled.linear)
+    let vars = Map.len<String, Int>(map: read scheduled.var_vals)
+    let planned = scheduled.planned
+    let arenas = scheduled.arenas
+    let ok = scheduled.ok
+    return RealizeScheduledRun(executed: executed, planned: planned, arenas: arenas,
+                               var_count: vars, ok: ok)
 }

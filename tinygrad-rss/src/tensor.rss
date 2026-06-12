@@ -12,6 +12,12 @@ struct TensorPair derives(Clone) {
     second: Int,
 }
 
+struct TensorTriple derives(Clone) {
+    first: Int,
+    second: Int,
+    third: Int,
+}
+
 struct TensorState derives(Clone) {
     uop: Int,
     is_param: Bool,
@@ -5261,6 +5267,191 @@ fn tensor_qr(cache: mut UOpCache, x: Int) -> fresh TensorPair {
     let qnode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read qshape, data: read q)
     let rnode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read rshape, data: read r)
     return TensorPair(first: qnode, second: rnode)
+}
+
+fn tensor_float_abs(x: Float) -> Float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn tensor_svd_identity(n: Int) -> fresh List<Float> {
+    local out = List.new<Float>()
+    let mut r = 0
+    while r < n {
+        let mut c = 0
+        while c < n {
+            if r == c { pushf1(l: mut out, a: 1.0) }
+            else { pushf1(l: mut out, a: 0.0) }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return take out
+}
+
+fn tensor_svd_at(vals: read List<Float>, cols: Int, r: Int, c: Int) -> Float {
+    return List.get<Float>(list: read vals, index: r * cols + c)
+}
+
+fn tensor_svd_set(vals: mut List<Float>, cols: Int, r: Int, c: Int, v: Float) -> Unit {
+    List.set<Float>(list: mut vals, index: r * cols + c, value: read v)
+}
+
+fn tensor_svd(cache: mut UOpCache, x: Int, full_matrices: Bool) -> fresh TensorTriple {
+    local shape = uop_shape(cache: read cache, id: x)
+    let m = List.get<Int>(list: read shape, index: List.len<Int>(list: read shape) - 2)
+    let n = List.get<Int>(list: read shape, index: List.len<Int>(list: read shape) - 1)
+    let num = tensor_min_int(a: m, b: n)
+    local a = tensor_data(cache: read cache, x: x)
+
+    local b = List.new<Float>()
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let mut acc = 0.0
+            let mut r = 0
+            while r < m {
+                acc = acc + tensor_svd_at(vals: read a, cols: n, r: r, c: i) * tensor_svd_at(vals: read a, cols: n, r: r, c: j)
+                r = r + 1
+            }
+            pushf1(l: mut b, a: acc)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    local vmat = tensor_svd_identity(n: n)
+
+    let mut sweep = 0
+    while sweep < 16 {
+        let mut p = 0
+        while p < n {
+            let mut q = p + 1
+            while q < n {
+                let apq = tensor_svd_at(vals: read b, cols: n, r: p, c: q)
+                if tensor_float_abs(x: apq) > 0.00000001 {
+                    let app = tensor_svd_at(vals: read b, cols: n, r: p, c: p)
+                    let aqq = tensor_svd_at(vals: read b, cols: n, r: q, c: q)
+                    let theta = (aqq - app) / (2.0 * apq)
+                    let mut sign = 1.0
+                    if theta < 0.0 { sign = 0.0 - 1.0 }
+                    let t = sign / (tensor_float_abs(x: theta) + Math.sqrt(value: theta * theta + 1.0))
+                    let c = 1.0 / Math.sqrt(value: 1.0 + t * t)
+                    let s = t * c
+                    let mut k = 0
+                    while k < n {
+                        let bkp = tensor_svd_at(vals: read b, cols: n, r: k, c: p)
+                        let bkq = tensor_svd_at(vals: read b, cols: n, r: k, c: q)
+                        tensor_svd_set(vals: mut b, cols: n, r: k, c: p, v: c * bkp - s * bkq)
+                        tensor_svd_set(vals: mut b, cols: n, r: k, c: q, v: s * bkp + c * bkq)
+                        k = k + 1
+                    }
+                    k = 0
+                    while k < n {
+                        let bpk = tensor_svd_at(vals: read b, cols: n, r: p, c: k)
+                        let bqk = tensor_svd_at(vals: read b, cols: n, r: q, c: k)
+                        tensor_svd_set(vals: mut b, cols: n, r: p, c: k, v: c * bpk - s * bqk)
+                        tensor_svd_set(vals: mut b, cols: n, r: q, c: k, v: s * bpk + c * bqk)
+                        k = k + 1
+                    }
+                    k = 0
+                    while k < n {
+                        let vkp = tensor_svd_at(vals: read vmat, cols: n, r: k, c: p)
+                        let vkq = tensor_svd_at(vals: read vmat, cols: n, r: k, c: q)
+                        tensor_svd_set(vals: mut vmat, cols: n, r: k, c: p, v: c * vkp - s * vkq)
+                        tensor_svd_set(vals: mut vmat, cols: n, r: k, c: q, v: s * vkp + c * vkq)
+                        k = k + 1
+                    }
+                }
+                q = q + 1
+            }
+            p = p + 1
+        }
+        sweep = sweep + 1
+    }
+
+    local used = List.new<Int>()
+    i = 0
+    while i < n {
+        push1(l: mut used, a: 0)
+        i = i + 1
+    }
+    local svals = List.new<Float>()
+    local vthin = List.new<Float>()
+    let mut out_col = 0
+    while out_col < num {
+        let mut best = 0
+        let mut found = false
+        i = 0
+        while i < n {
+            if List.get<Int>(list: read used, index: i) == 0 {
+                let eig = tensor_svd_at(vals: read b, cols: n, r: i, c: i)
+                if found == false {
+                    best = i
+                    found = true
+                } else {
+                    let beig = tensor_svd_at(vals: read b, cols: n, r: best, c: best)
+                    if eig > beig { best = i }
+                }
+            }
+            i = i + 1
+        }
+        List.set<Int>(list: mut used, index: best, value: read 1)
+        let raw = tensor_svd_at(vals: read b, cols: n, r: best, c: best)
+        let mut sig = 0.0
+        if raw > 0.0 { sig = Math.sqrt(value: raw) }
+        pushf1(l: mut svals, a: sig)
+        let mut row = 0
+        while row < n {
+            pushf1(l: mut vthin, a: tensor_svd_at(vals: read vmat, cols: n, r: row, c: best))
+            row = row + 1
+        }
+        out_col = out_col + 1
+    }
+
+    local udata = List.new<Float>()
+    let mut rowu = 0
+    while rowu < m {
+        let mut colu = 0
+        while colu < num {
+            let sig = List.get<Float>(list: read svals, index: colu)
+            let mut acc = 0.0
+            let mut kk = 0
+            while kk < n {
+                acc = acc + tensor_svd_at(vals: read a, cols: n, r: rowu, c: kk) * tensor_svd_at(vals: read vthin, cols: num, r: kk, c: colu)
+                kk = kk + 1
+            }
+            if sig > 0.00000001 { pushf1(l: mut udata, a: acc / sig) }
+            else { pushf1(l: mut udata, a: 0.0) }
+            colu = colu + 1
+        }
+        rowu = rowu + 1
+    }
+
+    local vtdata = List.new<Float>()
+    let mut rv = 0
+    while rv < num {
+        let mut cv = 0
+        while cv < n {
+            pushf1(l: mut vtdata, a: tensor_svd_at(vals: read vthin, cols: num, r: cv, c: rv))
+            cv = cv + 1
+        }
+        rv = rv + 1
+    }
+
+    local ushape = List.new<Int>()
+    push1(l: mut ushape, a: m)
+    push1(l: mut ushape, a: num)
+    local sshape = List.new<Int>()
+    push1(l: mut sshape, a: num)
+    local vtshape = List.new<Int>()
+    push1(l: mut vtshape, a: num)
+    push1(l: mut vtshape, a: n)
+    let dt = node_dtype(cache: read cache, id: x)
+    let unode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read ushape, data: read udata)
+    let snode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read sshape, data: read svals)
+    let vnode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read vtshape, data: read vtdata)
+    return TensorTriple(first: unode, second: snode, third: vnode)
 }
 
 fn tensor_scaled_dot_product_attention(cache: mut UOpCache, query: Int, key: Int, value: Int, dropout_p: Float, training: Bool, seed: Int) -> Int {

@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,963 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 28,154 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 89/106 symbols, `mixin/__init__.py` 81/82 symbols,
-    `uop/ops.py` 216/221 symbols; 386/409 total rough symbols covered.
+  - result: `tensor.py` 89/106 symbols, `mixin/__init__.py` 82/82 symbols,
+    `uop/ops.py` 216/221 symbols; 387/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -428,8 +428,10 @@ Integrated pieces:
   constrained object-state helpers for `__hash__`, `get`/`set`-style state access,
   whole-tensor and indexed `__setitem__` graph assignment over the existing `assign`/`getitem`
   helpers, `__delitem__` rejection as a false/unsupported result, and a metadata-state wrapper
-  record, plus a materialized 2D `qr` helper using Gram-Schmidt over the current evaluator-backed
-  tensor data path and returning full `Q` and `R`. These are graph/state compatibility helpers, not full Python object identity,
+  record, plus materialized 2D `qr` and thin `svd` helpers over the current evaluator-backed
+  tensor data path. `qr` uses Gram-Schmidt and returns full `Q` and `R`; `svd` uses a Jacobi
+  eigensolve of `A^T A`, returns thin `U`, `S`, and `Vt`, and accepts but does not yet implement
+  `full_matrices`. These are graph/state compatibility helpers, not full Python object identity,
   exception, weakref, or context-frame metadata semantics,
   a first graph-level `TensorState` lifecycle spine with `uop`/param/grad flags, state
   `replace`/`as_param` helpers, graph-backed `shape`/`dtype`/`device`/`numel`/`nbytes`,
@@ -869,7 +871,7 @@ Major missing integrated work:
   full Python `Tensor.__init__`/object identity behavior,
   weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact global
   seed/counter APIs, broader distribution helpers,
-  full lazy/batched Householder QR and Jacobi SVD parity,
+  full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
   on runtime `.item()` shape discovery, graph-backed NaN/Inf predicate lowering,
   broader multi-axis interpolation and composed math coverage,

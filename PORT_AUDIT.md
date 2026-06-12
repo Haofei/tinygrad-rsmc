@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,614 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,649 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -86,6 +86,7 @@ Integrated pieces:
   source-aligned `has_buffer_identity`, source-aligned `contiguous` no-op behavior and `bufferize`
   as `STAGE`, concrete `as_shape`, source-shaped movement wrappers
   `reshape`/`expand`/`permute`/`flip`/`shrink`/`pad`,
+  high-level `call` lowering to `CALL` or `FUNCTION` and `set` lowering to `STORE`/`END`/`AFTER`,
   movement-argument extraction, full-dtype-preserving replace-by-arg/substitute, replace-by-dtype, structural key rendering,
   toposort/backward-slice helpers including upstream `enter_calls=false` body-skipping for `CALL`/`FUNCTION`, shared-parent counting, and source-aligned `ranges`/`ended_ranges` propagation for
   range-carrying and range-ending UOps.
@@ -317,6 +318,8 @@ Current integrated demo:
 - validates source-shaped movement method helpers for `reshape`/`expand`/`permute`/`flip`/
   `shrink`/`pad`, scalar empty-argument no-op behavior, full-dtype preservation through
   movement constructors, and upstream-shaped weakint vector `shape_to_shape_arg`.
+- validates high-level UOp sugar for upstream-shaped `call` dispatch to opaque `CALL` vs
+  value-producing `FUNCTION`, and `set` lowering through `STORE`/`END`/`AFTER`.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

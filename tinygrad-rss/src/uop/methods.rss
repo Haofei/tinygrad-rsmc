@@ -573,6 +573,35 @@ fn uop_pad(cache: mut UOpCache, id: Int, before: read List<Int>, after: read Lis
     return mk_pad(cache: mut cache, x: id, before: read before, after: read after)
 }
 
+fn uop_call_opaque_body(op: read Ops) -> Bool {
+    if op == SINK || op == PROGRAM || op == LINEAR || op == COPY || op == SLICE || op == CUSTOM_FUNCTION { return true }
+    return false
+}
+
+fn uop_call(cache: mut UOpCache, id: Int, args: read List<Int>, call: read CallArg) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if uop_call_opaque_body(op: read op) {
+        return mk_call(cache: mut cache, body: id, args: read args, call: read call)
+    }
+    let mut body = id
+    if op != TUPLE {
+        local srcs = List.new<Int>()
+        List.push<Int>(list: mut srcs, value: read id)
+        body = mk_tuple(cache: mut cache, srcs: read srcs)
+    }
+    return mk_function(cache: mut cache, body_tuple: body, args: read args, call: read call)
+}
+
+fn uop_set(cache: mut UOpCache, id: Int, value: Int, ends: read List<Int>) -> Int {
+    if node_op(cache: read cache, id: id) != INDEX { return id }
+    let base = node_src_id(cache: read cache, id: id, k: 0)
+    let store = uop_store(cache: mut cache, id: id, value: value, gate: read None)
+    let ended = uop_end(cache: mut cache, id: store, srcs: read ends)
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read ended)
+    return uop_after(cache: mut cache, id: base, srcs: read deps)
+}
+
 fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
     if id == old_id { return new_id }
     local new_src = List.new<Int>()

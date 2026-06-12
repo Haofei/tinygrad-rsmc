@@ -1202,6 +1202,83 @@ fn uop_has_buffer_identity(cache: read UOpCache, id: Int) -> Bool {
     return false
 }
 
+fn uop_max_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_shape(cache: read cache, id: id)
+}
+
+fn uop_max_numel(cache: read UOpCache, id: Int) -> Int {
+    local sh = uop_max_shape(cache: read cache, id: id)
+    return prod(x: read sh)
+}
+
+fn uop_shard_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local sh = uop_shape(cache: read cache, id: id)
+    let axis = uop_axis(cache: read cache, id: id)
+    let dcount = uop_device_count(cache: read cache, id: id)
+    if axis >= 0 && axis < List.len<Int>(list: read sh) && dcount > 1 {
+        let dim = List.get<Int>(list: read sh, index: axis)
+        List.set<Int>(list: mut sh, index: axis, value: read (dim / dcount))
+    }
+    return take sh
+}
+
+fn uop_max_shard_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_shard_shape(cache: read cache, id: id)
+}
+
+fn uop_device(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_device_key(cache: read cache, id: id)
+}
+
+fn uop_addrspace(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_addrspace_key(cache: read cache, id: id)
+}
+
+fn uop_buffer(cache: mut UOpCache, id: Int) -> Int {
+    return uop_buf_uop(cache: mut cache, id: id)
+}
+
+fn uop_realized(cache: read UOpCache, id: Int) -> Bool {
+    return false
+}
+
+fn uop_is_realized(cache: read UOpCache, id: Int) -> Bool {
+    return uop_realized(cache: read cache, id: id)
+}
+
+fn uop_base_buffer_is_realized(cache: read UOpCache, id: Int) -> Bool {
+    return false
+}
+
+fn uop_new_buffer(cache: mut UOpCache, device: read String, size: Int, dt: read DType, num: Int) -> Int {
+    return mk_new_buffer(cache: mut cache, device: read device, size: size, dt: read dt, num: num)
+}
+
+fn uop_empty(cache: mut UOpCache, shape: read List<Int>, dt: read DType, device: read String, num: Int) -> Int {
+    let buf = uop_new_buffer(cache: mut cache, device: read device, size: prod(x: read shape), dt: read dt, num: num)
+    return mk_reshape(cache: mut cache, x: buf, new_shape: read shape)
+}
+
+fn uop_empty_like(cache: mut UOpCache, id: Int, dt: read DType, device: read String, num: Int) -> Int {
+    local sh = uop_shape(cache: read cache, id: id)
+    return uop_empty(cache: mut cache, shape: read sh, dt: read dt, device: read device, num: num)
+}
+
+fn uop_clone(cache: mut UOpCache, id: Int, device: read String, num: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let dst = uop_empty_like(cache: mut cache, id: id, dt: read dt, device: read device, num: num)
+    let src = mk_copy_to_device(cache: mut cache, x: id, device: read device)
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read src)
+    return uop_after(cache: mut cache, id: dst, srcs: read deps)
+}
+
+fn uop_shard(cache: mut UOpCache, id: Int, devices: read List<String>, axis: Int) -> Int {
+    let copied = mk_copy_to_device(cache: mut cache, x: id, device: read device_arg_key(d: read device_arg_from_list(devices: read devices)))
+    if axis < 0 { return copied }
+    return mk_multi(cache: mut cache, x: copied, axis: axis)
+}
+
 fn uop_contiguous(cache: mut UOpCache, id: Int) -> Int {
     let op = node_op(cache: read cache, id: id)
     if op == CONTIGUOUS { return id }

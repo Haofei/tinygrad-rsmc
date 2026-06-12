@@ -476,6 +476,19 @@ fn tensor_randperm(cache: mut UOpCache, dt: read DType, n: Int, seed: Int) -> In
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
 }
 
+fn tensor_dropout(cache: mut UOpCache, x: Int, p: Float, training: Bool, seed: Int) -> Int {
+    if training == false { return x }
+    if p <= 0.0 { return x }
+    if p >= 1.0 { return tensor_zeros_like_same(cache: mut cache, x: x) }
+    let r = tensor_rand_like(cache: mut cache, x: x, dt: read dt_default_float(), seed: seed)
+    let pc = tensor_const_like_float(cache: mut cache, x: r, value: p)
+    let keep = tensor_ge(cache: mut cache, a: r, b: pc)
+    let zero = tensor_zeros_like_same(cache: mut cache, x: x)
+    let kept = tensor_where(cache: mut cache, cond: keep, x: x, y: zero)
+    let scale = tensor_const_like_float(cache: mut cache, x: kept, value: 1.0 - p)
+    return tensor_div(cache: mut cache, a: kept, b: scale)
+}
+
 fn tensor_add(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: ADD, a: a, b: b)
 }
@@ -502,6 +515,12 @@ fn tensor_lt(cache: mut UOpCache, a: Int, b: Int) -> Int {
 
 fn tensor_gt(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_compare(cache: mut cache, op: CMPLT, a: b, b: a)
+}
+
+fn tensor_ge(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let gt = tensor_gt(cache: mut cache, a: a, b: b)
+    let eq = tensor_eq(cache: mut cache, a: a, b: b)
+    return tensor_or(cache: mut cache, a: gt, b: eq)
 }
 
 fn tensor_ne(cache: mut UOpCache, a: Int, b: Int) -> Int {

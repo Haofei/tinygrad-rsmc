@@ -19,6 +19,19 @@ struct TensorState derives(Clone) {
     grad: Int,
 }
 
+struct TensorRngState derives(Clone) {
+    seed: Int,
+    counter_low: Int,
+    counter_high: Int,
+}
+
+struct TensorRngCounter derives(Clone) {
+    state: TensorRngState,
+    seed: Int,
+    counter_low: Int,
+    counter_high: Int,
+}
+
 fn tensor_state_new(uop: Int) -> fresh TensorState {
     return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
 }
@@ -96,6 +109,22 @@ fn tensor_state_numel(cache: read UOpCache, t: read TensorState) -> Int {
 
 fn tensor_state_nbytes(cache: read UOpCache, t: read TensorState) -> Int {
     return tensor_nbytes(cache: read cache, x: t.uop)
+}
+
+fn tensor_manual_seed(seed: Int) -> fresh TensorRngState {
+    return TensorRngState(seed: seed, counter_low: 0, counter_high: 0)
+}
+
+fn tensor_next_counter(state: read TensorRngState, num: Int) -> fresh TensorRngCounter {
+    let low_add = num & 4294967295
+    let high_add = num >> 32
+    let low_sum = state.counter_low + low_add
+    let mut carry = 0
+    if low_sum < state.counter_low { carry = 1 }
+    let new_low = low_sum & 4294967295
+    let new_high = (state.counter_high + high_add + carry) & 4294967295
+    local next = TensorRngState(seed: state.seed, counter_low: new_low, counter_high: new_high)
+    return TensorRngCounter(state: take next, seed: state.seed, counter_low: state.counter_low, counter_high: state.counter_high)
 }
 
 // _broadcast_to: reshape x to align its ndims (left-pad 1s), then EXPAND to the target shape.
@@ -894,6 +923,98 @@ fn tensor_dropout(cache: mut UOpCache, x: Int, p: Float, training: Bool, seed: I
     let kept = tensor_where(cache: mut cache, cond: keep, x: x, y: zero)
     let scale = tensor_const_like_float(cache: mut cache, x: kept, value: 1.0 - p)
     return tensor_div(cache: mut cache, a: kept, b: scale)
+}
+
+fn tensor_rand_state(cache: mut UOpCache, dt: read DType, shape: read List<Int>, state: read TensorRngState) -> Int {
+    let count = (numel(shape: read shape) + 1) / 2
+    let next = tensor_next_counter(state: read state, num: count)
+    return tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: next.seed + next.counter_low + next.counter_high)
+}
+
+fn tensor_multi_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
+    let dcount = uop_device_count(cache: read cache, id: x)
+    if dcount <= 1 { return tensor_rand_like(cache: mut cache, x: x, dt: read dt, seed: seed) }
+    local shards = List.new<Int>()
+    let axis = uop_axis(cache: read cache, id: x)
+    local sh = uop_shard_shape(cache: read cache, id: x)
+    let mut i = 0
+    while i < dcount {
+        let shard = tensor_rand(cache: mut cache, dt: read dt, shape: read sh, seed: seed + i)
+        let dev = uop_device_name_at(cache: read cache, id: x, index: i)
+        let copied = tensor_to(cache: mut cache, x: shard, device: read dev)
+        List.push<Int>(list: mut shards, value: read copied)
+        i = i + 1
+    }
+    let dt2 = node_full_dtype(cache: read cache, id: x)
+    let stacked = mk_mstack(cache: mut cache, dt: read dt2, srcs: read shards)
+    return uop_multi(cache: mut cache, id: stacked, axis: axis)
+}
+
+fn tensor_weighted_sample_one(weights: read List<Float>, start: Int, width: Int, r: Float) -> Int {
+    let mut total = 0.0
+    let mut i = 0
+    while i < width {
+        total = total + List.get<Float>(list: read weights, index: start + i)
+        i = i + 1
+    }
+    let target = r * total
+    let mut acc = 0.0
+    i = 0
+    while i < width {
+        acc = acc + List.get<Float>(list: read weights, index: start + i)
+        if target <= acc { return i }
+        i = i + 1
+    }
+    return width - 1
+}
+
+fn tensor_multinomial(cache: mut UOpCache, weights: Int, num_samples: Int, replacement: Bool, seed: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: weights)
+    let rank = List.len<Int>(list: read shape)
+    let mut rows = 1
+    let mut width = List.get<Int>(list: read shape, index: 0)
+    if rank != 1 {
+        rows = List.get<Int>(list: read shape, index: 0)
+        width = List.get<Int>(list: read shape, index: 1)
+    }
+    local vals = tensor_data(cache: read cache, x: weights)
+    local r = List.new<Float>()
+    tensor_rand_into(n: rows * num_samples, seed: seed, out: mut r)
+    local out = List.new<Float>()
+    let mut row = 0
+    while row < rows {
+        local used = List.new<Int>()
+        let mut ui = 0
+        while ui < width {
+            List.push<Int>(list: mut used, value: read 0)
+            ui = ui + 1
+        }
+        let mut sample = 0
+        while sample < num_samples {
+            let base = row * width
+            let rv = List.get<Float>(list: read r, index: row * num_samples + sample)
+            let mut idx = tensor_weighted_sample_one(weights: read vals, start: base, width: width, r: rv)
+            if replacement == false {
+                let mut tries = 0
+                while List.get<Int>(list: read used, index: idx) != 0 && tries < width {
+                    idx = (idx + 1) % width
+                    tries = tries + 1
+                }
+                List.set<Int>(list: mut used, index: idx, value: read 1)
+            }
+            pushf1(l: mut out, a: Int.to_float(value: read idx))
+            sample = sample + 1
+        }
+        row = row + 1
+    }
+    local out_shape = List.new<Int>()
+    if rank == 1 {
+        push1(l: mut out_shape, a: num_samples)
+    } else {
+        push1(l: mut out_shape, a: rows)
+        push1(l: mut out_shape, a: num_samples)
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_int32(), shape: read out_shape, data: read out)
 }
 
 fn tensor_add(cache: mut UOpCache, a: Int, b: Int) -> Int {

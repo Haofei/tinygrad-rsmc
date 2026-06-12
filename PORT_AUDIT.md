@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,270 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,391 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 68/106 symbols, `mixin/__init__.py` 78/82 symbols,
-    `uop/ops.py` 160/221 symbols; 306/409 total rough symbols covered.
+  - result: `tensor.py` 72/106 symbols, `mixin/__init__.py` 78/82 symbols,
+    `uop/ops.py` 160/221 symbols; 310/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -417,6 +417,9 @@ Integrated pieces:
   broadcast-to-target-shape, `clone` preserving param/grad state, `shard`/`shard_`/`shard_like`
   over the integrated multi-device UOp helpers, and in-place binary/matmul wrappers composed as
   `op` plus `assign`,
+  an explicit RSS-side `TensorRngState`/counter wrapper for `manual_seed` and `_next_counter`,
+  multi-device `rand_like` construction through `MSTACK`/`MULTI`, and materialized 1D/2D
+  `multinomial` sampling for supported CPU/value tensors,
   explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
   compaction,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
@@ -834,7 +837,8 @@ future refreshes.
 Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random, initializer helpers, and a first graph-level lifecycle/state spine are
-  partially integrated now, but full Python `Tensor.__init__`/object identity behavior,
+  partially integrated now, but exact upstream class-global RNG mutation/counter identity,
+  full Python `Tensor.__init__`/object identity behavior,
   weakref/all-tensor registry updates, full view-assign substitution, exact global
   seed/counter APIs, broader distribution helpers,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend

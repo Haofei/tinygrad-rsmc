@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 27 RSS files, 21,095 LOC.
+  - integrated `tinygrad-rss/src`: 27 RSS files, 21,134 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -67,7 +67,8 @@ Integrated pieces:
   same-itemsize full-dtype-aware `BITCAST`, `TUPLE`/`GETTUPLE` including
   upstream's `GETTUPLE(FUNCTION, idx)` tuple-body access, `GROUP`, `GEP`,
   `INDEX`, `LOAD`/`STORE`, codegen helper nodes (`CUSTOM`/`CUSTOMI`, `INS`, `GETADDR`,
-  `WMMA`/`SHAPED_WMMA`, `VCAT`/`PTRCAT`), and ordering nodes (`WAIT`, `AFTER`, `END`, `BARRIER`), matching the role of upstream
+  `WMMA`/`SHAPED_WMMA`, `VCAT`/`PTRCAT`), and ordering nodes (`WAIT`, dtype-preserving
+  `AFTER`, `END`, `BARRIER`), matching the role of upstream
   `tinygrad/uop/ops.py`. REDUCE metadata is
   explicit (`sum`/`prod`/`max` kind plus axes) rather than encoded as sentinel axes.
 - `uop/methods.rss`: integrated UOp helper surface over interned node ids: `const_like`, `ufix`,
@@ -170,7 +171,8 @@ Integrated pieces:
 - `codegen/late/devectorizer.rss`: first integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
   rule for vector ALU, `CAST`, and `BITCAST`: vector operations are rebuilt as scalar lane
-  operations over `GEP` sources and wrapped in a `STACK`. It also has the first `pm_render`
+  operations over `GEP` sources and wrapped in a `STACK`, plus the upstream
+  `CAST(AFTER(x, deps...)) -> AFTER(CAST(x), deps...)` ordering rewrite. It also has the first `pm_render`
   normalization rules: vector `CONST` nodes become scalar-constant `STACK`s, multi-lane `GEP`
   becomes a `STACK` of lane `GEP`s, `GEP(x, 0)` on scalar `x` unwraps, and one-element `STACK`
   unwraps. The context-free `load_store_folding` rules for `INDEX(STACK(bufs), vec_idx)`,

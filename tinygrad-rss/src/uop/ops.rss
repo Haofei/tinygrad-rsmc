@@ -1210,7 +1210,7 @@ fn mk_wait(cache: mut UOpCache, id: Int, value: Int) -> Int {
 
 fn mk_after(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
     if List.len<Int>(list: read srcs) == 0 { return id }
-    let dt = node_dtype(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read id)
     let mut i = 0

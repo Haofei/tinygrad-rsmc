@@ -2,11 +2,12 @@
 //
 // This first slice ports the devectorize_alu scalarization rule plus the
 // pm_render normalization rules: vector ALU/CAST/BITCAST nodes become a STACK
-// of scalar lane operations, and vector CONST/GEP/STACK nodes are normalized
-// for rendering. It also ports the context-free load/store folding rules for
-// STACK-backed INDEX, GEP, PTRCAT, and nested-load cleanup. Folded-index
-// regrouping, load/store splitting, buffer/index devectorization, REDUCE
-// lowering, and image rewrites remain later slices.
+// of scalar lane operations, with CAST(AFTER(...)) pushed through ordering
+// deps first, and vector CONST/GEP/STACK nodes are normalized for rendering.
+// It also ports the context-free load/store folding rules for STACK-backed
+// INDEX, GEP, PTRCAT, and nested-load cleanup. Folded-index regrouping,
+// load/store splitting, buffer/index devectorization, REDUCE lowering, and
+// image rewrites remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -307,7 +308,29 @@ fn devectorizer_load_load_ptr_cleanup(cache: mut UOpCache, id: Int) -> Option<In
     return Some(devectorizer_load_with_ptr(cache: mut cache, id: id, ptr: raw_ptr, dt: read dt))
 }
 
+fn devectorizer_cast_after(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CAST { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let after = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: after) != AFTER { return None }
+    if node_num_src(cache: read cache, id: after) < 2 { return None }
+    let root = node_src_id(cache: read cache, id: after, k: 0)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let casted = mk_cast(cache: mut cache, x: root, dt: read dt)
+    local deps = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: after) {
+        List.push<Int>(list: mut deps, value: read node_src_id(cache: read cache, id: after, k: i))
+        i = i + 1
+    }
+    return Some(mk_after(cache: mut cache, id: casted, srcs: read deps))
+}
+
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match devectorizer_cast_after(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match devectorizer_expand_index_stack(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

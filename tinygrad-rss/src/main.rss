@@ -759,6 +759,21 @@ fn main() -> Unit {
         None => {}
     }
     let mdev_i64dt = dtype_vec(base: read dt_int64(), sz: 4)
+    local mdev_after_deps = List.new<Int>()
+    List.push<Int>(list: mut mdev_after_deps, value: read mrange_expr)
+    let mdev_after_vec = mk_after(cache: mut mcache, id: mstack4, srcs: read mdev_after_deps)
+    let mdev_cast_after = mk_cast(cache: mut mcache, x: mdev_after_vec, dt: read mdev_i64dt)
+    let mut mdev_cast_after_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_cast_after) {
+        Some(r) => {
+            let after_root = node_src_id(cache: read mcache, id: r, k: 0)
+            let after_dep = node_src_id(cache: read mcache, id: r, k: 1)
+            let cast_after_root_ok = node_op(cache: read mcache, id: r) == AFTER && node_full_dtype(cache: read mcache, id: r).count == 4
+            let cast_after_src_ok = node_op(cache: read mcache, id: after_root) == CAST && after_dep == mrange_expr
+            mdev_cast_after_ok = cast_after_root_ok && cast_after_src_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     let mdev_cast_vec = mk_cast(cache: mut mcache, x: mstack4, dt: read mdev_i64dt)
     let mut mdev_cast_ok = false
     match devectorizer_rewrite(cache: mut mcache, id: mdev_cast_vec) {
@@ -783,6 +798,7 @@ fn main() -> Unit {
         None => {}
     }
     showb(label: read "codegen.devectorizer scalarizes vector add = ", v: mdev_add_ok)
+    showb(label: read "codegen.devectorizer pushes cast through after = ", v: mdev_cast_after_ok)
     showb(label: read "codegen.devectorizer scalarizes vector cast = ", v: mdev_cast_ok)
     showb(label: read "codegen.devectorizer scalarizes vector bitcast = ", v: mdev_bitcast_ok)
     local mdev_const_vals = List.new<Int>()

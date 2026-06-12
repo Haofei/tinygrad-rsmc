@@ -91,6 +91,10 @@ fn render_binary_parens(cache: read UOpCache, id: Int, left: read String, right:
     return render_cat(a: read "(", b: read render_cat(a: read inner, b: read ")"))
 }
 
+fn strip_binary_parens(cache: read UOpCache, x: Int, left: read String, right: read String) -> fresh String {
+    return render_binary_parens(cache: read cache, id: x, left: read left, right: read right)
+}
+
 fn render_const(cache: read UOpCache, id: Int) -> fresh String {
     if node_is_const_int(cache: read cache, id: id) {
         return Int.to_string(value: read node_const_int(cache: read cache, id: id))
@@ -240,6 +244,27 @@ fn pyrender_srcs(cache: read UOpCache, id: Int, start: Int) -> fresh String {
     return String.copy(value: read s)
 }
 
+fn srcs(cache: read UOpCache, src: read List<Int>) -> fresh String {
+    let mut s = String.copy(value: read "(")
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        if i > 0 { s = render_cat(a: read s, b: read ", ") }
+        s = render_cat(a: read s, b: read uop_pyrender(cache: read cache, id: List.get<Int>(list: read src, index: i)))
+        i = i + 1
+    }
+    if List.len<Int>(list: read src) == 1 { s = render_cat(a: read s, b: read ",") }
+    return render_cat(a: read s, b: read ")")
+}
+
+fn render_marg(cache: read UOpCache, x: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: x)
+    if op == RESHAPE || op == EXPAND || op == PERMUTE || op == PAD || op == SHRINK || op == FLIP {
+        local shape = uop_shape(cache: read cache, id: x)
+        return uop_int_list_to_string(vals: read shape)
+    }
+    return uop_arg_to_string(arg: read node_arg(cache: read cache, id: x))
+}
+
 fn pyrender_const_arg(cache: read UOpCache, id: Int) -> fresh String {
     if node_is_const_int(cache: read cache, id: id) {
         return Int.to_string(value: read node_const_int(cache: read cache, id: id))
@@ -298,6 +323,14 @@ fn uop_pyrender(cache: read UOpCache, id: Int) -> fresh String {
     return render_cat(a: read "UOp(", b: read render_cat(a: read ops_name(op: read op), b: read render_cat(a: read ", ", b: read render_cat(a: read render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id)), b: read ")"))))
 }
 
+fn _render_with_splits(cache: read UOpCache, id: Int) -> fresh String {
+    return uop_pyrender(cache: read cache, id: id)
+}
+
+fn pyrender(cache: read UOpCache, ast: Int) -> fresh String {
+    return uop_pyrender(cache: read cache, id: ast)
+}
+
 fn uop_pretty_line(cache: read UOpCache, id: Int) -> fresh String {
     let mut s = String.concat(left: read "UOp(", right: read ops_name(op: read node_op(cache: read cache, id: id)))
     s = render_cat(a: read s, b: read ", ")
@@ -312,4 +345,22 @@ fn uop_pretty_line(cache: read UOpCache, id: Int) -> fresh String {
         i = i + 1
     }
     return render_cat(a: read s, b: read "))")
+}
+
+fn pretty_print(cache: read UOpCache, x: Int) -> fresh String {
+    return uop_pretty_line(cache: read cache, id: x)
+}
+
+fn print_uops(cache: read UOpCache, uops: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        if i > 0 { out = render_cat(a: read out, b: read "\n") }
+        let id = List.get<Int>(list: read uops, index: i)
+        out = render_cat(a: read out, b: read Int.to_string(value: read i))
+        out = render_cat(a: read out, b: read " ")
+        out = render_cat(a: read out, b: read uop_pretty_line(cache: read cache, id: id))
+        i = i + 1
+    }
+    return String.copy(value: read out)
 }

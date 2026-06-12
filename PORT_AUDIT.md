@@ -162,7 +162,10 @@ Integrated pieces:
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
   inference-specific rendering for div/mod and `BITCAST`, compact UOp line printing, and a first
   `pyrender`-style reconstruction slice for constants, variables, params, casts/bitcasts, binary
-  ALU expressions, `WHERE`, and `INDEX`.
+  ALU expressions, `WHERE`, and `INDEX`. Source-shaped render entry points now cover
+  `pretty_print`, `print_uops`, `strip_binary_parens`, `srcs`, `render_marg`,
+  `_render_with_splits`, and `pyrender` over the current UOp-id model; the split-depth assignment
+  planner and full upstream pyrender call/function handling remain incomplete.
 - `uop/divandmod.rss`: first integrated source-shaped `tinygrad/uop/divandmod.py` slice over
   interned UOp ids, covering interval cancellation, nested `(x%(k*c))//c` and `%c` rewrites,
   remove-nested-mod-in-sum, binary numerator folding, gcd-with-remainder factoring,
@@ -558,7 +561,9 @@ Current integrated demo:
   bindings, and out-of-range bind rejection.
 - validates the integrated source-shaped UOp renderer for precedence-aware symbolic expressions,
   `max`, inference `floordiv`, inference `BITCAST`, compact repeated `STACK`, UOp line output,
-  and first `pyrender` reconstruction for an ALU expression and bitcast.
+  first `pyrender` reconstruction for an ALU expression and bitcast, plus source-shaped render
+  aliases for `pretty_print`, `print_uops`, `strip_binary_parens`, `srcs`, `render_marg`,
+  `_render_with_splits`, and `pyrender`.
 - validates UOp `ParamArg` metadata and definitions: `PARAM` slot/name/addrspace, bounded param
   vmin/vmax, `DEFINE_LOCAL`/`DEFINE_REG` addrspace, and rejection of invalid param bounds or
   negative local slots.

@@ -5145,6 +5145,124 @@ fn tensor_rmatmul(cache: mut UOpCache, x: Int, y: Int) -> Int {
     return tensor_matmul(cache: mut cache, a: y, b: x)
 }
 
+fn tensor_qr_dot_col(q: read List<Float>, v: read List<Float>, m: Int, col: Int) -> Float {
+    let mut acc = 0.0
+    let mut row = 0
+    while row < m {
+        acc = acc + List.get<Float>(list: read q, index: row * m + col) * List.get<Float>(list: read v, index: row)
+        row = row + 1
+    }
+    return acc
+}
+
+fn tensor_qr_set_col(q: mut List<Float>, v: read List<Float>, m: Int, col: Int) -> Unit {
+    let mut row = 0
+    while row < m {
+        List.set<Float>(list: mut q, index: row * m + col, value: read List.get<Float>(list: read v, index: row))
+        row = row + 1
+    }
+}
+
+fn tensor_qr(cache: mut UOpCache, x: Int) -> fresh TensorPair {
+    local shape = uop_shape(cache: read cache, id: x)
+    let m = List.get<Int>(list: read shape, index: List.len<Int>(list: read shape) - 2)
+    let n = List.get<Int>(list: read shape, index: List.len<Int>(list: read shape) - 1)
+    local data = tensor_data(cache: read cache, x: x)
+    local q = List.new<Float>()
+    local r = List.new<Float>()
+    let mut qi = 0
+    while qi < m * m {
+        pushf1(l: mut q, a: 0.0)
+        qi = qi + 1
+    }
+    let mut ri = 0
+    while ri < m * n {
+        pushf1(l: mut r, a: 0.0)
+        ri = ri + 1
+    }
+
+    let mut k = 0
+    while k < m {
+        local v = List.new<Float>()
+        let mut row = 0
+        while row < m {
+            let mut val = 0.0
+            if k < n { val = List.get<Float>(list: read data, index: row * n + k) }
+            else { if row == k { val = 1.0 } }
+            pushf1(l: mut v, a: val)
+            row = row + 1
+        }
+        let mut j = 0
+        while j < k {
+            let dot = tensor_qr_dot_col(q: read q, v: read v, m: m, col: j)
+            if k < n { List.set<Float>(list: mut r, index: j * n + k, value: read dot) }
+            row = 0
+            while row < m {
+                let old = List.get<Float>(list: read v, index: row)
+                let qv = List.get<Float>(list: read q, index: row * m + j)
+                List.set<Float>(list: mut v, index: row, value: read (old - dot * qv))
+                row = row + 1
+            }
+            j = j + 1
+        }
+        let mut norm2 = 0.0
+        row = 0
+        while row < m {
+            let vv = List.get<Float>(list: read v, index: row)
+            norm2 = norm2 + vv * vv
+            row = row + 1
+        }
+        let norm = Math.sqrt(value: norm2)
+        if k < n { List.set<Float>(list: mut r, index: k * n + k, value: read norm) }
+        if norm > 0.0 {
+            row = 0
+            while row < m {
+                let vv = List.get<Float>(list: read v, index: row) / norm
+                List.set<Float>(list: mut v, index: row, value: read vv)
+                row = row + 1
+            }
+        } else {
+            row = 0
+            while row < m {
+                if row == k { List.set<Float>(list: mut v, index: row, value: read 1.0) }
+                else { List.set<Float>(list: mut v, index: row, value: read 0.0) }
+                row = row + 1
+            }
+        }
+        tensor_qr_set_col(q: mut q, v: read v, m: m, col: k)
+        k = k + 1
+    }
+
+    let mut rr = 0
+    while rr < m {
+        let mut cc = 0
+        while cc < n {
+            if rr <= cc {
+                let mut acc = 0.0
+                let mut row2 = 0
+                while row2 < m {
+                    acc = acc + List.get<Float>(list: read q, index: row2 * m + rr) * List.get<Float>(list: read data, index: row2 * n + cc)
+                    row2 = row2 + 1
+                }
+                List.set<Float>(list: mut r, index: rr * n + cc, value: read acc)
+            }
+            cc = cc + 1
+        }
+        rr = rr + 1
+    }
+
+    local qshape = List.new<Int>()
+    push1(l: mut qshape, a: m)
+    push1(l: mut qshape, a: m)
+    local rshape = List.new<Int>()
+    push1(l: mut rshape, a: m)
+    push1(l: mut rshape, a: n)
+    let dt = node_dtype(cache: read cache, id: x)
+    let qnode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read qshape, data: read q)
+    let rnode = mk_data_tensor(cache: mut cache, dt: read dt, shape: read rshape, data: read r)
+    return TensorPair(first: qnode, second: rnode)
+}
+
 fn tensor_scaled_dot_product_attention(cache: mut UOpCache, query: Int, key: Int, value: Int, dropout_p: Float, training: Bool, seed: Int) -> Int {
     local qshape = uop_shape(cache: read cache, id: query)
     let kdim = List.get<Int>(list: read qshape, index: List.len<Int>(list: read qshape) - 1)

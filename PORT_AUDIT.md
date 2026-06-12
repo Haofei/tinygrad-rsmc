@@ -468,6 +468,8 @@ Integrated pieces:
   over the integrated multi-device UOp helpers, and in-place binary/matmul wrappers composed as
   `op` plus `assign`,
   an explicit RSS-side `TensorRngState`/counter wrapper for `manual_seed` and `_next_counter`,
+  plus state-returning random distribution wrappers for `rand`, `uniform`, `randint`, `randn`,
+  and `normal` that thread the advanced counter state explicitly,
   multi-device `rand_like` construction through `MSTACK`/`MULTI`, and materialized 1D/2D
   `multinomial` sampling for supported CPU/value tensors,
   Tensor boundary helpers for invalid-sentinel creation (`invalids` over `uop_invalid`), shape/dtype/device
@@ -704,6 +706,9 @@ Current integrated demo:
 - validates explicit-seed initializer helpers against real tinygrad with seed 42: `randn(2,3)`,
   `normal(2,3, mean=10, std=2)`, `scaled_uniform(2,3)`, `glorot_uniform(2,3)`,
   `kaiming_uniform(2,3)`, and `kaiming_normal(2,3)`.
+- validates explicit RSS RNG state threading through a chained smoke path: `manual_seed(42)`,
+  state-returning `rand`, `uniform`, `randint`, `randn`, and `normal`, with the final counter
+  state surfaced to callers.
 - validates basic Tensor indexing against real tinygrad for `x[Tensor([1,0])]` and
   graph-backed `SHRINK` slicing for `x[0:2,1:3]` on a `[2,3]` tensor, including spec validation.
 - validates graph-backed Tensor `one_hot(5)`, `gather(dim=1, index)`, and `gather(dim=0, index)`
@@ -936,10 +941,11 @@ future refreshes.
 Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random, initializer helpers, and a first graph-level lifecycle/state spine are
-  partially integrated now, but exact upstream class-global RNG mutation/counter identity,
+  partially integrated now, but exact upstream class-global RNG mutation/counter identity
+  beyond the explicit RSS state-threaded wrappers,
   Python exception behavior for `__bool__`/`__len__`/`__delitem__`, true ndarray/buffer object parity,
   full Python `Tensor.__init__`/object identity behavior,
-  weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact global
+  weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact Python-global
   seed/counter APIs, broader distribution helpers,
   full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
   exact lazy hash graph semantics beyond the current materialized `_hash_1mb` checked path,

@@ -50,6 +50,14 @@ struct TensorRngCounter derives(Clone) {
     counter_high: Int,
 }
 
+struct TensorRngTensor derives(Clone) {
+    state: TensorRngState,
+    value: Int,
+    seed: Int,
+    counter_low: Int,
+    counter_high: Int,
+}
+
 struct TensorMetadataState derives(Clone) {
     has_value: Bool,
     value: String,
@@ -1649,10 +1657,54 @@ fn tensor_dropout(cache: mut UOpCache, x: Int, p: Float, training: Bool, seed: I
     return tensor_div(cache: mut cache, a: kept, b: scale)
 }
 
+fn tensor_rng_counter_num(dt: read DType, shape: read List<Int>) -> Int {
+    let bytes = numel(shape: read shape) * DType.itemsize(self: read dt)
+    return (bytes + 3) / 4
+}
+
+fn tensor_rng_tensor_from_next(next: read TensorRngCounter, value: Int) -> fresh TensorRngTensor {
+    local st = TensorRngState(seed: next.state.seed, counter_low: next.state.counter_low, counter_high: next.state.counter_high)
+    return TensorRngTensor(state: take st, value: value, seed: next.seed, counter_low: next.counter_low, counter_high: next.counter_high)
+}
+
 fn tensor_rand_state(cache: mut UOpCache, dt: read DType, shape: read List<Int>, state: read TensorRngState) -> Int {
-    let count = (numel(shape: read shape) + 1) / 2
+    let out = tensor_rand_state_result(cache: mut cache, dt: read dt, shape: read shape, state: read state)
+    return out.value
+}
+
+fn tensor_rand_state_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, state: read TensorRngState) -> fresh TensorRngTensor {
+    let count = tensor_rng_counter_num(dt: read dt, shape: read shape)
     let next = tensor_next_counter(state: read state, num: count)
-    return tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: next.seed + next.counter_low + next.counter_high)
+    let value = tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: next.seed + next.counter_low + next.counter_high)
+    return tensor_rng_tensor_from_next(next: read next, value: value)
+}
+
+fn tensor_uniform_state_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Float, high: Float, state: read TensorRngState) -> fresh TensorRngTensor {
+    let count = tensor_rng_counter_num(dt: read dt, shape: read shape)
+    let next = tensor_next_counter(state: read state, num: count)
+    let value = tensor_uniform(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: next.seed + next.counter_low + next.counter_high)
+    return tensor_rng_tensor_from_next(next: read next, value: value)
+}
+
+fn tensor_randint_state_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Int, high: Int, state: read TensorRngState) -> fresh TensorRngTensor {
+    let count = tensor_rng_counter_num(dt: read dt, shape: read shape)
+    let next = tensor_next_counter(state: read state, num: count)
+    let value = tensor_randint(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: next.seed + next.counter_low + next.counter_high)
+    return tensor_rng_tensor_from_next(next: read next, value: value)
+}
+
+fn tensor_randn_state_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, state: read TensorRngState) -> fresh TensorRngTensor {
+    let count = tensor_rng_counter_num(dt: read dt, shape: read shape) * 2
+    let next = tensor_next_counter(state: read state, num: count)
+    let value = tensor_randn(cache: mut cache, dt: read dt, shape: read shape, seed: next.seed + next.counter_low + next.counter_high)
+    return tensor_rng_tensor_from_next(next: read next, value: value)
+}
+
+fn tensor_normal_state_result(cache: mut UOpCache, dt: read DType, shape: read List<Int>, mean: Float, std: Float, state: read TensorRngState) -> fresh TensorRngTensor {
+    let count = tensor_rng_counter_num(dt: read dt, shape: read shape) * 2
+    let next = tensor_next_counter(state: read state, num: count)
+    let value = tensor_normal(cache: mut cache, dt: read dt, shape: read shape, mean: mean, std: std, seed: next.seed + next.counter_low + next.counter_high)
+    return tensor_rng_tensor_from_next(next: read next, value: value)
 }
 
 fn tensor_multi_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {

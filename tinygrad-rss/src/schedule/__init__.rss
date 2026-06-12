@@ -1,0 +1,235 @@
+// First integrated slice of tinygrad/schedule/__init__.py.
+//
+// This ports the source-shaped scheduler dependency ordering core over interned UOp ids:
+// unwrap kernel inputs to data-producing nodes, split AFTER nodes into kernels/dependencies,
+// build kernel dependency edges, and emit a LINEAR node in topological order. Later scheduler
+// batches still need buffer allocation, parameter resolution, cache handling, memory planning,
+// rangeify integration, and full lower_sink_to_linear behavior.
+features: local
+
+struct ScheduleSplit derives(Clone) {
+    kernels: List<Int>,
+    deps: List<Int>,
+    ok: Bool,
+}
+
+struct ScheduleBuild derives(Clone) {
+    linear: Int,
+    ok: Bool,
+}
+
+fn schedule_is_unwrap_stop(op: read Ops) -> Bool {
+    if op == AFTER { return true }
+    if op == BUFFER { return true }
+    if op == PARAM { return true }
+    if op == MSELECT { return true }
+    if op == MSTACK { return true }
+    if op == BIND { return true }
+    return false
+}
+
+fn schedule_unwrap_src(cache: read UOpCache, id: Int) -> Int {
+    let mut cur = id
+    while node_num_src(cache: read cache, id: cur) > 0 {
+        let op = node_op(cache: read cache, id: cur)
+        if schedule_is_unwrap_stop(op: read op) { return cur }
+        cur = node_src_id(cache: read cache, id: cur, k: 0)
+    }
+    return cur
+}
+
+fn schedule_split_after(cache: read UOpCache, after: Int) -> fresh ScheduleSplit {
+    local kernels = List.new<Int>()
+    local deps = List.new<Int>()
+    let mut ok = true
+    if node_op(cache: read cache, id: after) != AFTER {
+        return ScheduleSplit(kernels: take kernels, deps: take deps, ok: false)
+    }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: after) {
+        let s = node_src_id(cache: read cache, id: after, k: i)
+        let op = node_op(cache: read cache, id: s)
+        if op == CALL || op == END {
+            List.push<Int>(list: mut kernels, value: read s)
+        } else {
+            if op == AFTER {
+                List.push<Int>(list: mut deps, value: read s)
+            } else {
+                if op != STORE { ok = false }
+            }
+        }
+        i = i + 1
+    }
+    return ScheduleSplit(kernels: take kernels, deps: take deps, ok: ok)
+}
+
+fn schedule_index_of(items: read List<Int>, value: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn schedule_add_kernel(kernels: mut List<Int>, indeg: mut List<Int>, k: Int) -> Int {
+    let idx = schedule_index_of(items: read kernels, value: k)
+    if idx >= 0 { return idx }
+    List.push<Int>(list: mut kernels, value: read k)
+    List.push<Int>(list: mut indeg, value: read 0)
+    return List.len<Int>(list: read kernels) - 1
+}
+
+fn schedule_add_edge(kernels: mut List<Int>, indeg: mut List<Int>, edge_from: mut List<Int>, edge_to: mut List<Int>, a: Int, b: Int) -> Unit {
+    let ai = schedule_add_kernel(kernels: mut kernels, indeg: mut indeg, k: a)
+    let bi = schedule_add_kernel(kernels: mut kernels, indeg: mut indeg, k: b)
+    let mut i = 0
+    while i < List.len<Int>(list: read edge_from) {
+        if List.get<Int>(list: read edge_from, index: i) == ai && List.get<Int>(list: read edge_to, index: i) == bi {
+            return Unit
+        }
+        i = i + 1
+    }
+    List.push<Int>(list: mut edge_from, value: read ai)
+    List.push<Int>(list: mut edge_to, value: read bi)
+    let d = List.get<Int>(list: read indeg, index: bi)
+    List.set<Int>(list: mut indeg, index: bi, value: read (d + 1))
+    return Unit
+}
+
+fn schedule_mark_bad(ok_flags: mut List<Int>) -> Unit {
+    List.set<Int>(list: mut ok_flags, index: 0, value: read 0)
+    return Unit
+}
+
+fn schedule_add_after_dependency(cache: read UOpCache, kernels: mut List<Int>, indeg: mut List<Int>, edge_from: mut List<Int>, edge_to: mut List<Int>, dep_after: Int, kernel: Int, ok_flags: mut List<Int>) -> Unit {
+    local split = schedule_split_after(cache: read cache, after: dep_after)
+    if split.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+    let mut i = 0
+    while i < List.len<Int>(list: read split.kernels) {
+        let t = List.get<Int>(list: read split.kernels, index: i)
+        schedule_add_edge(kernels: mut kernels, indeg: mut indeg, edge_from: mut edge_from, edge_to: mut edge_to, a: t, b: kernel)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn schedule_add_kernel_input_dependency(cache: read UOpCache, kernels: mut List<Int>, indeg: mut List<Int>, edge_from: mut List<Int>, edge_to: mut List<Int>, s_in: Int, kernel: Int, ok_flags: mut List<Int>) -> Unit {
+    let mut s = schedule_unwrap_src(cache: read cache, id: s_in)
+    let op = node_op(cache: read cache, id: s)
+    if op == AFTER {
+        schedule_add_after_dependency(cache: read cache, kernels: mut kernels, indeg: mut indeg, edge_from: mut edge_from, edge_to: mut edge_to, dep_after: s, kernel: kernel, ok_flags: mut ok_flags)
+        return Unit
+    }
+    if op == MSELECT || op == MSTACK {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: s) {
+            let mut ss = node_src_id(cache: read cache, id: s, k: i)
+            if node_op(cache: read cache, id: ss) == MSELECT {
+                ss = node_src_id(cache: read cache, id: ss, k: 0)
+            }
+            let ssop = node_op(cache: read cache, id: ss)
+            if ssop == AFTER {
+                schedule_add_after_dependency(cache: read cache, kernels: mut kernels, indeg: mut indeg, edge_from: mut edge_from, edge_to: mut edge_to, dep_after: ss, kernel: kernel, ok_flags: mut ok_flags)
+            } else {
+                if ssop != BUFFER && ssop != PARAM { schedule_mark_bad(ok_flags: mut ok_flags) }
+            }
+            i = i + 1
+        }
+        return Unit
+    }
+    if op == BUFFER || op == PARAM || op == BIND { return Unit }
+    schedule_mark_bad(ok_flags: mut ok_flags)
+    return Unit
+}
+
+fn schedule_kernel_input_start(cache: read UOpCache, kernel: Int) -> Int {
+    if node_op(cache: read cache, id: kernel) == END { return 1 }
+    return 1
+}
+
+fn schedule_kernel_body(cache: read UOpCache, kernel: Int) -> Int {
+    if node_op(cache: read cache, id: kernel) == END { return node_src_id(cache: read cache, id: kernel, k: 0) }
+    return kernel
+}
+
+fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {
+    local kernels = List.new<Int>()
+    local indeg = List.new<Int>()
+    local edge_from = List.new<Int>()
+    local edge_to = List.new<Int>()
+    local ok_flags = List.new<Int>()
+    List.push<Int>(list: mut ok_flags, value: read 1)
+    local order = uop_toposort_enter_calls(cache: read cache, id: sched_sink, enter_calls: false)
+    let mut oi = 0
+    while oi < List.len<Int>(list: read order) {
+        let u = List.get<Int>(list: read order, index: oi)
+        if node_op(cache: read cache, id: u) == AFTER {
+            local split = schedule_split_after(cache: read cache, after: u)
+            if split.ok == false { schedule_mark_bad(ok_flags: mut ok_flags) }
+            let mut ki = 0
+            while ki < List.len<Int>(list: read split.kernels) {
+                let k = List.get<Int>(list: read split.kernels, index: ki)
+                schedule_add_kernel(kernels: mut kernels, indeg: mut indeg, k: k)
+                let body = schedule_kernel_body(cache: read cache, kernel: k)
+                if node_op(cache: read cache, id: body) != CALL { schedule_mark_bad(ok_flags: mut ok_flags) }
+                let mut si = schedule_kernel_input_start(cache: read cache, kernel: k)
+                while si < node_num_src(cache: read cache, id: body) {
+                    let s = node_src_id(cache: read cache, id: body, k: si)
+                    schedule_add_kernel_input_dependency(cache: read cache, kernels: mut kernels, indeg: mut indeg, edge_from: mut edge_from, edge_to: mut edge_to, s_in: s, kernel: k, ok_flags: mut ok_flags)
+                    si = si + 1
+                }
+                let mut di = 0
+                while di < List.len<Int>(list: read split.deps) {
+                    let dep = List.get<Int>(list: read split.deps, index: di)
+                    schedule_add_after_dependency(cache: read cache, kernels: mut kernels, indeg: mut indeg, edge_from: mut edge_from, edge_to: mut edge_to, dep_after: dep, kernel: k, ok_flags: mut ok_flags)
+                    di = di + 1
+                }
+                ki = ki + 1
+            }
+        }
+        oi = oi + 1
+    }
+
+    local ready = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read kernels) {
+        if List.get<Int>(list: read indeg, index: i) == 0 { List.push<Int>(list: mut ready, value: read i) }
+        i = i + 1
+    }
+    local linearized = List.new<Int>()
+    let mut head = 0
+    while head < List.len<Int>(list: read ready) {
+        let rk = List.get<Int>(list: read ready, index: head)
+        let kid = List.get<Int>(list: read kernels, index: rk)
+        let kop = node_op(cache: read cache, id: kid)
+        if kop == LINEAR {
+            let mut li = 0
+            while li < node_num_src(cache: read cache, id: kid) {
+                List.push<Int>(list: mut linearized, value: read node_src_id(cache: read cache, id: kid, k: li))
+                li = li + 1
+            }
+        } else {
+            if kop == END {
+                List.push<Int>(list: mut linearized, value: read node_src_id(cache: read cache, id: kid, k: 0))
+            } else {
+                List.push<Int>(list: mut linearized, value: read kid)
+            }
+        }
+        let mut ei = 0
+        while ei < List.len<Int>(list: read edge_from) {
+            if List.get<Int>(list: read edge_from, index: ei) == rk {
+                let to = List.get<Int>(list: read edge_to, index: ei)
+                let d = List.get<Int>(list: read indeg, index: to) - 1
+                List.set<Int>(list: mut indeg, index: to, value: read d)
+                if d == 0 { List.push<Int>(list: mut ready, value: read to) }
+            }
+            ei = ei + 1
+        }
+        head = head + 1
+    }
+    if List.len<Int>(list: read linearized) != List.len<Int>(list: read kernels) { schedule_mark_bad(ok_flags: mut ok_flags) }
+    let linear = mk_linear(cache: mut cache, srcs: read linearized)
+    let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
+    return ScheduleBuild(linear: linear, ok: ok)
+}

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,865 LOC.
+  - integrated `tinygrad-rss/src`: 29 RSS files, 22,124 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -217,6 +217,11 @@ Integrated pieces:
   for `CONTIGUOUS`/`CONTIGUOUS_BACKWARD`/`DETACH`/`COPY`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
   checks.
+- `schedule/__init__.rss`: first integrated source-shaped `tinygrad/schedule/__init__.py` slice:
+  `_unwrap_src`-style input unwrapping, `_split_after` for `AFTER` kernels/dependencies, dependency
+  edge construction from `CALL`/`END` inputs and nested `AFTER` nodes, and topological emission of a
+  `LINEAR` node. Buffer argument rewriting, schedule caching, rangeify graph generation, linear-call
+  resolution, variable binding extraction, JIT capture plumbing, and memory planning remain unported.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -330,6 +335,8 @@ Current integrated demo:
   value-producing `FUNCTION`, and `set` lowering through `STORE`/`END`/`AFTER`.
 - validates grouped gradient boundary rules: `CONTIGUOUS`/`COPY` pass gradients through,
   `CONTIGUOUS_BACKWARD` wraps the adjoint in `CONTIGUOUS`, and `DETACH`/`BITCAST` stop gradients.
+- validates the first source-shaped scheduler dependency slice: `AFTER` splitting, movement unwrap
+  back to `AFTER`, and dependent `CALL` ordering into a `LINEAR` node.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.
@@ -673,7 +680,10 @@ Major missing integrated work:
   source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, complete render/pyrender
   behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.
-- `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
+- `schedule/*`: source-shaped scheduler remains partial. The first dependency-ordering slice in
+  `schedule/__init__.rss` is integrated, but memory planner, rangeify/indexing, multi-kernel
+  behavior, schedule caching, linear-call resolution, variable binding extraction, and JIT capture
+  plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
   gate-from-index movement, first expander CONTRACT/UNROLL/END normalization, same/mixed-axis expansion, and `pm_pre_expander` REDUCE/STORE/range unroll handling,

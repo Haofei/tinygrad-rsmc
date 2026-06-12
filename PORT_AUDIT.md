@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 24,592 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 24,669 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -261,12 +261,13 @@ Integrated pieces:
   early COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device through shard-0
   `MSELECT`, eliminating `MSELECT(MSTACK)`, moving `MSELECT` before movement ops, passthrough
-  rebuilds for boundary ops with a leading `MULTI` child, source stripping for non-value-producing roots such as `STORE`, and the first
-  movement rewrite family for `RESHAPE`/`EXPAND`/`PAD`/`PERMUTE`/`FLIP`, plus tuple routing for
+  rebuilds for boundary ops with a leading `MULTI` child, source stripping for non-value-producing
+  roots such as `STORE`, and the first movement rewrite family for
+  `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP`, plus early `SHRINK(MSTACK)` splitting and tuple routing for
   `GETTUPLE(TUPLE)` and `GETTUPLE(MULTI(TUPLE|FUNCTION))`, and source-shaped `REDUCE(MULTI)`
   handling for piecewise and shard-axis allreduce reductions, plus same-axis unary/binary
-  `ALU(MULTI, ...)` payload rewrites. Full ALU sharding/axis-mismatch, SHRINK, and FUNCTION-body
-  multi rewrite remain unported.
+  `ALU(MULTI, ...)` payload rewrites. Full ALU sharding/axis-mismatch, shard-partition `SHRINK`,
+  and FUNCTION-body multi rewrite remain unported.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -447,9 +448,10 @@ Current integrated demo:
   `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
   multi-device COPY-to-one, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
-  `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` source stripping, and `RESHAPE`/`EXPAND`/`PAD`/`PERMUTE`/`FLIP`
-  movement rewrites, tuple and function `GETTUPLE` routing through `MULTI`, and piecewise vs.
-  shard-axis `REDUCE(MULTI)` rewrites, plus same-axis unary/binary `ALU(MULTI, ...)` rewrites.
+  `SHRINK(MSTACK)` splitting, `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` source stripping,
+  and `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP` movement rewrites, tuple and function
+  `GETTUPLE` routing through `MULTI`, and piecewise vs. shard-axis `REDUCE(MULTI)` rewrites,
+  plus same-axis unary/binary `ALU(MULTI, ...)` rewrites.
 - validates source-aligned UOp `axis` propagation for `MULTI`, `COPY`, sharded `PARAM`, ALU,
   `GETTUPLE`, `REDUCE`, and `PERMUTE`.
 - validates source-aligned UOp device key/count propagation for tuple buffers, `COPY`,

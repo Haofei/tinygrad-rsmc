@@ -445,8 +445,7 @@ fn cstyle_param_decls(cache: read UOpCache, params: read List<Int>, order: read 
     return String.copy(value: read out)
 }
 
-fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read String) -> fresh String {
-    let order = uop_toposort(cache: read cache, id: sink)
+fn cstyle_render_kernel_order(cache: read UOpCache, order: read List<Int>, function_name: read String) -> fresh String {
     local names = Map.new<Int, String>()
     local counts = Map.new<String, Int>()
     local params = List.new<Int>()
@@ -519,4 +518,25 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
     }
     List.push<String>(list: mut out, value: read "}")
     return String.join(parts: read out, separator: read "\n")
+}
+
+fn cstyle_linear_order(cache: read UOpCache, linear: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if node_op(cache: read cache, id: linear) != LINEAR { return take out }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        List.push<Int>(list: mut out, value: read node_src_id(cache: read cache, id: linear, k: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn cstyle_render_linear_kernel(cache: read UOpCache, linear: Int, function_name: read String) -> fresh String {
+    local order = cstyle_linear_order(cache: read cache, linear: linear)
+    return cstyle_render_kernel_order(cache: read cache, order: read order, function_name: read function_name)
+}
+
+fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read String) -> fresh String {
+    local order = uop_toposort(cache: read cache, id: sink)
+    return cstyle_render_kernel_order(cache: read cache, order: read order, function_name: read function_name)
 }

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 20 RSS files, 15,217 LOC.
+  - integrated `tinygrad-rss/src`: 21 RSS files, 15,280 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -118,7 +118,8 @@ Integrated pieces:
   `data0_8`, scoped loop/body emission, store-pointer writable-parameter discovery, and a first
   `render_kernel`-style C function wrapper. It now also renders `IF`/`ENDIF` blocks and aliases
   `AFTER` nodes to their ordered source, plus `DEFINE_LOCAL`/`DEFINE_REG` declarations with
-  shape-derived array extents such as `float temp0[4];` and `float acc0[4];`. It still lacks upstream's full linearizer ordering, inline heuristics,
+  shape-derived array extents such as `float temp0[4];` and `float acc0[4];`. The kernel wrapper
+  can now render either a `SINK` toposort or an explicit `LINEAR` op stream. It still lacks upstream's full linearizer ordering, inline heuristics,
   vector typedefs, target-specific mutable/read-only parameter effects, target subclasses, and schedule integration.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
@@ -129,8 +130,12 @@ Integrated pieces:
   `pm_linearize_cleanups`-style line rewrite: gated `STORE(ptr,value,gate)` becomes
   `IF(gate,ptr)`, ungated `STORE`, `ENDIF`, with later line sources remapped to the ungated store.
   The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`.
-  CFG edge insertion, pre-existing IF rejection, ISA register allocation, estimates, render/source,
+  CFG edge insertion, pre-existing IF rejection, ISA register allocation, estimates,
   compile/binary, and full `to_program` orchestration remain unported.
+- `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
+  wiring `PROGRAM(SINK, DEVICE, LINEAR)` into the CStyle renderer and appending a `SOURCE` child
+  with the rendered kernel text. Compile/binary materialization and full `to_program`
+  orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -275,6 +280,9 @@ Current integrated demo:
   dependency ordering.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
+- validates the first `do_render`-style wrapper by rendering a cleaned `LINEAR` stream into a
+  non-empty `SOURCE` child on `PROGRAM(SINK, DEVICE, LINEAR)`, passing the integrated UOp spec
+  verifier, and producing parseable C for the sample gated-store kernel.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -484,9 +492,10 @@ Major missing integrated work:
   behavior, full spec/validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
-  toposort, split-end cleanup, gated-store line cleanup, and `PROGRAM` -> `PROGRAM+LINEAR` wrapper
+  toposort, split-end cleanup, gated-store line cleanup, `PROGRAM` -> `PROGRAM+LINEAR` wrapper,
+  and `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper
   are integrated, but CFG/control-flow insertion, pre-existing IF rejection, late expansion/devectorization,
-  range simplification, GPU dims, ISA/regalloc, estimates, program render/source, compile/binary,
+  range simplification, GPU dims, ISA/regalloc, estimates, compile/binary,
   and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.

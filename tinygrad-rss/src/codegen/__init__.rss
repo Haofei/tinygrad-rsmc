@@ -1,0 +1,35 @@
+// Integrated source-shaped slice of tinygrad/codegen/__init__.py.
+//
+// This wires the linearized program form into renderer output. Compile/binary
+// materialization and the full to_program orchestration remain later slices.
+features: local
+
+fn codegen_render_function_name(cache: read UOpCache, prg: Int) -> fresh String {
+    let name = node_program_name(cache: read cache, id: prg)
+    if String.len(value: read name) > 0 { return String.copy(value: read name) }
+    return "kernel"
+}
+
+fn codegen_do_render_cstyle(cache: mut UOpCache, prg: Int) -> Int {
+    if node_op(cache: read cache, id: prg) != PROGRAM { return prg }
+    if node_num_src(cache: read cache, id: prg) < 3 { return prg }
+    if node_op(cache: read cache, id: node_src_id(cache: read cache, id: prg, k: 2)) != LINEAR { return prg }
+    if node_num_src(cache: read cache, id: prg) > 3 {
+        if node_op(cache: read cache, id: node_src_id(cache: read cache, id: prg, k: 3)) == SOURCE { return prg }
+        return prg
+    }
+    let lin = node_src_id(cache: read cache, id: prg, k: 2)
+    let name = codegen_render_function_name(cache: read cache, prg: prg)
+    let src_text = cstyle_render_linear_kernel(cache: read cache, linear: lin, function_name: read name)
+    let source = mk_source(cache: mut cache, text: read src_text)
+    local src = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: prg) {
+        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: i))
+        i = i + 1
+    }
+    List.push<Int>(list: mut src, value: read source)
+    let dt = node_full_dtype(cache: read cache, id: prg)
+    local arg = node_arg(cache: read cache, id: prg)
+    return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}

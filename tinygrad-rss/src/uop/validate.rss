@@ -1,0 +1,24 @@
+// Integrated source-shaped slice of tinygrad/uop/validate.py.
+//
+// Upstream uses z3 to prove masked index bounds. This RSS slice provides the
+// same verifier role for the integer interval subset already represented by
+// uop_min_max: it proves safety only when the index range is fully in-bounds,
+// or when the gate is statically false.
+features: local
+
+fn validate_gate_statically_false(cache: read UOpCache, gate: Int) -> Bool {
+    let gr = uop_min_max(cache: read cache, id: gate)
+    return gr.hi == 0
+}
+
+fn validate_index_with_bounds(cache: read UOpCache, sz: Int, idx: Int, gate: Int) -> Bool {
+    if sz <= 0 { return false }
+    if validate_gate_statically_false(cache: read cache, gate: gate) { return true }
+    let ir = uop_min_max(cache: read cache, id: idx)
+    if ir.lo < 0 { return false }
+    return ir.hi < sz
+}
+
+fn validate_index_with_z3(cache: read UOpCache, sz: Int, idx: Int, gate: Int) -> Bool {
+    return validate_index_with_bounds(cache: read cache, sz: sz, idx: idx, gate: gate)
+}

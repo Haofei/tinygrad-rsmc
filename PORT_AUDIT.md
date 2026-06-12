@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 18,065 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,095 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -94,6 +94,11 @@ Integrated pieces:
   codegen helper `CUSTOM`/`CUSTOMI`, `INS`, `GETADDR`, `WMMA`/`SHAPED_WMMA`, and `VCAT`/`PTRCAT` nodes,
   `UNROLL`/`CONTRACT` dtype-count/product validation, tuple/gettuple, index/load-store,
   control-flow `IF`/`ENDIF`, order nodes including `END` range validation, and recursive source validation.
+- `uop/validate.rss`: first integrated source-shaped `tinygrad/uop/validate.py` slice for masked
+  index bounds validation over the interval subset already covered by `uop_min_max`: static false
+  gates are accepted, active/unknown gates require the index interval to be fully inside
+  `[0, size)`, and the local `validate_index_with_z3` entry point aliases this conservative
+  interval proof. Full Z3-backed boolean/arithmetic solving remains unported.
 - `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
   UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
@@ -538,7 +543,7 @@ Major missing integrated work:
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, complete render/pyrender
-  behavior, full spec/validation, and exact upstream semantics are still incomplete.
+  behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,

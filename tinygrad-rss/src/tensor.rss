@@ -285,6 +285,14 @@ fn tensor_empty(cache: mut UOpCache, shape: read List<Int>, dt: read DType, devi
     return uop_empty(cache: mut cache, shape: read shape, dt: read dt, device: read dev, num: num)
 }
 
+fn _fromnp(cache: mut UOpCache, data: read List<Float>, shape: read List<Int>, dt: read DType) -> Int {
+    return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
+}
+
+fn tensor_fromnp(cache: mut UOpCache, data: read List<Float>, shape: read List<Int>, dt: read DType) -> Int {
+    return _fromnp(cache: mut cache, data: read data, shape: read shape, dt: read dt)
+}
+
 fn tensor_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {
     local dev = canonicalize_device(device: read device)
     return uop_empty_like(cache: mut cache, id: x, dt: read dt, device: read dev, num: num)
@@ -3904,6 +3912,24 @@ fn tensor_conv2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: In
         return tensor_conv2d_nchw_groups_pad_bias_dilated(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
     }
     return tensor_conv2d_nchw_groups_pad_dilated(cache: mut cache, x: x, weight: weight, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
+fn _conv2d_winograd(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, dt: read DType) -> Int {
+    let y = tensor_conv2d(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: 1, sw: 1, dh: 1, dw: 1, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    if dt.name == "void" { return y }
+    return tensor_cast(cache: mut cache, x: y, dt: read dt)
+}
+
+fn image_conv2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, dt: read DType) -> Int {
+    let y = tensor_conv2d(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+    if dt.name == "void" { return y }
+    return tensor_cast(cache: mut cache, x: y, dt: read dt)
+}
+
+fn image_dot(cache: mut UOpCache, x: Int, w: Int, dt: read DType) -> Int {
+    let y = tensor_dot(cache: mut cache, x: x, w: w)
+    if dt.name == "void" { return y }
+    return tensor_cast(cache: mut cache, x: y, dt: read dt)
 }
 
 fn tensor_conv_transpose2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, out_pad_h: Int, out_pad_w: Int) -> Int {

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,385 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,590 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -702,6 +702,7 @@ Current integrated demo:
   representable or precision-stable values.
 - validates composed Tensor elementwise helpers against real tinygrad: `sign`, `abs`, `square`,
   `minimum`, `clip`, `ceil`, `floor`, `sigmoid`, `exp`, `log`, `cos`, `tan`, `tanh`,
+  `round`, `sinh`, `cosh`, `atanh`, `asin`, `acos`, `atan`, `asinh`, `acosh`, `erf`,
   `leaky_relu`, `quick_gelu`, default tanh-approx `gelu`, `swish`/`silu`, `hardswish`,
   `hardsigmoid`, `softplus`, `mish`, `logsigmoid`, `elu`, `celu`, `selu`, `softsign`, `lerp`,
   `hardtanh`, `relu6`, and upstream-style `relu`, including positive, negative, and zero values.

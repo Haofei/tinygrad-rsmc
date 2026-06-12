@@ -656,6 +656,34 @@ fn tensor_log10(cache: mut UOpCache, x: Int) -> Int {
     return tensor_mul(cache: mut cache, a: l2, b: scale)
 }
 
+fn tensor_atanh(cache: mut UOpCache, x: Int) -> Int {
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let num = tensor_add(cache: mut cache, a: one, b: x)
+    let den = tensor_sub(cache: mut cache, a: one, b: x)
+    let frac = tensor_div(cache: mut cache, a: num, b: den)
+    let l = tensor_log(cache: mut cache, x: frac)
+    let half = tensor_const_like_float(cache: mut cache, x: x, value: 0.5)
+    return tensor_mul(cache: mut cache, a: l, b: half)
+}
+
+fn tensor_asinh(cache: mut UOpCache, x: Int) -> Int {
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let x2 = tensor_square(cache: mut cache, x: x)
+    let inner = tensor_add(cache: mut cache, a: x2, b: one)
+    let root = tensor_sqrt(cache: mut cache, x: inner)
+    let s = tensor_add(cache: mut cache, a: x, b: root)
+    return tensor_log(cache: mut cache, x: s)
+}
+
+fn tensor_acosh(cache: mut UOpCache, x: Int) -> Int {
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let x2 = tensor_square(cache: mut cache, x: x)
+    let inner = tensor_sub(cache: mut cache, a: x2, b: one)
+    let root = tensor_sqrt(cache: mut cache, x: inner)
+    let s = tensor_add(cache: mut cache, a: x, b: root)
+    return tensor_log(cache: mut cache, x: s)
+}
+
 fn tensor_cos(cache: mut UOpCache, x: Int) -> Int {
     let half_pi = tensor_const_like_float(cache: mut cache, x: x, value: 1.5707963267948966)
     let shifted = tensor_sub(cache: mut cache, a: half_pi, b: x)
@@ -666,6 +694,98 @@ fn tensor_tan(cache: mut UOpCache, x: Int) -> Int {
     let s = tensor_sin(cache: mut cache, x: x)
     let c = tensor_cos(cache: mut cache, x: x)
     return tensor_div(cache: mut cache, a: s, b: c)
+}
+
+fn tensor_polyN5(cache: mut UOpCache, x: Int, c0: Float, c1: Float, c2: Float, c3: Float, c4: Float) -> Int {
+    let zero = tensor_const_like_float(cache: mut cache, x: x, value: 0.0)
+    let tc0 = tensor_const_like_float(cache: mut cache, x: x, value: c0)
+    let tc1 = tensor_const_like_float(cache: mut cache, x: x, value: c1)
+    let tc2 = tensor_const_like_float(cache: mut cache, x: x, value: c2)
+    let tc3 = tensor_const_like_float(cache: mut cache, x: x, value: c3)
+    let tc4 = tensor_const_like_float(cache: mut cache, x: x, value: c4)
+    let m0 = tensor_mul(cache: mut cache, a: zero, b: x)
+    let p0 = tensor_add(cache: mut cache, a: m0, b: tc0)
+    let m1 = tensor_mul(cache: mut cache, a: p0, b: x)
+    let p1 = tensor_add(cache: mut cache, a: m1, b: tc1)
+    let m2 = tensor_mul(cache: mut cache, a: p1, b: x)
+    let p2 = tensor_add(cache: mut cache, a: m2, b: tc2)
+    let m3 = tensor_mul(cache: mut cache, a: p2, b: x)
+    let p3 = tensor_add(cache: mut cache, a: m3, b: tc3)
+    let m4 = tensor_mul(cache: mut cache, a: p3, b: x)
+    return tensor_add(cache: mut cache, a: m4, b: tc4)
+}
+
+fn tensor_polyN8(cache: mut UOpCache, x: Int, c0: Float, c1: Float, c2: Float, c3: Float, c4: Float, c5: Float, c6: Float, c7: Float) -> Int {
+    let zero = tensor_const_like_float(cache: mut cache, x: x, value: 0.0)
+    let tc0 = tensor_const_like_float(cache: mut cache, x: x, value: c0)
+    let tc1 = tensor_const_like_float(cache: mut cache, x: x, value: c1)
+    let tc2 = tensor_const_like_float(cache: mut cache, x: x, value: c2)
+    let tc3 = tensor_const_like_float(cache: mut cache, x: x, value: c3)
+    let tc4 = tensor_const_like_float(cache: mut cache, x: x, value: c4)
+    let tc5 = tensor_const_like_float(cache: mut cache, x: x, value: c5)
+    let tc6 = tensor_const_like_float(cache: mut cache, x: x, value: c6)
+    let tc7 = tensor_const_like_float(cache: mut cache, x: x, value: c7)
+    let m0 = tensor_mul(cache: mut cache, a: zero, b: x)
+    let p0 = tensor_add(cache: mut cache, a: m0, b: tc0)
+    let m1 = tensor_mul(cache: mut cache, a: p0, b: x)
+    let p1 = tensor_add(cache: mut cache, a: m1, b: tc1)
+    let m2 = tensor_mul(cache: mut cache, a: p1, b: x)
+    let p2 = tensor_add(cache: mut cache, a: m2, b: tc2)
+    let m3 = tensor_mul(cache: mut cache, a: p2, b: x)
+    let p3 = tensor_add(cache: mut cache, a: m3, b: tc3)
+    let m4 = tensor_mul(cache: mut cache, a: p3, b: x)
+    let p4 = tensor_add(cache: mut cache, a: m4, b: tc4)
+    let m5 = tensor_mul(cache: mut cache, a: p4, b: x)
+    let p5 = tensor_add(cache: mut cache, a: m5, b: tc5)
+    let m6 = tensor_mul(cache: mut cache, a: p5, b: x)
+    let p6 = tensor_add(cache: mut cache, a: m6, b: tc6)
+    let m7 = tensor_mul(cache: mut cache, a: p6, b: x)
+    return tensor_add(cache: mut cache, a: m7, b: tc7)
+}
+
+fn tensor_round(cache: mut UOpCache, x: Int) -> Int {
+    let zero = tensor_const_like_float(cache: mut cache, x: x, value: 0.0)
+    let two = tensor_const_like_float(cache: mut cache, x: x, value: 2.0)
+    let trunc = tensor_trunc(cache: mut cache, x: x)
+    let b = tensor_div(cache: mut cache, a: trunc, b: two)
+    let bt = tensor_trunc(cache: mut cache, x: b)
+    let even = tensor_eq(cache: mut cache, a: bt, b: b)
+    let pos = tensor_gt(cache: mut cache, a: x, b: zero)
+    let cond = tensor_eq(cache: mut cache, a: pos, b: even)
+    let half = tensor_const_like_float(cache: mut cache, x: x, value: 0.5)
+    let down_in = tensor_sub(cache: mut cache, a: x, b: half)
+    let up_in = tensor_add(cache: mut cache, a: x, b: half)
+    let down = tensor_ceil(cache: mut cache, x: down_in)
+    let up = tensor_floor(cache: mut cache, x: up_in)
+    return tensor_where(cache: mut cache, cond: cond, x: down, y: up)
+}
+
+fn tensor_asin(cache: mut UOpCache, x: Int) -> Int {
+    let ax = tensor_abs(cache: mut cache, x: x)
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let inner = tensor_sub(cache: mut cache, a: one, b: ax)
+    let root = tensor_sqrt(cache: mut cache, x: inner)
+    let p = tensor_polyN8(cache: mut cache, x: ax, c0: 0.0 - 0.0012624911, c1: 0.0066700901, c2: 0.0 - 0.0170881256, c3: 0.0308918810, c4: 0.0 - 0.0501743046, c5: 0.0889789874, c6: 0.0 - 0.2145988016, c7: 1.5707963050)
+    let prod = tensor_mul(cache: mut cache, a: root, b: p)
+    let half_pi = tensor_const_like_float(cache: mut cache, x: x, value: 1.5707963267948966)
+    let approx = tensor_sub(cache: mut cache, a: half_pi, b: prod)
+    let s = tensor_sign(cache: mut cache, x: x)
+    return tensor_mul(cache: mut cache, a: s, b: approx)
+}
+
+fn tensor_acos(cache: mut UOpCache, x: Int) -> Int {
+    let half_pi = tensor_const_like_float(cache: mut cache, x: x, value: 1.5707963267948966)
+    let a = tensor_asin(cache: mut cache, x: x)
+    return tensor_sub(cache: mut cache, a: half_pi, b: a)
+}
+
+fn tensor_atan(cache: mut UOpCache, x: Int) -> Int {
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let x2 = tensor_mul(cache: mut cache, a: x, b: x)
+    let inner = tensor_add(cache: mut cache, a: one, b: x2)
+    let denom = tensor_sqrt(cache: mut cache, x: inner)
+    let ratio = tensor_div(cache: mut cache, a: x, b: denom)
+    return tensor_asin(cache: mut cache, x: ratio)
 }
 
 fn tensor_tanh(cache: mut UOpCache, x: Int) -> Int {
@@ -764,6 +884,42 @@ fn tensor_logsigmoid(cache: mut UOpCache, x: Int) -> Int {
     let nx = tensor_neg(cache: mut cache, x: x)
     let sp = tensor_softplus(cache: mut cache, x: nx)
     return tensor_neg(cache: mut cache, x: sp)
+}
+
+fn tensor_sinh(cache: mut UOpCache, x: Int) -> Int {
+    let ex = tensor_exp(cache: mut cache, x: x)
+    let nx = tensor_neg(cache: mut cache, x: x)
+    let enx = tensor_exp(cache: mut cache, x: nx)
+    let diff = tensor_sub(cache: mut cache, a: ex, b: enx)
+    let half = tensor_const_like_float(cache: mut cache, x: x, value: 0.5)
+    return tensor_mul(cache: mut cache, a: diff, b: half)
+}
+
+fn tensor_cosh(cache: mut UOpCache, x: Int) -> Int {
+    let ex = tensor_exp(cache: mut cache, x: x)
+    let nx = tensor_neg(cache: mut cache, x: x)
+    let enx = tensor_exp(cache: mut cache, x: nx)
+    let sum = tensor_add(cache: mut cache, a: ex, b: enx)
+    let half = tensor_const_like_float(cache: mut cache, x: x, value: 0.5)
+    return tensor_mul(cache: mut cache, a: sum, b: half)
+}
+
+fn tensor_erf(cache: mut UOpCache, x: Int) -> Int {
+    let ax = tensor_abs(cache: mut cache, x: x)
+    let c = tensor_const_like_float(cache: mut cache, x: x, value: 0.3275911)
+    let cax = tensor_mul(cache: mut cache, a: c, b: ax)
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let denom = tensor_add(cache: mut cache, a: one, b: cax)
+    let t = tensor_reciprocal(cache: mut cache, x: denom)
+    let p = tensor_polyN5(cache: mut cache, x: t, c0: 1.061405429, c1: 0.0 - 1.453152027, c2: 1.421413741, c3: 0.0 - 0.284496736, c4: 0.254829592)
+    let tp = tensor_mul(cache: mut cache, a: t, b: p)
+    let x2 = tensor_square(cache: mut cache, x: x)
+    let nx2 = tensor_neg(cache: mut cache, x: x2)
+    let e = tensor_exp(cache: mut cache, x: nx2)
+    let term = tensor_mul(cache: mut cache, a: tp, b: e)
+    let inner = tensor_sub(cache: mut cache, a: one, b: term)
+    let s = tensor_sign(cache: mut cache, x: x)
+    return tensor_mul(cache: mut cache, a: s, b: inner)
 }
 
 fn tensor_elu(cache: mut UOpCache, x: Int, alpha: Float) -> Int {

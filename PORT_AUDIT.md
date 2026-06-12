@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,384 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,385 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -259,9 +259,9 @@ Integrated pieces:
   option rules.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
-  selecting/copying each shard to the target device and reducing copied shards with `ADD`/`MUL`/
-  `MAX`. Ring/all2all chunking, contiguous pre-copy cleanup, and allreduce function wrapping remain
-  unported.
+  normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,
+  and reducing copied shards with `ADD`/`MUL`/`MAX`. Ring/all2all chunking and allreduce function
+  wrapping remain unported.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device by copying each shard and
@@ -454,7 +454,8 @@ Current integrated demo:
   `mselect`, `mstack`, `allreduce`, `detach`, and `contiguous_backward`, plus full-dtype
   preservation through `COPY`, `CONTIGUOUS`, and `DETACH`.
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
-  `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
+  `MULTI` and `MSTACK` inputs emits verifier-accepted `CONTIGUOUS -> MSELECT -> COPY` shard
+  graphs reduced with `ADD`.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
   axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one concatenation, multi-device
   COPY-to-tuple unshard/allreduce, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
@@ -835,10 +836,13 @@ Keep:
 
 ## Recommended Next Order
 
-1. Continue `uop/*` integration: complete remaining `UOp` methods, symbolic/decomposition
+1. Speed up the port by batching upstream slices: generate a function/symbol inventory diff for
+   one upstream module or feature cluster, port the dependency closure together, then use compiler
+   failures and real tinygrad oracle checks to find language/runtime gaps once per batch.
+2. Continue `uop/*` integration: complete remaining `UOp` methods, symbolic/decomposition
    coverage, `spec.py`, and `validate.py` against the upstream source layout.
-2. Continue Tensor mixin integration: full dtype/bitcast coverage, remaining random APIs, full
+3. Continue Tensor mixin integration: full dtype/bitcast coverage, remaining random APIs, full
    lazy indexing, higher ops, complete conv/pool options, and exact public method semantics.
-3. Integrate schedule/render/codegen into one executable backend path.
-4. Add package-level differential tests against real tinygrad for each integrated subsystem.
-5. Only then attempt real examples such as `examples/beautiful_mnist.py`.
+4. Integrate schedule/render/codegen into one executable backend path.
+5. Add package-level differential tests against real tinygrad for each integrated subsystem.
+6. Only then attempt real examples such as `examples/beautiful_mnist.py`.

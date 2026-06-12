@@ -433,6 +433,8 @@ Integrated pieces:
   low constant padding, dilation, `ceil_mode`, padded/dilated/ceil `return_indices`, default and
   explicit-output `max_unpool2d`, `conv2d` with optional bias, zero/signed padding, dilation, and grouped convolution,
   and NCHW `conv_transpose2d` with stride, padding, dilation, output padding, bias, and groups,
+  plus upstream-shaped 2D padding normalization wrappers for scalar/list-like padding forms
+  on pooling, convolution, transposed convolution, and max-unpool entry points,
   graph-backed `_one_hot_along_dim`, `one_hot`, generic `gather(dim, index)`, plain `scatter`
   with duplicate last-wins masked merge, `scatter_reduce` for sum/prod/mean/amax/amin,
   scalar `scatter(..., reduce="add"/"multiply")`, upstream-shaped wrappers for `_pre_scatter`,
@@ -736,6 +738,9 @@ Current integrated demo:
 - validates padded pooling/convolution against real tinygrad: `avg_pool2d(..., padding=1)`,
   low-fill `max_pool2d(..., padding=1)` on negative inputs, and `conv2d(..., padding=1)` with
   and without bias.
+- validates upstream-shaped 2D padding normalization wrappers through the active tensor smoke:
+  `(h,w)` padding for avg-pool and conv2d, `(left,right,top,bottom)` padding for max-pool
+  values/indices, and `(h,w)` padding/output-padding for transposed convolution.
 - validates dilated pooling/convolution against real tinygrad: `avg_pool2d(..., dilation=2)`,
   `max_pool2d(..., dilation=2)`, `conv2d(..., dilation=2)` with and without bias, and
   `conv2d(..., padding=1, dilation=2)`.

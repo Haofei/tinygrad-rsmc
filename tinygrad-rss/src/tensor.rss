@@ -18,6 +18,18 @@ struct TensorTriple derives(Clone) {
     third: Int,
 }
 
+struct PoolPads2D derives(Clone) {
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+}
+
+struct SpatialPair derives(Clone) {
+    h: Int,
+    w: Int,
+}
+
 struct TensorState derives(Clone) {
     uop: Int,
     is_param: Bool,
@@ -4260,6 +4272,39 @@ fn tensor_apply_ceil_mode(cache: read UOpCache, x: Int, kh: Int, kw: Int, sh: In
     return TensorPair(first: bottom, second: right)
 }
 
+fn tensor_resolve_pool_pads2d(padding: read List<Int>) -> fresh PoolPads2D {
+    let n = List.len<Int>(list: read padding)
+    if n == 0 { return PoolPads2D(top: 0, bottom: 0, left: 0, right: 0) }
+    if n == 1 {
+        let p = List.get<Int>(list: read padding, index: 0)
+        return PoolPads2D(top: p, bottom: p, left: p, right: p)
+    }
+    if n == 2 {
+        let ph = List.get<Int>(list: read padding, index: 0)
+        let pw = List.get<Int>(list: read padding, index: 1)
+        return PoolPads2D(top: ph, bottom: ph, left: pw, right: pw)
+    }
+    if n == 4 {
+        return PoolPads2D(
+            top: List.get<Int>(list: read padding, index: 2),
+            bottom: List.get<Int>(list: read padding, index: 3),
+            left: List.get<Int>(list: read padding, index: 0),
+            right: List.get<Int>(list: read padding, index: 1),
+        )
+    }
+    return PoolPads2D(top: 0, bottom: 0, left: 0, right: 0)
+}
+
+fn tensor_resolve_spatial_pair2d(values: read List<Int>) -> fresh SpatialPair {
+    let n = List.len<Int>(list: read values)
+    if n == 0 { return SpatialPair(h: 0, w: 0) }
+    if n == 1 {
+        let v = List.get<Int>(list: read values, index: 0)
+        return SpatialPair(h: v, w: v)
+    }
+    return SpatialPair(h: List.get<Int>(list: read values, index: 0), w: List.get<Int>(list: read values, index: 1))
+}
+
 fn tensor_avg_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, ceil_mode: Bool, count_include_pad: Bool) -> Int {
     if ceil_mode {
         if count_include_pad {
@@ -4271,6 +4316,11 @@ fn tensor_avg_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw:
         return tensor_avg_pool2d_nchw_pad_dilated(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
     }
     return tensor_avg_pool2d_nchw_pad_count_exclude(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
+fn tensor_avg_pool2d_resolved(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, padding: read List<Int>, ceil_mode: Bool, count_include_pad: Bool) -> Int {
+    local p = tensor_resolve_pool_pads2d(padding: read padding)
+    return tensor_avg_pool2d(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: p.top, pad_bottom: p.bottom, pad_left: p.left, pad_right: p.right, ceil_mode: ceil_mode, count_include_pad: count_include_pad)
 }
 
 fn tensor_max_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, ceil_mode: Bool, return_indices: Bool) -> TensorPair {
@@ -4290,8 +4340,18 @@ fn tensor_max_pool2d(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw:
     return TensorPair(first: values, second: 0 - 1)
 }
 
+fn tensor_max_pool2d_resolved(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, padding: read List<Int>, ceil_mode: Bool, return_indices: Bool) -> fresh TensorPair {
+    local p = tensor_resolve_pool_pads2d(padding: read padding)
+    return tensor_max_pool2d(cache: mut cache, x: x, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: p.top, pad_bottom: p.bottom, pad_left: p.left, pad_right: p.right, ceil_mode: ceil_mode, return_indices: return_indices)
+}
+
 fn tensor_max_unpool2d(cache: mut UOpCache, x: Int, indices: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> Int {
     return tensor_max_unpool2d_nchw(cache: mut cache, x: x, indices: indices, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
+}
+
+fn tensor_max_unpool2d_resolved(cache: mut UOpCache, x: Int, indices: Int, kh: Int, kw: Int, sh: Int, sw: Int, dh: Int, dw: Int, padding: read List<Int>) -> Int {
+    local p = tensor_resolve_pool_pads2d(padding: read padding)
+    return tensor_max_unpool2d(cache: mut cache, x: x, indices: indices, kh: kh, kw: kw, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: p.top, pad_bottom: p.bottom, pad_left: p.left, pad_right: p.right)
 }
 
 fn tensor_max_pool2d_nchw_pad(cache: mut UOpCache, x: Int, kh: Int, kw: Int, sh: Int, sw: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int) -> Int {
@@ -4574,6 +4634,11 @@ fn tensor_conv2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: In
     return tensor_conv2d_nchw_groups_pad_dilated(cache: mut cache, x: x, weight: weight, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
 }
 
+fn tensor_conv2d_resolved(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, padding: read List<Int>) -> Int {
+    local p = tensor_resolve_pool_pads2d(padding: read padding)
+    return tensor_conv2d(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: p.top, pad_bottom: p.bottom, pad_left: p.left, pad_right: p.right)
+}
+
 fn _conv2d_winograd(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, dt: read DType) -> Int {
     let y = tensor_conv2d(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: 1, sw: 1, dh: 1, dw: 1, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right)
     if dt.name == "void" { return y }
@@ -4597,6 +4662,12 @@ fn tensor_conv_transpose2d(cache: mut UOpCache, x: Int, weight: Int, bias: Int, 
         return tensor_conv_transpose2d_nchw_groups_bias_dilated(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, out_pad_h: out_pad_h, out_pad_w: out_pad_w)
     }
     return tensor_conv_transpose2d_nchw_groups_dilated(cache: mut cache, x: x, weight: weight, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, out_pad_h: out_pad_h, out_pad_w: out_pad_w)
+}
+
+fn tensor_conv_transpose2d_resolved(cache: mut UOpCache, x: Int, weight: Int, bias: Int, groups: Int, sh: Int, sw: Int, dh: Int, dw: Int, padding: read List<Int>, output_padding: read List<Int>) -> Int {
+    local p = tensor_resolve_pool_pads2d(padding: read padding)
+    local op = tensor_resolve_spatial_pair2d(values: read output_padding)
+    return tensor_conv_transpose2d(cache: mut cache, x: x, weight: weight, bias: bias, groups: groups, sh: sh, sw: sw, dh: dh, dw: dw, pad_top: p.top, pad_bottom: p.bottom, pad_left: p.left, pad_right: p.right, out_pad_h: op.h, out_pad_w: op.w)
 }
 
 fn tensor_cat(cache: mut UOpCache, tensors: read List<Int>, dim: Int) -> Int {

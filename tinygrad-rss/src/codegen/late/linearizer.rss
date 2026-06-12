@@ -1,0 +1,190 @@
+// Integrated source-shaped slice of tinygrad/codegen/late/linearizer.py.
+//
+// This ports the priority toposort used by linearize(sink) onto the interned
+// UOp cache. CFG edge insertion, split-ends, and register allocation remain
+// separate later codegen work.
+features: local
+
+fn linearizer_priority(op: read Ops) -> Int {
+    if op == PARAM { return 0 - 20 }
+    if op == DEFINE_VAR { return 0 - 19 }
+    if op == DEFINE_REG { return 0 - 18 }
+    if op == DEFINE_LOCAL { return 0 - 17 }
+    if op == LOAD { return 0 - 1 }
+    if op == STORE { return 1 }
+    if op == RANGE { return 5 }
+    if op == END { return 0 - 5 }
+    return 0
+}
+
+fn linearizer_extra(cache: read UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM { return node_param_slot(cache: read cache, id: id) }
+    if op == DEFINE_VAR { return node_var_min(cache: read cache, id: id) }
+    return id
+}
+
+fn linearizer_run_count(cache: read UOpCache, id: Int) -> Int {
+    local ranges = uop_ranges(cache: read cache, id: id)
+    let mut out = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        let r = List.get<Int>(list: read ranges, index: i)
+        let rr = uop_min_max(cache: read cache, id: r)
+        out = out * (rr.hi + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn linearizer_ideal_less(cache: read UOpCache, a: Int, b: Int) -> Bool {
+    let ar = linearizer_run_count(cache: read cache, id: a)
+    let br = linearizer_run_count(cache: read cache, id: b)
+    if ar < br { return true }
+    if ar > br { return false }
+    let ap = linearizer_priority(op: read node_op(cache: read cache, id: a))
+    let bp = linearizer_priority(op: read node_op(cache: read cache, id: b))
+    if ap < bp { return true }
+    if ap > bp { return false }
+    let ax = linearizer_extra(cache: read cache, id: a)
+    let bx = linearizer_extra(cache: read cache, id: b)
+    if ax < bx { return true }
+    if ax > bx { return false }
+    return a < b
+}
+
+fn linearizer_blank_ints(n: Int, value: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut out, value: read value)
+        i = i + 1
+    }
+    return take out
+}
+
+fn linearizer_compute_nkey(cache: read UOpCache, topo: read List<Int>) -> fresh List<Int> {
+    local nkey = linearizer_blank_ints(n: cache_len(cache: read cache), value: 0 - 1)
+    local work = copy_int_list(l: read topo)
+    let m = List.len<Int>(list: read work)
+    let mut rank = 0
+    while rank < m {
+        let mut best = rank
+        let mut j = rank + 1
+        while j < m {
+            let cj = List.get<Int>(list: read work, index: j)
+            let cb = List.get<Int>(list: read work, index: best)
+            if linearizer_ideal_less(cache: read cache, a: cj, b: cb) { best = j }
+            j = j + 1
+        }
+        let tmp = List.get<Int>(list: read work, index: rank)
+        let chosen = List.get<Int>(list: read work, index: best)
+        List.set<Int>(list: mut work, index: rank, value: read chosen)
+        List.set<Int>(list: mut work, index: best, value: read tmp)
+        List.set<Int>(list: mut nkey, index: chosen, value: read rank)
+        rank = rank + 1
+    }
+    return take nkey
+}
+
+fn linearizer_compute_out_degree(cache: read UOpCache, topo: read List<Int>) -> fresh List<Int> {
+    local outdeg = linearizer_blank_ints(n: cache_len(cache: read cache), value: 0)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        let mut k = 0
+        while k < node_num_src(cache: read cache, id: u) {
+            let s = node_src_id(cache: read cache, id: u, k: k)
+            let d = List.get<Int>(list: read outdeg, index: s) + 1
+            List.set<Int>(list: mut outdeg, index: s, value: read d)
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return take outdeg
+}
+
+fn linearizer_ready_best(ready: read List<Int>, nkey: read List<Int>) -> Int {
+    let mut best = 0
+    let mut i = 1
+    while i < List.len<Int>(list: read ready) {
+        let u = List.get<Int>(list: read ready, index: i)
+        let b = List.get<Int>(list: read ready, index: best)
+        if List.get<Int>(list: read nkey, index: u) > List.get<Int>(list: read nkey, index: b) { best = i }
+        i = i + 1
+    }
+    return best
+}
+
+fn linearizer_remove_ready(ready: mut List<Int>, index: Int) -> Int {
+    let n = List.len<Int>(list: read ready)
+    let out = List.get<Int>(list: read ready, index: index)
+    let last = List.get<Int>(list: read ready, index: n - 1)
+    List.set<Int>(list: mut ready, index: index, value: read last)
+    List.pop<Int>(list: mut ready)
+    return out
+}
+
+fn linearize(cache: read UOpCache, sink: Int) -> fresh List<Int> {
+    local topo = uop_toposort(cache: read cache, id: sink)
+    local nkey = linearizer_compute_nkey(cache: read cache, topo: read topo)
+    local outdeg = linearizer_compute_out_degree(cache: read cache, topo: read topo)
+    local ready = List.new<Int>()
+    local rev = List.new<Int>()
+    List.push<Int>(list: mut ready, value: read sink)
+    while List.len<Int>(list: read ready) > 0 {
+        let best = linearizer_ready_best(ready: read ready, nkey: read nkey)
+        let u = linearizer_remove_ready(ready: mut ready, index: best)
+        List.push<Int>(list: mut rev, value: read u)
+        let mut k = 0
+        while k < node_num_src(cache: read cache, id: u) {
+            let s = node_src_id(cache: read cache, id: u, k: k)
+            let d = List.get<Int>(list: read outdeg, index: s) - 1
+            List.set<Int>(list: mut outdeg, index: s, value: read d)
+            if d == 0 { List.push<Int>(list: mut ready, value: read s) }
+            k = k + 1
+        }
+    }
+    local out = List.new<Int>()
+    let mut i = List.len<Int>(list: read rev)
+    while i > 0 {
+        i = i - 1
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rev, index: i))
+    }
+    return take out
+}
+
+fn linearizer_index_of(list: read List<Int>, id: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read list) {
+        if List.get<Int>(list: read list, index: i) == id { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn linearizer_dependency_order_ok(cache: read UOpCache, order: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let u = List.get<Int>(list: read order, index: i)
+        let mut k = 0
+        while k < node_num_src(cache: read cache, id: u) {
+            let s = node_src_id(cache: read cache, id: u, k: k)
+            if linearizer_index_of(list: read order, id: s) >= i { return false }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn linearizer_order_names(cache: read UOpCache, order: read List<Int>) -> fresh String {
+    local parts = List.new<String>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        List.push<String>(list: mut parts, value: read ops_name(op: read node_op(cache: read cache, id: id)))
+        i = i + 1
+    }
+    return String.join(parts: read parts, separator: read ",")
+}

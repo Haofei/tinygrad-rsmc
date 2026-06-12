@@ -143,6 +143,35 @@ fn divmod_try_fold_binary_numerator(cache: mut UOpCache, id: Int, term: Int, fac
     return Some(graph_rewrite(cache: mut cache, id: out))
 }
 
+fn divmod_try_remove_nested_mod(cache: mut UOpCache, id: Int, y: Int, const_part: Int, c: Int,
+                                terms: read List<Int>) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != FLOORMOD { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    local new_terms = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < List.len<Int>(list: read terms) {
+        let mut u = List.get<Int>(list: read terms, index: i)
+        if node_op(cache: read cache, id: u) == FLOORMOD {
+            let den = node_src_id(cache: read cache, id: u, k: 1)
+            match uop_divides(cache: mut cache, id: den, v: c) {
+                Some(_) => {
+                    u = node_src_id(cache: read cache, id: u, k: 0)
+                    changed = true
+                }
+                None => {}
+            }
+        }
+        List.push<Int>(list: mut new_terms, value: read u)
+        i = i + 1
+    }
+    if changed == false { return None }
+    let summed = divmod_usum(cache: mut cache, dt: read dt, parts: read new_terms)
+    let shifted = divmod_add_const(cache: mut cache, id: summed, value: const_part)
+    let out = mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: shifted, y: y)
+    return Some(graph_rewrite(cache: mut cache, id: out))
+}
+
 fn divmod_try_gcd_with_remainder(cache: mut UOpCache, id: Int, x_peeled: Int, const_part: Int, c: Int,
                                  factors: read List<Int>) -> Option<Int> {
     let g = divmod_list_gcd(values: read factors, extra: c)
@@ -170,6 +199,96 @@ fn divmod_try_gcd_with_remainder(cache: mut UOpCache, id: Int, x_peeled: Int, co
         None => {}
     }
     return None
+}
+
+fn divmod_contains_abs_factor(values: read List<Int>, v: Int) -> Bool {
+    let av = iabs(x: v)
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        if List.get<Int>(list: read values, index: i) == av { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn divmod_try_nest_by_factor(cache: mut UOpCache, id: Int, x: Int, const_part: Int, c: Int,
+                             terms: read List<Int>, factors: read List<Int>, divided: read List<Int>) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    let xr = uop_min_max(cache: read cache, id: x)
+    local candidates = List.new<Int>()
+    let mut fi = 0
+    while fi < List.len<Int>(list: read factors) {
+        let f = List.get<Int>(list: read factors, index: fi)
+        let div = iabs(x: f)
+        let u = List.get<Int>(list: read terms, index: fi)
+        if node_op(cache: read cache, id: u) != CONST {
+            if div > 1 && div < c && c % div == 0 {
+                if divmod_contains_abs_factor(values: read candidates, v: div) == false {
+                    List.push<Int>(list: mut candidates, value: read div)
+                }
+            }
+        }
+        fi = fi + 1
+    }
+
+    let mut best = 0 - 1
+    let mut best_cost = 0
+    let mut ci = 0
+    while ci < List.len<Int>(list: read candidates) {
+        let div = List.get<Int>(list: read candidates, index: ci)
+        let div_const = mk_const_int(cache: mut cache, dt: read dt, v: div)
+        let raw_outer = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: x, y: div_const)
+        match divmod_fold_general(cache: mut cache, id: raw_outer) {
+            Some(newxs) => {
+                let reduced = c / div
+                if op == FLOORDIV {
+                    let den = mk_const_int(cache: mut cache, dt: read dt, v: reduced)
+                    let out = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: newxs, y: den)
+                    let cost = List.len<Int>(list: read uop_backward_slice(cache: read cache, id: newxs))
+                    if best < 0 || cost < best_cost {
+                        best = out
+                        best_cost = cost
+                    }
+                } else {
+                    let nr = uop_min_max(cache: read cache, id: newxs)
+                    if xr.lo >= 0 && nr.lo >= 0 {
+                        local b_parts = List.new<Int>()
+                        let mut ti = 0
+                        while ti < List.len<Int>(list: read factors) {
+                            let rem = floormod(x: List.get<Int>(list: read factors, index: ti), y: div)
+                            if rem != 0 {
+                                let t = List.get<Int>(list: read divided, index: ti)
+                                List.push<Int>(list: mut b_parts, value: read divmod_mul_const(cache: mut cache, id: t, value: rem))
+                            }
+                            ti = ti + 1
+                        }
+                        let const_rem = floormod(x: const_part, y: div)
+                        if const_rem != 0 {
+                            List.push<Int>(list: mut b_parts, value: read mk_const_int(cache: mut cache, dt: read dt, v: const_rem))
+                        }
+                        let b = divmod_usum(cache: mut cache, dt: read dt, parts: read b_parts)
+                        let br = uop_min_max(cache: read cache, id: b)
+                        if br.lo >= 0 && br.hi < div {
+                            let den = mk_const_int(cache: mut cache, dt: read dt, v: reduced)
+                            let inner_mod = mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: newxs, y: den)
+                            let scaled = divmod_mul_const(cache: mut cache, id: inner_mod, value: div)
+                            let out = mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: scaled, y: b)
+                            let cost = List.len<Int>(list: read uop_backward_slice(cache: read cache, id: out))
+                            if best < 0 || cost < best_cost {
+                                best = out
+                                best_cost = cost
+                            }
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+        ci = ci + 1
+    }
+    if best < 0 { return None }
+    return Some(graph_rewrite(cache: mut cache, id: best))
 }
 
 fn divmod_try_variable_denominator(cache: mut UOpCache, id: Int, x: Int, y: Int) -> Option<Int> {
@@ -254,9 +373,11 @@ fn divmod_fold_general(cache: mut UOpCache, id: Int) -> Option<Int> {
                 Some(rn) => { return Some(rn) }
                 None => {}
             }
-            // TODO: re-enable upstream remove_nested_mod once the generated runtime path for
-            // returning a rewritten modulo-of-sum has a small reproducer. The other div/mod
-            // folds remain active and verified below.
+            match divmod_try_remove_nested_mod(cache: mut cache, id: id, y: y,
+                                               const_part: const_part, c: c, terms: read terms) {
+                Some(rm) => { return Some(rm) }
+                None => {}
+            }
             local factors = List.new<Int>()
             local divided = List.new<Int>()
             if divmod_factor_terms(cache: mut cache, terms: read terms, factors: mut factors, divided: mut divided) {
@@ -274,9 +395,18 @@ fn divmod_fold_general(cache: mut UOpCache, id: Int) -> Option<Int> {
                     Some(rg) => { return Some(rg) }
                     None => {}
                 }
+                match divmod_try_nest_by_factor(cache: mut cache, id: id, x: x, const_part: const_part, c: c,
+                                                terms: read terms, factors: read factors, divided: read divided) {
+                    Some(rf) => { return Some(rf) }
+                    None => {}
+                }
             }
         }
     }
 
     return divmod_try_variable_denominator(cache: mut cache, id: id, x: x, y: y)
+}
+
+fn fold_divmod_general(cache: mut UOpCache, d: Int) -> Option<Int> {
+    return divmod_fold_general(cache: mut cache, id: d)
 }

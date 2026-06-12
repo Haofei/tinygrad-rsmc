@@ -165,9 +165,9 @@ Integrated pieces:
   ALU expressions, `WHERE`, and `INDEX`.
 - `uop/divandmod.rss`: first integrated source-shaped `tinygrad/uop/divandmod.py` slice over
   interned UOp ids, covering interval cancellation, nested `(x%(k*c))//c` and `%c` rewrites,
-  binary numerator folding, gcd-with-remainder factoring, and factor-remainder splitting for
-  non-negative integer index expressions. The upstream remove-nested-mod-in-sum rule is held back
-  pending a smaller generated-runtime reproducer.
+  remove-nested-mod-in-sum, binary numerator folding, gcd-with-remainder factoring,
+  nest-by-factor splitting, and factor-remainder splitting for non-negative integer index
+  expressions.
 - `uop/decompositions.rss`: first integrated source-shaped `tinygrad/uop/decompositions.py` late
   rewrite slice over interned UOp ids, covering Python `FLOORDIV`/`FLOORMOD` lowering to truncating
   `CDIV`/`CMOD` with mixed-sign adjustment, `MAX` lowering to `CMPLT`+`WHERE`, and
@@ -641,7 +641,9 @@ Current integrated demo:
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:
   `(n%8)//4 -> (n//4)%2`, `(n%8)%4 -> n%4`, `(b*6+2)//3 -> b*2`,
   `(b*6+2)%3 -> 2`, `(n*4+8)//6 -> ((n*2+1)//3)+1`,
-  `(n*4+8)%6 -> ((n*2+1)%3)*2`, and `(n*6+m)//6 -> m//6+n`.
+  `(n*4+8)%6 -> ((n*2+1)%3)*2`, `(n*6+m)//6 -> m//6+n`,
+  `(n%4+m)%2 -> (n+m)%2`, and `(n*4+m)//8 -> ((n*4+m)//4)//2`-style
+  nest-by-factor lowering.
 - validates integrated decomposition rewrites for same-sign floor division, mixed-sign floor
   division/modulo, `MAX` to `WHERE`, reciprocal to `FDIV`, and multiply-by-reciprocal to `FDIV`,
   plus power-of-two floor-mod/multiply/divide, `NEG`, `SUB`, and `MULACC` lowering, with verifier

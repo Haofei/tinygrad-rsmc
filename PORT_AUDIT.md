@@ -419,7 +419,9 @@ Integrated pieces:
   tuple-axis `layernorm`, channel-axis `batchnorm` with no-affine and affine forms, plus
   keepdim-backed `logsumexp(axis)`, `softmax(axis)`, `log_softmax(axis)`, first-index
   `argmax`/`argmin` for all/axis reductions, and graph-composed stable `sort`, `argsort`,
-  and sorted `topk` for fixed-shape tensors), `isnan`/`isinf`/`isfinite` predicates plus
+  and sorted `topk` for fixed-shape tensors), graph-composed `isnan`/`isinf`/`isfinite`
+  predicates (`isnan` as `x != x`, `isinf` as positive/negative infinity equality, and
+  `isfinite` as the negation of NaN/Inf) plus
   `isclose`/`allclose` with `equal_nan` handling, loss helpers (`binary_crossentropy`,
   `binary_crossentropy_logits`, `nll_loss`, and sparse-target `cross_entropy`), `_pool`-style
   NCHW `avg_pool2d` with count-include/count-exclude padding and `ceil_mode`, `max_pool2d` with
@@ -759,8 +761,10 @@ Current integrated demo:
   including first-index behavior for tied maxima.
 - validates Tensor `sort`, `argsort`, and sorted `topk` against real tinygrad for axis-0 and
   axis-1 cases, including stable duplicate-index reconstruction.
-- validates Tensor `isclose` and `allclose` for loose/tight finite tolerances and NaN/Inf
-  edge cases including `equal_nan=True`.
+- validates Tensor `isnan`, `isinf`, and `isfinite` values for NaN/+Inf/-Inf/finite inputs,
+  including positive-only and negative-only `isinf` detection, and validates Tensor `isclose`
+  and `allclose` for loose/tight finite tolerances and NaN/Inf edge cases including
+  `equal_nan=True`.
 - validates Tensor loss helpers against real tinygrad: binary cross entropy mean/sum, BCE logits
   mean with and without `pos_weight`, NLL loss none/mean, and sparse-target cross entropy none/mean.
 - validates Tensor statistics against real tinygrad: `var(axis=1, correction=0/1)`,
@@ -915,7 +919,7 @@ Major missing integrated work:
   real packed image convolution kernels and lazy Winograd convolution integration rather than the
   current direct-conv fallback,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
-  on runtime `.item()` shape discovery, graph-backed NaN/Inf predicate lowering,
+  on runtime `.item()` shape discovery,
   broader multi-axis interpolation and composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   Python-facing method breadth,

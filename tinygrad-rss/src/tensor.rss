@@ -2273,33 +2273,41 @@ fn tensor_interpolate(cache: mut UOpCache, x: Int, axis: Int, out_size: Int, mod
     return tensor_interpolate_axis_linear(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: align_corners)
 }
 
-fn tensor_float_predicate(cache: mut UOpCache, x: Int, pred: Int) -> Int {
-    local vals = eval_tensor(cache: read cache, id: x)
-    local shape = uop_shape(cache: read cache, id: x)
-    local out = List.new<Float>()
-    let mut i = 0
-    while i < List.len<Float>(list: read vals) {
-        let v = List.get<Float>(list: read vals, index: i)
-        let mut ok = false
-        if pred == 0 { ok = Float.is_nan(value: read v) }
-        if pred == 1 { ok = Float.is_infinite(value: read v) }
-        if pred == 2 { ok = Float.is_finite(value: read v) }
-        if ok { pushf1(l: mut out, a: 1.0) } else { pushf1(l: mut out, a: 0.0) }
-        i = i + 1
-    }
-    return mk_data_tensor(cache: mut cache, dt: read dt_bool(), shape: read shape, data: read out)
+fn tensor_isnan(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_ne(cache: mut cache, a: x, b: x)
 }
 
-fn tensor_isnan(cache: mut UOpCache, x: Int) -> Int {
-    return tensor_float_predicate(cache: mut cache, x: x, pred: 0)
+fn tensor_isposinf(cache: mut UOpCache, x: Int) -> Int {
+    let pos_inf = tensor_const_like_float(cache: mut cache, x: x, value: 1.0 / 0.0)
+    return tensor_eq(cache: mut cache, a: x, b: pos_inf)
+}
+
+fn tensor_isneginf(cache: mut UOpCache, x: Int) -> Int {
+    let neg_inf = tensor_const_like_float(cache: mut cache, x: x, value: 0.0 - (1.0 / 0.0))
+    return tensor_eq(cache: mut cache, a: x, b: neg_inf)
+}
+
+fn tensor_isinf_detect(cache: mut UOpCache, x: Int, detect_positive: Bool, detect_negative: Bool) -> Int {
+    if detect_positive && detect_negative {
+        let pos = tensor_isposinf(cache: mut cache, x: x)
+        let neg = tensor_isneginf(cache: mut cache, x: x)
+        return tensor_or(cache: mut cache, a: pos, b: neg)
+    }
+    if detect_positive { return tensor_isposinf(cache: mut cache, x: x) }
+    if detect_negative { return tensor_isneginf(cache: mut cache, x: x) }
+    local xs = uop_shape(cache: read cache, id: x)
+    return tensor_full(cache: mut cache, dt: read dt_bool(), shape: read xs, value: 0.0)
 }
 
 fn tensor_isinf(cache: mut UOpCache, x: Int) -> Int {
-    return tensor_float_predicate(cache: mut cache, x: x, pred: 1)
+    return tensor_isinf_detect(cache: mut cache, x: x, detect_positive: true, detect_negative: true)
 }
 
 fn tensor_isfinite(cache: mut UOpCache, x: Int) -> Int {
-    return tensor_float_predicate(cache: mut cache, x: x, pred: 2)
+    let nan = tensor_isnan(cache: mut cache, x: x)
+    let inf = tensor_isinf(cache: mut cache, x: x)
+    let not_finite = tensor_or(cache: mut cache, a: nan, b: inf)
+    return tensor_logical_not(cache: mut cache, x: not_finite)
 }
 
 fn tensor_isclose_finite(cache: mut UOpCache, x: Int, other: Int, rtol: Float, atol: Float) -> Int {

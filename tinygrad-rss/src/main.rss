@@ -292,6 +292,8 @@ fn main() -> Unit {
     showstr(label: read "uop.render_infer_expr floordiv = ", v: read uop_render_infer_expr(cache: read mcache, id: mr_fd))
     showstr(label: read "uop.render_infer_expr bitcast = ", v: read uop_render_infer_expr(cache: read mcache, id: mr_bitcast))
     showstr(label: read "uop.render_expr stack = ", v: read uop_render_expr(cache: read mcache, id: mr_stack))
+    showstr(label: read "uop.pyrender mul = ", v: read uop_pyrender(cache: read mcache, id: mr_mul))
+    showstr(label: read "uop.pyrender bitcast = ", v: read uop_pyrender(cache: read mcache, id: mr_bitcast))
     showstr(label: read "uop.pretty line = ", v: read uop_pretty_line(cache: read mcache, id: mr_mul))
     local mparam_shape = shp(a: 2, b: 3)
     let mparam = mk_param(cache: mut mcache, slot: 0, dt: read i32, shape: read mparam_shape, name: read "input")

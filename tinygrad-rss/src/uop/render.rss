@@ -228,6 +228,76 @@ fn uop_render_infer_expr(cache: read UOpCache, id: Int) -> fresh String {
     return uop_render_expr(cache: read cache, id: id)
 }
 
+fn pyrender_srcs(cache: read UOpCache, id: Int, start: Int) -> fresh String {
+    let mut s = String.copy(value: read "")
+    let mut i = start
+    while i < node_num_src(cache: read cache, id: id) {
+        if i > start { s = render_cat(a: read s, b: read ", ") }
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        s = render_cat(a: read s, b: read uop_pyrender(cache: read cache, id: child))
+        i = i + 1
+    }
+    return String.copy(value: read s)
+}
+
+fn pyrender_const_arg(cache: read UOpCache, id: Int) -> fresh String {
+    if node_is_const_int(cache: read cache, id: id) {
+        return Int.to_string(value: read node_const_int(cache: read cache, id: id))
+    }
+    return uop_arg_to_string(arg: read node_arg(cache: read cache, id: id))
+}
+
+fn pyrender_binary(cache: read UOpCache, id: Int) -> fresh String {
+    let left = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    let right = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+    return render_binary_parens(cache: read cache, id: id, left: read left, right: read right)
+}
+
+fn uop_pyrender(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == CONST {
+        return render_cat(a: read "UOp.const(", b: read render_cat(a: read render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id)),
+               b: read render_cat(a: read ", ", b: read render_cat(a: read pyrender_const_arg(cache: read cache, id: id), b: read ")"))))
+    }
+    if op == DEFINE_VAR {
+        let dt = node_full_dtype(cache: read cache, id: id)
+        let vr = uop_min_max(cache: read cache, id: id)
+        let mut extra = String.copy(value: read "")
+        if dt.name != "weakint" { extra = render_cat(a: read ", dtype=", b: read render_dtype_repr(dt: read dt)) }
+        return render_cat(a: read "UOp.variable(\"", b: read render_cat(a: read uop_expr(cache: read cache, id: id),
+               b: read render_cat(a: read "\", ", b: read render_cat(a: read Int.to_string(value: read vr.lo),
+               b: read render_cat(a: read ", ", b: read render_cat(a: read Int.to_string(value: read vr.hi),
+               b: read render_cat(a: read extra, b: read ")")))))))
+    }
+    if op == PARAM {
+        let name = node_param_name(cache: read cache, id: id)
+        let mut args = render_cat(a: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)),
+                                  b: read render_cat(a: read ", ", b: read render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id))))
+        if String.len(value: read name) > 0 {
+            args = render_cat(a: read args, b: read render_cat(a: read ", name=\"", b: read render_cat(a: read name, b: read "\"")))
+        }
+        return render_cat(a: read "UOp.param(", b: read render_cat(a: read args, b: read ")"))
+    }
+    if op == CAST || op == BITCAST {
+        let base = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let mut method = String.copy(value: read ".cast(")
+        if op == BITCAST { method = ".bitcast(" }
+        return render_cat(a: read base, b: read render_cat(a: read method, b: read render_cat(a: read render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id)), b: read ")")))
+    }
+    if render_has_sym(op: read op) { return pyrender_binary(cache: read cache, id: id) }
+    if op == WHERE {
+        let cond = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let tval = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        let fval = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+        return render_cat(a: read cond, b: read render_cat(a: read ".where(", b: read render_cat(a: read tval, b: read render_cat(a: read ", ", b: read render_cat(a: read fval, b: read ")")))))
+    }
+    if op == INDEX {
+        let base = uop_pyrender(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return render_cat(a: read base, b: read render_cat(a: read ".index(", b: read render_cat(a: read pyrender_srcs(cache: read cache, id: id, start: 1), b: read ")")))
+    }
+    return render_cat(a: read "UOp(", b: read render_cat(a: read ops_name(op: read op), b: read render_cat(a: read ", ", b: read render_cat(a: read render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id)), b: read ")"))))
+}
+
 fn uop_pretty_line(cache: read UOpCache, id: Int) -> fresh String {
     let mut s = String.concat(left: read "UOp(", right: read ops_name(op: read node_op(cache: read cache, id: id)))
     s = render_cat(a: read s, b: read ", ")

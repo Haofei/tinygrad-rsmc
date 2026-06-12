@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 19,475 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 19,547 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -103,7 +103,9 @@ Integrated pieces:
 - `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
   UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, named `SPECIAL`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
-  inference-specific rendering for div/mod and `BITCAST`, plus compact UOp line printing.
+  inference-specific rendering for div/mod and `BITCAST`, compact UOp line printing, and a first
+  `pyrender`-style reconstruction slice for constants, variables, params, casts/bitcasts, binary
+  ALU expressions, `WHERE`, and `INDEX`.
 - `uop/divandmod.rss`: first integrated source-shaped `tinygrad/uop/divandmod.py` slice over
   interned UOp ids, covering interval cancellation, nested `(x%(k*c))//c` and `%c` rewrites,
   binary numerator folding, gcd-with-remainder factoring, and factor-remainder splitting for
@@ -279,7 +281,8 @@ Current integrated demo:
   in-range `BIND`, `unbind`, `val`, sorted `variables`, `unbind_all` rewrite with collected
   bindings, and out-of-range bind rejection.
 - validates the integrated source-shaped UOp renderer for precedence-aware symbolic expressions,
-  `max`, inference `floordiv`, inference `BITCAST`, compact repeated `STACK`, and UOp line output.
+  `max`, inference `floordiv`, inference `BITCAST`, compact repeated `STACK`, UOp line output,
+  and first `pyrender` reconstruction for an ALU expression and bitcast.
 - validates UOp `ParamArg` metadata and definitions: `PARAM` slot/name/addrspace, bounded param
   vmin/vmax, `DEFINE_LOCAL`/`DEFINE_REG` addrspace, and rejection of invalid param bounds or
   negative local slots.

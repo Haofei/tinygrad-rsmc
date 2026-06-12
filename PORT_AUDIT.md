@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 24,733 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 24,936 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -258,7 +258,7 @@ Integrated pieces:
   `MAX`. Ring/all2all chunking, contiguous pre-copy cleanup, and allreduce function wrapping remain
   unported.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
-  early COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
+  early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device through shard-0
   `MSELECT`, eliminating `MSELECT(MSTACK)`, moving `MSELECT` before movement ops, passthrough
   rebuilds for boundary ops with a leading `MULTI` child, source stripping for non-value-producing
@@ -448,7 +448,7 @@ Current integrated demo:
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
   `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
-  multi-device COPY-to-one, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
+  axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
   `SHRINK(MSTACK)` splitting, `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` source stripping,
   `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and
   `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP` movement rewrites, tuple and function

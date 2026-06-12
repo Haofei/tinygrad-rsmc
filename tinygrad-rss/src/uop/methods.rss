@@ -134,6 +134,11 @@ fn uop_arg_to_string(arg: read Arg) -> fresh String {
                 s = String.concat(left: read s, right: read ",device=")
                 s = String.concat(left: read s, right: read p.device)
             }
+            if List.len<String>(list: read p.devices) > 1 {
+                local dv = DeviceArg(devices: copy_string_list(l: read p.devices))
+                s = String.concat(left: read s, right: read ",devices=")
+                s = String.concat(left: read s, right: read device_arg_key(d: read dv))
+            }
             return String.concat(left: read s, right: read ")")
         }
         ArgAxisSizes(a) => {
@@ -731,7 +736,13 @@ fn uop_axis(cache: read UOpCache, id: Int) -> Int {
 fn uop_device_key_from_arg(arg: read Arg) -> fresh String {
     match arg {
         ArgDevice(dv) => { return device_arg_key(d: read dv) }
-        ArgParam(p) => { return String.copy(value: read p.device) }
+        ArgParam(p) => {
+            if List.len<String>(list: read p.devices) > 0 {
+                local dv = DeviceArg(devices: copy_string_list(l: read p.devices))
+                return device_arg_key(d: read dv)
+            }
+            return String.copy(value: read p.device)
+        }
         ArgBufferize(b) => {
             if b.has_device == false { return String.copy(value: read "") }
             if b.is_device_int { return Int.to_string(value: read b.device_int) }

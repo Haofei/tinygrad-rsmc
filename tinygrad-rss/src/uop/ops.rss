@@ -50,6 +50,7 @@ struct ParamArg derives(Clone) {
     has_axis: Bool,
     axis: Int,
     device: String,
+    devices: List<String>,
 }
 
 struct AxisSizeArg derives(Clone) {
@@ -448,9 +449,13 @@ fn make_key(op: Ops, dt: read DType, src: read List<Int>, arg: read Arg) -> fres
             List.push<Int>(list: mut d, value: read addr_space_ord(a: read p.addrspace))
             List.push<Int>(list: mut d, value: read bool_to_int(b: p.has_axis))
             List.push<Int>(list: mut d, value: read p.axis)
+            List.push<Int>(list: mut d, value: read List.len<String>(list: read p.devices))
             let ndev = String.concat(left: read p.name, right: read "|")
-            local ndev2 = String.concat(left: read ndev, right: read p.device)
-            return NodeKey(op: op, dtype: dtn, src: take s, ak: 9, ai: 0, af: "", sv: take ndev2, kd: take d)
+            let ndev2 = String.concat(left: read ndev, right: read p.device)
+            let tuple_key = device_arg_key(d: read DeviceArg(devices: copy_string_list(l: read p.devices)))
+            let ndev3 = String.concat(left: read ndev2, right: read "|")
+            local ndev4 = String.concat(left: read ndev3, right: read tuple_key)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 9, ai: 0, af: "", sv: take ndev4, kd: take d)
         }
         ArgAxisSizes(a) => {
             local d = copy_int_list(l: read a.pairs)
@@ -553,9 +558,28 @@ fn mk_bind_int(cache: mut UOpCache, var: Int, value: Int) -> Int {
 
 fn mk_param_arg(slot: Int, has_vmin_vmax: Bool, vmin: Int, vmax: Int, name: read String,
                 addrspace: read AddrSpace, has_axis: Bool, axis: Int, device: read String) -> fresh ParamArg {
+    local devices = List.new<String>()
+    if String.len(value: read device) > 0 {
+        List.push<String>(list: mut devices, value: read String.copy(value: read device))
+    }
     return ParamArg(slot: slot, has_vmin_vmax: has_vmin_vmax, vmin: vmin, vmax: vmax,
                     name: String.copy(value: read name), addrspace: addr_space_copy(a: read addrspace),
-                    has_axis: has_axis, axis: axis, device: String.copy(value: read device))
+                    has_axis: has_axis, axis: axis, device: String.copy(value: read device),
+                    devices: take devices)
+}
+
+fn mk_param_arg_devices(slot: Int, has_vmin_vmax: Bool, vmin: Int, vmax: Int, name: read String,
+                        addrspace: read AddrSpace, has_axis: Bool, axis: Int, devices: read List<String>) -> fresh ParamArg {
+    local d = copy_string_list(l: read devices)
+    if List.len<String>(list: read d) > 0 {
+        let f = List.get<String>(list: read d, index: 0)
+        return ParamArg(slot: slot, has_vmin_vmax: has_vmin_vmax, vmin: vmin, vmax: vmax,
+                        name: String.copy(value: read name), addrspace: addr_space_copy(a: read addrspace),
+                        has_axis: has_axis, axis: axis, device: String.copy(value: read f), devices: take d)
+    }
+    return ParamArg(slot: slot, has_vmin_vmax: has_vmin_vmax, vmin: vmin, vmax: vmax,
+                    name: String.copy(value: read name), addrspace: addr_space_copy(a: read addrspace),
+                    has_axis: has_axis, axis: axis, device: String.copy(value: read ""), devices: take d)
 }
 
 fn mk_param(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String) -> Int {
@@ -603,6 +627,33 @@ fn mk_param_device(cache: mut UOpCache, slot: Int, dt: read DType, shape: read L
     }
     local p = mk_param_arg(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read name,
                            addrspace: read ADDR_GLOBAL, has_axis: false, axis: 0, device: read device)
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_param_axis_devices(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String,
+                         axis: Int, devices: read List<String>) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg_devices(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read name,
+                                   addrspace: read ADDR_GLOBAL, has_axis: true, axis: axis, devices: read devices)
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_param_devices_full(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String,
+                         has_vmin_vmax: Bool, vmin: Int, vmax: Int, addrspace: read AddrSpace,
+                         devices: read List<String>) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg_devices(slot: slot, has_vmin_vmax: has_vmin_vmax, vmin: vmin, vmax: vmax, name: read name,
+                                   addrspace: read addrspace, has_axis: false, axis: 0, devices: read devices)
     local a = ArgParam(value: take p)
     return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
 }
@@ -2013,9 +2064,7 @@ fn node_effective_device_count(cache: read UOpCache, id: Int) -> Int {
         return node_num_src(cache: read cache, id: id)
     }
     if op == PARAM {
-        let name = node_param_device(cache: read cache, id: id)
-        if String.len(value: read name) > 0 { return 1 }
-        return 0
+        return node_param_device_count(cache: read cache, id: id)
     }
     if node_num_src(cache: read cache, id: id) > 0 {
         let s = node_src_id(cache: read cache, id: id, k: 0)
@@ -2056,8 +2105,7 @@ fn node_effective_device_name(cache: read UOpCache, id: Int, index: Int) -> fres
         return ""
     }
     if op == PARAM {
-        if index == 0 { return node_param_device(cache: read cache, id: id) }
-        return ""
+        return node_param_device_name(cache: read cache, id: id, index: index)
     }
     if node_num_src(cache: read cache, id: id) > 0 {
         let s = node_src_id(cache: read cache, id: id, k: 0)
@@ -2404,7 +2452,13 @@ fn node_param_axis(cache: read UOpCache, id: Int) -> Int {
 fn node_param_device(cache: read UOpCache, id: Int) -> fresh String {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
     match n.arg {
-        ArgParam(p) => { return String.copy(value: read p.device) }
+        ArgParam(p) => {
+            if List.len<String>(list: read p.devices) > 0 {
+                let d = List.get<String>(list: read p.devices, index: 0)
+                return String.copy(value: read d)
+            }
+            return String.copy(value: read p.device)
+        }
         ArgNone => { return "" }
         ArgInt(v) => { return "" }
         ArgFloat(f) => { return "" }
@@ -2420,6 +2474,98 @@ fn node_param_device(cache: read UOpCache, id: Int) -> fresh String {
         ArgBufferize(b) => { return "" }
         ArgProgram(p) => { return "" }
         ArgCall(c) => { return "" }
+    }
+}
+
+fn node_param_device_count(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => {
+            if List.len<String>(list: read p.devices) > 0 {
+                return List.len<String>(list: read p.devices)
+            }
+            if String.len(value: read p.device) > 0 { return 1 }
+            return 0
+        }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_param_device_name(cache: read UOpCache, id: Int, index: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => {
+            if index < 0 { return "" }
+            if List.len<String>(list: read p.devices) > 0 {
+                if index < List.len<String>(list: read p.devices) {
+                    let d = List.get<String>(list: read p.devices, index: index)
+                    return String.copy(value: read d)
+                }
+                return ""
+            }
+            if index == 0 { return String.copy(value: read p.device) }
+            return ""
+        }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_param_devices(cache: read UOpCache, id: Int) -> fresh List<String> {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => {
+            if List.len<String>(list: read p.devices) > 0 {
+                return copy_string_list(l: read p.devices)
+            }
+            local d = List.new<String>()
+            if String.len(value: read p.device) > 0 {
+                List.push<String>(list: mut d, value: read String.copy(value: read p.device))
+            }
+            return take d
+        }
+        ArgNone => { return List.new<String>() }
+        ArgInt(v) => { return List.new<String>() }
+        ArgFloat(f) => { return List.new<String>() }
+        ArgBool(b) => { return List.new<String>() }
+        ArgStr(t) => { return List.new<String>() }
+        ArgInts(vals) => { return List.new<String>() }
+        ArgReduce(r) => { return List.new<String>() }
+        ArgVar(v) => { return List.new<String>() }
+        ArgRange(r) => { return List.new<String>() }
+        ArgAxisSizes(a) => { return List.new<String>() }
+        ArgDevice(dv) => { return List.new<String>() }
+        ArgOp(o) => { return List.new<String>() }
+        ArgBufferize(b) => { return List.new<String>() }
+        ArgProgram(p) => { return List.new<String>() }
+        ArgCall(c) => { return List.new<String>() }
     }
 }
 

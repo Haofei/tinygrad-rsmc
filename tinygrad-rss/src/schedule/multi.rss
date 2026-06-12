@@ -135,6 +135,42 @@ fn multi_mstack_early_shrink(cache: mut UOpCache, shrink: Int) -> fresh MultiRew
     return MultiRewrite(result: out, changed: true, ok: true)
 }
 
+fn multi_param_to_multi(cache: mut UOpCache, param: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: param) != PARAM {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    if node_param_has_axis(cache: read cache, id: param) == false {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let axis = node_param_axis(cache: read cache, id: param)
+    let dcount = node_param_device_count(cache: read cache, id: param)
+    if axis < 0 || dcount <= 1 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    local shape = uop_shape(cache: read cache, id: param)
+    if axis >= List.len<Int>(list: read shape) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let full_dim = List.get<Int>(list: read shape, index: axis)
+    if full_dim % dcount != 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    List.set<Int>(list: mut shape, index: axis, value: read (full_dim / dcount))
+    local devices = node_param_devices(cache: read cache, id: param)
+    local dt = node_full_dtype(cache: read cache, id: param)
+    local name = node_param_name(cache: read cache, id: param)
+    local addrspace = node_param_addrspace(cache: read cache, id: param)
+    let local_param = mk_param_devices_full(cache: mut cache, slot: node_param_slot(cache: read cache, id: param),
+                                            dt: read dt, shape: read shape, name: read name,
+                                            has_vmin_vmax: node_param_has_vmin_vmax(cache: read cache, id: param),
+                                            vmin: node_param_vmin(cache: read cache, id: param),
+                                            vmax: node_param_vmax(cache: read cache, id: param),
+                                            addrspace: read addrspace, devices: read devices)
+    let out = mk_multi(cache: mut cache, x: local_param, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
 fn multi_rebuild_srcs_replacing_multi_with_payload(cache: read UOpCache, root: Int, start: Int) -> fresh List<Int> {
     local srcs = List.new<Int>()
     let mut i = start

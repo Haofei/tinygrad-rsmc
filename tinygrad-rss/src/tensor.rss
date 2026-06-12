@@ -55,6 +55,16 @@ fn tensor_shape(cache: read UOpCache, x: Int) -> fresh List<Int> {
     return uop_shape(cache: read cache, id: x)
 }
 
+fn tensor_shape_eq(a: read List<Int>, b: read List<Int>) -> Bool {
+    if List.len<Int>(list: read a) != List.len<Int>(list: read b) { return false }
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        if List.get<Int>(list: read a, index: i) != List.get<Int>(list: read b, index: i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
 fn tensor_dtype(cache: read UOpCache, x: Int) -> fresh DType {
     return node_full_dtype(cache: read cache, id: x)
 }
@@ -265,6 +275,189 @@ fn tensor_realize(cache: mut UOpCache, ctx: mut RealizeExecContext, x: Int) -> f
 
 fn tensor_state_realize(cache: mut UOpCache, ctx: mut RealizeExecContext, t: read TensorState) -> fresh RealizeScheduledRun {
     return tensor_realize(cache: mut cache, ctx: mut ctx, x: t.uop)
+}
+
+fn tensor_call(cache: mut UOpCache, x: Int, args: read List<Int>, fxn: Int) -> Int {
+    local all_args = List.new<Int>()
+    push1(l: mut all_args, a: x)
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        push1(l: mut all_args, a: List.get<Int>(list: read args, index: i))
+        i = i + 1
+    }
+    let call = mk_call_arg(name: read "", has_name: false, precompile: false, precompile_backward: false)
+    let fret = uop_call(cache: mut cache, id: fxn, args: read all_args, call: read call)
+    return mk_gettuple(cache: mut cache, tuple_id: fret, idx: 0)
+}
+
+fn tensor_state_call(cache: mut UOpCache, t: read TensorState, args: read List<Int>, fxn: Int) -> fresh TensorState {
+    let u = tensor_call(cache: mut cache, x: t.uop, args: read args, fxn: fxn)
+    return TensorState(uop: u, is_param: t.is_param, has_grad: false, grad: 0 - 1)
+}
+
+fn tensor_linear_with_vars(cache: mut UOpCache, x: Int, args: read List<Int>) -> fresh ScheduleLinearVars {
+    local ids = List.new<Int>()
+    push1(l: mut ids, a: x)
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        push1(l: mut ids, a: List.get<Int>(list: read args, index: i))
+        i = i + 1
+    }
+    let sink = mk_sink(cache: mut cache, ids: read ids)
+    return schedule_create_linear_with_vars(cache: mut cache, big_sink: sink)
+}
+
+fn tensor_schedule_linear(cache: mut UOpCache, x: Int, args: read List<Int>) -> Int {
+    local scheduled = tensor_linear_with_vars(cache: mut cache, x: x, args: read args)
+    return scheduled.linear
+}
+
+fn tensor_callify(cache: mut UOpCache, x: Int, args: read List<Int>) -> Int {
+    local scheduled = tensor_linear_with_vars(cache: mut cache, x: x, args: read args)
+    local empty = List.new<Int>()
+    let call = mk_call_arg(name: read "callify", has_name: true, precompile: false, precompile_backward: false)
+    let wrapped = uop_call(cache: mut cache, id: scheduled.linear, args: read empty, call: read call)
+    local deps = List.new<Int>()
+    push1(l: mut deps, a: wrapped)
+    return uop_after(cache: mut cache, id: x, srcs: read deps)
+}
+
+fn tensor_state_callify(cache: mut UOpCache, t: read TensorState, args: read List<Int>) -> fresh TensorState {
+    let u = tensor_callify(cache: mut cache, x: t.uop, args: read args)
+    return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_assign(cache: mut UOpCache, target: Int, value: Int) -> Int {
+    local dst_shape = tensor_shape(cache: read cache, x: target)
+    local src_shape = tensor_shape(cache: read cache, x: value)
+    let mut val = value
+    if tensor_shape_eq(a: read dst_shape, b: read src_shape) == false {
+        val = broadcast_to(cache: mut cache, x: value, target: read dst_shape)
+    }
+    let store = uop_store(cache: mut cache, id: target, value: val, gate: read None)
+    local deps = List.new<Int>()
+    push1(l: mut deps, a: store)
+    return uop_after(cache: mut cache, id: target, srcs: read deps)
+}
+
+fn tensor_state_assign(cache: mut UOpCache, t: read TensorState, value: Int) -> fresh TensorState {
+    let u = tensor_assign(cache: mut cache, target: t.uop, value: value)
+    return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_clone(cache: mut UOpCache, x: Int, device: read String, num: Int) -> Int {
+    let mut dev = canonicalize_device(device: read device)
+    if String.len(value: read dev) == 0 {
+        dev = uop_device_key(cache: read cache, id: x)
+    }
+    if String.len(value: read dev) == 0 {
+        dev = device_default()
+    }
+    return uop_clone(cache: mut cache, id: x, device: read dev, num: num)
+}
+
+fn tensor_state_clone(cache: mut UOpCache, t: read TensorState, device: read String, num: Int) -> fresh TensorState {
+    let u = tensor_clone(cache: mut cache, x: t.uop, device: read device, num: num)
+    let mut grad = t.grad
+    if t.has_grad {
+        grad = tensor_clone(cache: mut cache, x: t.grad, device: read device, num: num)
+    }
+    return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: grad)
+}
+
+fn tensor_shard(cache: mut UOpCache, x: Int, devices: read List<String>, axis: Int) -> Int {
+    let ndev = List.len<String>(list: read devices)
+    if ndev == 0 { return x }
+    if ndev == 1 {
+        return tensor_to(cache: mut cache, x: x, device: read List.get<String>(list: read devices, index: 0))
+    }
+    local canon = canonicalize_devices(devices: read devices)
+    return uop_shard(cache: mut cache, id: x, devices: read canon, axis: axis)
+}
+
+fn tensor_shard_inplace(cache: mut UOpCache, x: Int, devices: read List<String>, axis: Int) -> Int {
+    return tensor_shard(cache: mut cache, x: x, devices: read devices, axis: axis)
+}
+
+fn tensor_state_shard(cache: mut UOpCache, t: read TensorState, devices: read List<String>, axis: Int) -> fresh TensorState {
+    let u = tensor_shard(cache: mut cache, x: t.uop, devices: read devices, axis: axis)
+    return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_shard_like(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let dcount = uop_device_count(cache: read cache, id: y)
+    if dcount <= 0 { return x }
+    if dcount == 1 {
+        local dev = uop_device_key(cache: read cache, id: y)
+        return tensor_to(cache: mut cache, x: x, device: read dev)
+    }
+    local devices = List.new<String>()
+    let mut i = 0
+    while i < dcount {
+        List.push<String>(list: mut devices, value: read uop_device_name_at(cache: read cache, id: y, index: i))
+        i = i + 1
+    }
+    return tensor_shard(cache: mut cache, x: x, devices: read devices, axis: uop_axis(cache: read cache, id: y))
+}
+
+fn tensor_iadd(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_add(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_isub(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_sub(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_imul(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_mul(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_itruediv(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_div(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_ifloordiv(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_floordiv(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_ipow(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_pow(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_iand(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_and(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_ior(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_or(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_ixor(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_xor(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_ilshift(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_shl(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_irshift(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_shr(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
+}
+
+fn tensor_imatmul(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let v = tensor_matmul(cache: mut cache, a: x, b: y)
+    return tensor_assign(cache: mut cache, target: x, value: v)
 }
 
 fn tensor_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {

@@ -1,11 +1,12 @@
 // Integrated source-shaped slice of tinygrad/device.py.
 //
-// This covers the metadata side of Device/Buffer before real runtime allocators:
+// This covers the metadata side of Device/Buffer before native runtime allocators:
 // canonical device strings, BufferSpec, Buffer, MultiBuffer, allocation state,
-// nbytes, and view descriptors. Opaque memory handles, allocator LRU behavior,
-// compiler caches, dynamic runtime imports, and profile finalization remain
-// later runtime slices. The RSS struct is named TGBuffer to avoid a generated
-// Rust backend collision with std::io::Buffer.
+// nbytes, view descriptors, and an explicit byte-list allocator for the RSS
+// runtime path. Native opaque handles, full LRU allocator behavior, compiler
+// caches, dynamic runtime imports, and profile finalization remain later runtime
+// slices. The RSS struct is named TGBuffer to avoid a generated Rust backend
+// collision with std::io::Buffer.
 features: local
 
 struct BufferSpec derives(Clone, Eq, Hash) {
@@ -31,10 +32,31 @@ struct TGBuffer derives(Clone) {
     allocated: Bool,
     allocated_views: Int,
     uop_refcount: Int,
+    has_handle: Bool,
+    handle: Int,
 }
 
 struct MultiBuffer derives(Clone) {
     bufs: List<TGBuffer>,
+}
+
+struct AllocatorCacheEntry derives(Clone) {
+    size: Int,
+    options: BufferSpec,
+    data: List<Int>,
+}
+
+struct DeviceMemoryStore {
+    next_handle: Int,
+    bufs: Map<Int, List<Int>>,
+    cache: List<AllocatorCacheEntry>,
+    mem_used: Int,
+}
+
+fn device_memory_store_new() -> fresh DeviceMemoryStore {
+    local bufs = Map.new<Int, List<Int>>()
+    local cache = List.new<AllocatorCacheEntry>()
+    return DeviceMemoryStore(next_handle: 1, bufs: take bufs, cache: take cache, mem_used: 0)
 }
 
 fn buffer_spec_default() -> fresh BufferSpec {
@@ -45,6 +67,12 @@ fn buffer_spec_default() -> fresh BufferSpec {
 fn buffer_spec_external_ptr(ptr: Int) -> fresh BufferSpec {
     return BufferSpec(uncached: false, cpu_access: false, host: false, nolru: false,
                       has_external_ptr: true, external_ptr: ptr)
+}
+
+fn buffer_spec_copy(options: read BufferSpec) -> fresh BufferSpec {
+    return BufferSpec(uncached: options.uncached, cpu_access: options.cpu_access, host: options.host,
+                      nolru: options.nolru, has_external_ptr: options.has_external_ptr,
+                      external_ptr: options.external_ptr)
 }
 
 fn device_default() -> fresh String { return String.copy(value: read "CPU") }
@@ -122,27 +150,179 @@ fn canonicalize_device_tuple(devices: read List<String>) -> fresh List<String> {
     return take canon
 }
 
+fn copy_bytes(bytes: read List<Int>) -> fresh List<Int> {
+    return copy_int_list(l: read bytes)
+}
+
+fn bytes_zeros(size: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < size {
+        List.push<Int>(list: mut out, value: read 0)
+        i = i + 1
+    }
+    return take out
+}
+
+fn bytes_slice(bytes: read List<Int>, start: Int, len: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < len {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read bytes, index: start + i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn bytes_copy_into(dst: read List<Int>, offset: Int, src: read List<Int>) -> fresh List<Int> {
+    local out = copy_bytes(bytes: read dst)
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        List.set<Int>(list: mut out, index: offset + i, value: read List.get<Int>(list: read src, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn allocator_default_buffer_spec() -> fresh BufferSpec {
+    return buffer_spec_default()
+}
+
+fn buffer_spec_equal(a: read BufferSpec, b: read BufferSpec) -> Bool {
+    if a.uncached != b.uncached { return false }
+    if a.cpu_access != b.cpu_access { return false }
+    if a.host != b.host { return false }
+    if a.nolru != b.nolru { return false }
+    if a.has_external_ptr != b.has_external_ptr { return false }
+    return a.external_ptr == b.external_ptr
+}
+
+fn allocator_cache_find(store: read DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    let mut i = List.len<AllocatorCacheEntry>(list: read store.cache) - 1
+    while i >= 0 {
+        let ent = List.get<AllocatorCacheEntry>(list: read store.cache, index: i)
+        if ent.size == size && buffer_spec_equal(a: read ent.options, b: read options) { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn allocator_cache_take(store: mut DeviceMemoryStore, index: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local new_cache = List.new<AllocatorCacheEntry>()
+    let mut i = 0
+    while i < List.len<AllocatorCacheEntry>(list: read store.cache) {
+        let ent = List.get<AllocatorCacheEntry>(list: read store.cache, index: i)
+        if i == index {
+            let mut j = 0
+            while j < List.len<Int>(list: read ent.data) {
+                List.push<Int>(list: mut out, value: read List.get<Int>(list: read ent.data, index: j))
+                j = j + 1
+            }
+        } else {
+            List.push<AllocatorCacheEntry>(list: mut new_cache, value: read ent)
+        }
+        i = i + 1
+    }
+    store.cache = take new_cache
+    return take out
+}
+
+fn allocator_alloc(store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    let handle = store.next_handle
+    store.next_handle = store.next_handle + 1
+    let found = allocator_cache_find(store: read store, size: size, options: read options)
+    if found >= 0 {
+        local data = allocator_cache_take(store: mut store, index: found)
+        Map.insert<Int, List<Int>>(map: mut store.bufs, key: read handle, value: read (manage data))
+    } else {
+        local data = bytes_zeros(size: size)
+        if options.has_external_ptr == false { store.mem_used = store.mem_used + size }
+        Map.insert<Int, List<Int>>(map: mut store.bufs, key: read handle, value: read (manage data))
+    }
+    return handle
+}
+
+fn allocator_free(store: mut DeviceMemoryStore, handle: Int, size: Int, options: read BufferSpec) -> Unit {
+    match Map.get<Int, List<Int>>(map: read store.bufs, key: read handle) {
+        Some(data) => {
+            if options.nolru || options.has_external_ptr {
+                if options.has_external_ptr == false { store.mem_used = store.mem_used - size }
+            } else {
+                List.push<AllocatorCacheEntry>(list: mut store.cache,
+                    value: read AllocatorCacheEntry(size: size, options: buffer_spec_copy(options: read options), data: copy_bytes(bytes: read data)))
+            }
+            local empty = List.new<Int>()
+            Map.insert<Int, List<Int>>(map: mut store.bufs, key: read handle, value: read (manage empty))
+        }
+        None => { }
+    }
+    return Unit
+}
+
+fn allocator_free_cache(store: mut DeviceMemoryStore) -> Unit {
+    let mut i = 0
+    while i < List.len<AllocatorCacheEntry>(list: read store.cache) {
+        let ent = List.get<AllocatorCacheEntry>(list: read store.cache, index: i)
+        if ent.options.has_external_ptr == false { store.mem_used = store.mem_used - ent.size }
+        i = i + 1
+    }
+    local cache = List.new<AllocatorCacheEntry>()
+    store.cache = take cache
+    return Unit
+}
+
+fn allocator_cache_bytes(store: read DeviceMemoryStore) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < List.len<AllocatorCacheEntry>(list: read store.cache) {
+        let ent = List.get<AllocatorCacheEntry>(list: read store.cache, index: i)
+        total = total + ent.size
+        i = i + 1
+    }
+    return total
+}
+
+fn device_store_copyin(store: mut DeviceMemoryStore, handle: Int, offset: Int, src: read List<Int>) -> Unit {
+    match Map.get<Int, List<Int>>(map: read store.bufs, key: read handle) {
+        Some(dst) => {
+            local new_data = bytes_copy_into(dst: read dst, offset: offset, src: read src)
+            Map.insert<Int, List<Int>>(map: mut store.bufs, key: read handle, value: read (manage new_data))
+        }
+        None => { }
+    }
+    return Unit
+}
+
+fn device_store_copyout(store: read DeviceMemoryStore, handle: Int, offset: Int, size: Int) -> fresh List<Int> {
+    match Map.get<Int, List<Int>>(map: read store.bufs, key: read handle) {
+        Some(data) => { return bytes_slice(bytes: read data, start: offset, len: size) }
+        None => { return bytes_zeros(size: size) }
+    }
+}
+
 fn buffer_new(device: read String, size: Int, dtype: read DType) -> fresh TGBuffer {
     local opts = buffer_spec_default()
     return TGBuffer(device: canonicalize_device(device: read device), size: size, dtype: dtype_scalar(d: read dtype),
                   has_options: false, options: take opts, offset: 0, has_base: false,
                   base_device: "", base_size: 0, base_offset: 0, allocated: false,
-                  allocated_views: 0, uop_refcount: 0)
+                  allocated_views: 0, uop_refcount: 0, has_handle: false, handle: 0)
 }
 
 fn buffer_new_with_options(device: read String, size: Int, dtype: read DType, options: read BufferSpec) -> fresh TGBuffer {
     return TGBuffer(device: canonicalize_device(device: read device), size: size, dtype: dtype_scalar(d: read dtype),
-                  has_options: true, options: options.clone(), offset: 0, has_base: false,
+                  has_options: true, options: buffer_spec_copy(options: read options), offset: 0, has_base: false,
                   base_device: "", base_size: 0, base_offset: 0, allocated: false,
-                  allocated_views: 0, uop_refcount: 0)
+                  allocated_views: 0, uop_refcount: 0, has_handle: false, handle: 0)
 }
 
 fn buffer_ref(buf: read TGBuffer, cnt: Int) -> fresh TGBuffer {
     return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
-                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_options: buf.has_options, options: buffer_spec_copy(options: read buf.options), offset: buf.offset,
                   has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
                   base_size: buf.base_size, base_offset: buf.base_offset, allocated: buf.allocated,
-                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount + cnt)
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount + cnt,
+                  has_handle: buf.has_handle, handle: buf.handle)
 }
 
 fn buffer_is_allocated(buf: read TGBuffer) -> Bool { return buf.allocated }
@@ -153,29 +333,93 @@ fn buffer_nbytes(buf: read TGBuffer) -> Int {
     return buf.size * DType.itemsize(self: read buf.dtype)
 }
 
+fn buffer_copy(buf: read TGBuffer) -> fresh TGBuffer {
+    return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                  has_options: buf.has_options, options: buffer_spec_copy(options: read buf.options), offset: buf.offset,
+                  has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                  base_size: buf.base_size, base_offset: buf.base_offset, allocated: buf.allocated,
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount,
+                  has_handle: buf.has_handle, handle: buf.handle)
+}
+
 fn buffer_allocate(buf: read TGBuffer) -> fresh TGBuffer {
     return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
-                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_options: buf.has_options, options: buffer_spec_copy(options: read buf.options), offset: buf.offset,
                   has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
                   base_size: buf.base_size, base_offset: buf.base_offset, allocated: true,
-                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount)
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount,
+                  has_handle: buf.has_handle, handle: buf.handle)
+}
+
+fn buffer_allocate_in_store(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    if buf.has_options {
+        local options = buffer_spec_copy(options: read buf.options)
+        let handle = allocator_alloc(store: mut store, size: buffer_nbytes(buf: read buf), options: read options)
+        return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                      has_options: true, options: buffer_spec_copy(options: read options), offset: buf.offset,
+                      has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                      base_size: buf.base_size, base_offset: buf.base_offset, allocated: true,
+                      allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount,
+                      has_handle: true, handle: handle)
+    }
+    local options = allocator_default_buffer_spec()
+    let handle = allocator_alloc(store: mut store, size: buffer_nbytes(buf: read buf), options: read options)
+    return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                  has_options: false, options: buffer_spec_copy(options: read options), offset: buf.offset,
+                  has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                  base_size: buf.base_size, base_offset: buf.base_offset, allocated: true,
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount,
+                  has_handle: true, handle: handle)
+}
+
+fn buffer_ensure_allocated(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    if buffer_is_initialized(buf: read buf) { return buffer_copy(buf: read buf) }
+    return buffer_allocate_in_store(store: mut store, buf: read buf)
 }
 
 fn buffer_deallocate(buf: read TGBuffer) -> fresh TGBuffer {
     return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
-                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_options: buf.has_options, options: buffer_spec_copy(options: read buf.options), offset: buf.offset,
                   has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
                   base_size: buf.base_size, base_offset: buf.base_offset, allocated: false,
-                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount)
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount,
+                  has_handle: false, handle: 0)
+}
+
+fn buffer_deallocate_in_store(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    if buf.has_handle {
+        if buf.has_options {
+            local options = buffer_spec_copy(options: read buf.options)
+            allocator_free(store: mut store, handle: buf.handle, size: buffer_nbytes(buf: read buf), options: read options)
+        } else {
+            local options = allocator_default_buffer_spec()
+            allocator_free(store: mut store, handle: buf.handle, size: buffer_nbytes(buf: read buf), options: read options)
+        }
+    }
+    return buffer_deallocate(buf: read buf)
 }
 
 fn buffer_view(buf: read TGBuffer, size: Int, dtype: read DType, offset: Int) -> fresh TGBuffer {
     let base_off = buf.offset
     return TGBuffer(device: String.copy(value: read buf.device), size: size, dtype: dtype_scalar(d: read dtype),
-                  has_options: buf.has_options, options: buf.options.clone(), offset: base_off + offset,
+                  has_options: buf.has_options, options: buffer_spec_copy(options: read buf.options), offset: base_off + offset,
                   has_base: true, base_device: String.copy(value: read buf.device),
                   base_size: buf.size, base_offset: buf.offset, allocated: buf.allocated,
-                  allocated_views: 0, uop_refcount: buf.uop_refcount)
+                  allocated_views: 0, uop_refcount: buf.uop_refcount,
+                  has_handle: buf.has_handle, handle: buf.handle)
+}
+
+fn buffer_copyin(store: mut DeviceMemoryStore, buf: read TGBuffer, src: read List<Int>) -> fresh TGBuffer {
+    local actual = buffer_ensure_allocated(store: mut store, buf: read buf)
+    if actual.has_handle {
+        device_store_copyin(store: mut store, handle: actual.handle, offset: actual.offset, src: read src)
+    }
+    return take actual
+}
+
+fn buffer_copyout(store: read DeviceMemoryStore, buf: read TGBuffer) -> fresh List<Int> {
+    if buf.has_handle == false { return bytes_zeros(size: buffer_nbytes(buf: read buf)) }
+    return device_store_copyout(store: read store, handle: buf.handle, offset: buf.offset, size: buffer_nbytes(buf: read buf))
 }
 
 fn buffer_repr(buf: read TGBuffer) -> fresh String {

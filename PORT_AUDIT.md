@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 16,588 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 16,853 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -153,11 +153,12 @@ Integrated pieces:
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
   checks.
-- `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata slice, covering
-  canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
-  allocation-state projection, refcounts, and view offsets. The RSS struct is named `TGBuffer`
+- `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
+  covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
+  allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
+  copyin/copyout, deallocate, cache reuse, and cache freeing. The RSS struct is named `TGBuffer`
   to avoid a generated Rust backend collision, while the helper surface remains `buffer_*`.
-  Real opaque allocation handles, LRU allocator behavior, copyin/copyout, compiler caches,
+  Native opaque runtime handles, full device-specific LRU allocator behavior, compiler caches,
   dynamic runtime loading, profiling finalization, and device enumeration remain unported.
 - `engine/realize.rss`: first integrated source-shaped `tinygrad/engine/realize.py` metadata
   slice, covering `get_call_arg_uops`, `get_call_outs_ins` for `PROGRAM`, `COPY`, `SLICE`, and
@@ -526,7 +527,7 @@ Major missing integrated work:
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.
-- `engine/*`, `device.py` beyond the first metadata slice, `runtime/*`, `runtime/support/*`:
+- `engine/*`, `device.py` beyond the first allocator/metadata slice, `runtime/*`, `runtime/support/*`:
   handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.

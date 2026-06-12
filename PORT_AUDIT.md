@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 18,047 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 18,065 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -121,7 +121,9 @@ Integrated pieces:
   `render_kernel`-style C function wrapper. It now also renders `IF`/`ENDIF` blocks and aliases
   `AFTER` nodes to their ordered source, plus `DEFINE_LOCAL`/`DEFINE_REG` declarations with
   shape-derived array extents such as `float temp0[4];` and `float acc0[4];`. The kernel wrapper
-  can now render either a `SINK` toposort or an explicit `LINEAR` op stream. It still lacks upstream's full linearizer ordering, inline heuristics,
+  can now render either a `SINK` toposort or an explicit `LINEAR` op stream, and it preserves a
+  shared loop body across duplicated `END` nodes so generated multi-store kernels stay in scope.
+  It still lacks upstream's full linearizer ordering, inline heuristics,
   vector typedefs, target-specific mutable/read-only parameter effects, target subclasses, and schedule integration.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
@@ -543,9 +545,8 @@ Major missing integrated work:
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
-  IF rejection, multi-store loop-body rendering, late expansion/devectorization, range
-  simplification, GPU dims, ISA/regalloc, full symbolic estimates, compile/binary, and clear scope
-  for GPU-only optimization passes remain.
+  IF rejection, late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
+  full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.
 - `engine/*`, `device.py` beyond the first allocator/metadata slice, `runtime/*`, `runtime/support/*`:

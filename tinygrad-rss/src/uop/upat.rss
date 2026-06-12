@@ -382,6 +382,26 @@ fn pattern_graph_rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternR
     return pattern_fixpoint(cache: mut cache, id: rebuilt, rules: read rules)
 }
 
+fn rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Int {
+    return pattern_graph_rewrite(cache: mut cache, id: id, rules: read rules)
+}
+
+fn pm_rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Option<Int> {
+    return pattern_try_rules(cache: mut cache, id: id, rules: read rules)
+}
+
+fn cached_bpm_rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Option<Int> {
+    return pattern_try_rules(cache: mut cache, id: id, rules: read rules)
+}
+
+fn walk_rewrite(cache: mut UOpCache, root: Int, rules: read List<PatternRule>) -> Int {
+    return pattern_graph_rewrite(cache: mut cache, id: root, rules: read rules)
+}
+
+fn unified_rewrite(cache: mut UOpCache, root: Int, rules: read List<PatternRule>) -> Int {
+    return pattern_graph_rewrite(cache: mut cache, id: root, rules: read rules)
+}
+
 fn pattern_symbolic_rules() -> fresh List<PatternRule> {
     local rules = List.new<PatternRule>()
 

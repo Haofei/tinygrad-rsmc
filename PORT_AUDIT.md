@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 26 RSS files, 20,338 LOC.
+  - integrated `tinygrad-rss/src`: 26 RSS files, 20,550 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -92,7 +92,8 @@ Integrated pieces:
   upstream-shaped device/buffer/copy/multi-device graph nodes, ALU dtype rules, same-itemsize `BITCAST`, WHERE/MULACC, buffers, movement
   nodes, STACK/SINK/MSTACK, source-shaped program/call/stage/slice/codegen-facing nodes,
   codegen helper `CUSTOM`/`CUSTOMI`, `INS`, `GETADDR`, `WMMA`/`SHAPED_WMMA`, and `VCAT`/`PTRCAT` nodes,
-  `UNROLL`/`CONTRACT` dtype-count/product validation, tuple/gettuple, index/load-store,
+  `UNROLL`/`CONTRACT` dtype-count/product validation including void `CONTRACT` for store contraction,
+  tuple/gettuple, index/load-store, source-shaped `REDUCE`/`STORE` range tails,
   control-flow `IF`/`ENDIF`, order nodes including `END` range validation, and recursive source validation.
 - `uop/validate.rss`: first integrated source-shaped `tinygrad/uop/validate.py` slice for masked
   index bounds validation over the interval subset already covered by `uop_min_max`: static false
@@ -161,7 +162,9 @@ Integrated pieces:
   `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. It also has the common
   same/mixed-axis `do_expand` path for non-WMMA roots, including `UNROLL` source stripping,
   mixed-axis `GEP` swizzles, scalar broadcast, vector `VCAT` repetition, range-arg passthrough,
-  and `GEP` arg expansion. WMMA,
+  and `GEP` arg expansion. It also has the first `pm_pre_expander` slice: `UNROLL`/`UPCAST`
+  ranges become `UNROLL` constants, and `REDUCE`/`STORE` nodes carrying `UNROLL` tails are
+  contracted before later expansion. WMMA,
   register-pointer special-casing, group-for-reduce, and BufferizeOpts-local
   rewrites remain later expander slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
@@ -399,7 +402,8 @@ Current integrated demo:
   `UNROLL` lowers to indexed `GEP`, empty `UNROLL` unwraps, double `UNROLL` merges axes,
   `END` consumes `UNROLL` axes through `CONTRACT`, same-axis elementwise `UNROLL` sources are
   expanded, mixed-axis `UNROLL` sources are swizzled through `GEP`, scalar non-unroll sources
-  are broadcast, and `GEP` args expand across lanes.
+  are broadcast, and `GEP` args expand across lanes. It also validates the first
+  `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample
@@ -617,7 +621,7 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
-  gate-from-index movement, first expander CONTRACT/UNROLL/END normalization and same/mixed-axis expansion,
+  gate-from-index movement, first expander CONTRACT/UNROLL/END normalization, same/mixed-axis expansion, and `pm_pre_expander` REDUCE/STORE/range unroll handling,
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing

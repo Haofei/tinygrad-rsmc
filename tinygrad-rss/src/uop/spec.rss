@@ -119,6 +119,9 @@ fn spec_check_arity(cache: read UOpCache, id: Int) -> Bool {
     if op == RANGE {
         return node_num_src(cache: read cache, id: id) >= 1
     }
+    if op == REDUCE {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
     if op == INDEX {
         return node_num_src(cache: read cache, id: id) >= 1
     }
@@ -127,7 +130,7 @@ fn spec_check_arity(cache: read UOpCache, id: Int) -> Bool {
     }
     if op == STORE {
         let n = node_num_src(cache: read cache, id: id)
-        return n == 2 || n == 3
+        return n >= 2
     }
     if op == WAIT {
         return node_num_src(cache: read cache, id: id) == 2
@@ -333,9 +336,24 @@ fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
         let ptr = node_src_id(cache: read cache, id: id, k: 0)
         let value = node_src_id(cache: read cache, id: id, k: 1)
         if spec_same_dtype(cache: read cache, a: ptr, b: value) == false { return false }
-        if node_num_src(cache: read cache, id: id) == 3 {
-            let gate = node_src_id(cache: read cache, id: id, k: 2)
-            return spec_dtype_name(cache: read cache, id: gate, name: read "bool")
+        let mut j = 2
+        while j < node_num_src(cache: read cache, id: id) {
+            let tail = node_src_id(cache: read cache, id: id, k: j)
+            let top = node_op(cache: read cache, id: tail)
+            if top != RANGE {
+                if spec_dtype_name(cache: read cache, id: tail, name: read "bool") == false { return false }
+            }
+            j = j + 1
+        }
+        return true
+    }
+    if op == REDUCE {
+        let value = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: value) == false { return false }
+        let mut j = 1
+        while j < node_num_src(cache: read cache, id: id) {
+            if node_op(cache: read cache, id: node_src_id(cache: read cache, id: id, k: j)) != RANGE { return false }
+            j = j + 1
         }
         return true
     }
@@ -535,6 +553,7 @@ fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
     }
     if op == CONTRACT {
         if node_axis_size_pairs_valid(cache: read cache, id: id) == false { return false }
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") { return true }
         let dt = node_full_dtype(cache: read cache, id: id)
         return dt.count == node_axis_size_product(cache: read cache, id: id)
     }

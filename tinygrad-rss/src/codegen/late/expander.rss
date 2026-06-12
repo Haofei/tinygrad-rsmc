@@ -1,8 +1,9 @@
 // Integrated source-shaped slice of tinygrad/codegen/late/expander.py.
 //
-// This first slice ports the axis-size choice/index helpers plus the compact
-// CONTRACT/UNROLL/END normalization rules. Full vectorized do_expand, WMMA,
-// group-for-reduce, and BufferizeOpts-local rewrites remain later slices.
+// This slice ports the axis-size choice/index helpers, the compact
+// CONTRACT/UNROLL/END normalization rules, and the first pm_pre_expander
+// rewrites. WMMA, group-for-reduce, and BufferizeOpts-local rewrites remain
+// later slices.
 features: local
 
 fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
@@ -230,6 +231,49 @@ fn expander_gep_arg_for_expand(cache: read UOpCache, id: Int, expanded_src0: Int
     return ArgInts(values: take vals)
 }
 
+fn expander_const_iota(cache: mut UOpCache, dt: read DType, count: Int) -> Int {
+    let scalar = dtype_scalar(d: read dt)
+    let vdt = dtype_vec(base: read scalar, sz: count)
+    local src = List.new<Int>()
+    local vals = List.new<Int>()
+    let mut i = 0
+    while i < count {
+        List.push<Int>(list: mut vals, value: read i)
+        i = i + 1
+    }
+    local arg = ArgInts(values: take vals)
+    return intern(cache: mut cache, op: CONST, dt: read vdt, src: take src, arg: take arg)
+}
+
+fn expander_reduce_with_srcs(cache: mut UOpCache, id: Int, value: Int, tails: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read value)
+    let mut i = 0
+    while i < List.len<Int>(list: read tails) {
+        List.push<Int>(list: mut src, value: read List.get<Int>(list: read tails, index: i))
+        i = i + 1
+    }
+    local axes = node_argints(cache: read cache, id: id)
+    local rarg = ReduceArg(kind: node_reduce_kind(cache: read cache, id: id), axes: take axes)
+    local arg = ArgReduce(value: take rarg)
+    let dt = node_dtype(cache: read cache, id: id)
+    return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take src, arg: take arg)
+}
+
+fn expander_store_with_tail(cache: mut UOpCache, id: Int, tails: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: id, k: 0))
+    List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: id, k: 1))
+    let mut i = 0
+    while i < List.len<Int>(list: read tails) {
+        List.push<Int>(list: mut src, value: read List.get<Int>(list: read tails, index: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    return intern(cache: mut cache, op: STORE, dt: read dt, src: take src, arg: take arg)
+}
+
 fn expander_do_expand(cache: mut UOpCache, id: Int) -> Option<Int> {
     let op = node_op(cache: read cache, id: id)
     if expander_supported_root_op(op: read op) == false { return None }
@@ -378,6 +422,102 @@ fn expander_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match expander_do_contract(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return None
+}
+
+fn expander_pre_range_unroll(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != RANGE { return None }
+    let at = node_range_type(cache: read cache, id: id)
+    if at != AXIS_UNROLL && at != AXIS_UPCAST { return None }
+    let mm = uop_min_max(cache: read cache, id: id)
+    let count = mm.hi + 1
+    if count <= 0 { return None }
+    let base = expander_const_iota(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: id), count: count)
+    local pairs = List.new<Int>()
+    List.push<Int>(list: mut pairs, value: read node_range_axis_id(cache: read cache, id: id))
+    List.push<Int>(list: mut pairs, value: read count)
+    return Some(mk_unroll(cache: mut cache, x: base, pairs: read pairs))
+}
+
+fn expander_pre_reduce_unroll(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != REDUCE { return None }
+    local reduce_ranges = List.new<Int>()
+    local reduce_unrolls = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        let src = node_src_id(cache: read cache, id: id, k: i)
+        let op = node_op(cache: read cache, id: src)
+        if op == RANGE {
+            List.push<Int>(list: mut reduce_ranges, value: read src)
+        } else {
+            if op == UNROLL {
+                List.push<Int>(list: mut reduce_unrolls, value: read src)
+            } else {
+                if op != CONST { return None }
+            }
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read reduce_unrolls) == 0 { return None }
+    local contract_axis = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read reduce_unrolls) {
+        let unroll = List.get<Int>(list: read reduce_unrolls, index: j)
+        local pairs = node_axis_size_pairs(cache: read cache, id: unroll)
+        let mut k = 0
+        while k < List.len<Int>(list: read pairs) {
+            List.push<Int>(list: mut contract_axis, value: read List.get<Int>(list: read pairs, index: k))
+            k = k + 1
+        }
+        j = j + 1
+    }
+    let value = node_src_id(cache: read cache, id: id, k: 0)
+    let mut ret = value
+    if List.len<Int>(list: read contract_axis) > 0 {
+        ret = mk_contract(cache: mut cache, x: value, pairs: read contract_axis)
+    }
+    return Some(expander_reduce_with_srcs(cache: mut cache, id: id, value: ret, tails: read reduce_ranges))
+}
+
+fn expander_pre_store_unroll(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STORE { return None }
+    local keep_tail = List.new<Int>()
+    local contract_axis = List.new<Int>()
+    let mut found = false
+    let mut i = 2
+    while i < node_num_src(cache: read cache, id: id) {
+        let src = node_src_id(cache: read cache, id: id, k: i)
+        if node_op(cache: read cache, id: src) == UNROLL {
+            local pairs = node_axis_size_pairs(cache: read cache, id: src)
+            let mut j = 0
+            while j < List.len<Int>(list: read pairs) {
+                List.push<Int>(list: mut contract_axis, value: read List.get<Int>(list: read pairs, index: j))
+                j = j + 1
+            }
+            found = true
+        } else {
+            List.push<Int>(list: mut keep_tail, value: read src)
+        }
+        i = i + 1
+    }
+    if found == false { return None }
+    let st = expander_store_with_tail(cache: mut cache, id: id, tails: read keep_tail)
+    return Some(mk_contract(cache: mut cache, x: st, pairs: read contract_axis))
+}
+
+fn expander_pre_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match expander_pre_range_unroll(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match expander_pre_reduce_unroll(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match expander_pre_store_unroll(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

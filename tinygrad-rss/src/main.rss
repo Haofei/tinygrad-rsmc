@@ -603,6 +603,59 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mpre_unroll_range = mk_range_int(cache: mut mcache, end: 3, axis_id: 9, axis_type: read AXIS_UNROLL, dt: read i32)
+    let mut mpre_range_ok = false
+    match expander_pre_rewrite(cache: mut mcache, id: mpre_unroll_range) {
+        Some(r) => {
+            let base = node_src_id(cache: read mcache, id: r, k: 0)
+            let pre_range_root_ok = node_op(cache: read mcache, id: r) == UNROLL && node_axis_size_product(cache: read mcache, id: r) == 3
+            let pre_range_base_ok = node_op(cache: read mcache, id: base) == CONST && node_full_dtype(cache: read mcache, id: base).count == 3
+            mpre_range_ok = pre_range_root_ok && pre_range_base_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mpre_loop_range = mk_range_int(cache: mut mcache, end: 5, axis_id: 10, axis_type: read AXIS_REDUCE, dt: read i32)
+    local mpre_reduce_src = List.new<Int>()
+    List.push<Int>(list: mut mpre_reduce_src, value: read m2)
+    List.push<Int>(list: mut mpre_reduce_src, value: read mpre_loop_range)
+    List.push<Int>(list: mut mpre_reduce_src, value: read munroll)
+    local mpre_reduce_axes = List.new<Int>()
+    local mpre_reduce_arg0 = ReduceArg(kind: 0, axes: take mpre_reduce_axes)
+    local mpre_reduce_arg = ArgReduce(value: take mpre_reduce_arg0)
+    let mpre_reduce = intern(cache: mut mcache, op: REDUCE, dt: read mstack4dt, src: take mpre_reduce_src, arg: take mpre_reduce_arg)
+    let mut mpre_reduce_ok = false
+    match expander_pre_rewrite(cache: mut mcache, id: mpre_reduce) {
+        Some(r) => {
+            let value = node_src_id(cache: read mcache, id: r, k: 0)
+            let pre_reduce_root_ok = node_op(cache: read mcache, id: r) == REDUCE && node_num_src(cache: read mcache, id: r) == 2
+            let pre_reduce_value_ok = node_op(cache: read mcache, id: value) == CONTRACT && node_axis_size_product(cache: read mcache, id: value) == 4
+            let pre_reduce_range_ok = node_src_id(cache: read mcache, id: r, k: 1) == mpre_loop_range
+            mpre_reduce_ok = pre_reduce_root_ok && pre_reduce_value_ok && pre_reduce_range_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mpre_store_src = List.new<Int>()
+    local mpre_index_srcs = List.new<Int>()
+    List.push<Int>(list: mut mpre_index_srcs, value: read m2)
+    let mpre_index = mk_index(cache: mut mcache, base: mbuf_cpu, srcs: read mpre_index_srcs, ptr: false)
+    List.push<Int>(list: mut mpre_store_src, value: read mpre_index)
+    List.push<Int>(list: mut mpre_store_src, value: read m3)
+    List.push<Int>(list: mut mpre_store_src, value: read munroll)
+    local mpre_store_arg = ArgNone
+    let mpre_store = intern(cache: mut mcache, op: STORE, dt: read dt_void(), src: take mpre_store_src, arg: take mpre_store_arg)
+    let mut mpre_store_ok = false
+    match expander_pre_rewrite(cache: mut mcache, id: mpre_store) {
+        Some(r) => {
+            let store_inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let pre_store_root_ok = node_op(cache: read mcache, id: r) == CONTRACT && node_axis_size_product(cache: read mcache, id: r) == 4
+            let pre_store_inner_ok = node_op(cache: read mcache, id: store_inner) == STORE && node_num_src(cache: read mcache, id: store_inner) == 2
+            mpre_store_ok = pre_store_root_ok && pre_store_inner_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    showb(label: read "codegen.expander pre range unrolls = ", v: mpre_range_ok)
+    showb(label: read "codegen.expander pre reduce contracts unrolls = ", v: mpre_reduce_ok)
+    showb(label: read "codegen.expander pre store contracts unrolls = ", v: mpre_store_ok)
     showb(label: read "codegen.expander expands add unroll = ", v: mex_expand_add_ok)
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)

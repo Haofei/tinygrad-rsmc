@@ -1,0 +1,2257 @@
+// 1:1 port of tinygrad/uop/ops.py — the UOp IR node, as an INTERNED shared DAG.
+// tinygrad interns via a global UOpMetaClass cache so identical subgraphs are the same object.
+// rss has no global mutable state, so the cache is an explicit `UOpCache` struct threaded as `mut`
+// (same dedup algorithm; only the cache's location differs). src are node ids into the cache table
+// — the rss representation of tinygrad's "tuple of references to shared UOps".
+features: local
+
+struct ReduceArg derives(Clone) {
+    kind: Int,
+    axes: List<Int>,
+}
+
+struct VarArg derives(Clone) {
+    name: String,
+    min_val: Int,
+    max_val: Int,
+}
+
+sum AxisType derives(Clone, Eq, Hash) {
+    AXIS_GLOBAL
+    AXIS_WARP
+    AXIS_LOCAL
+    AXIS_LOOP
+    AXIS_GROUP_REDUCE
+    AXIS_REDUCE
+    AXIS_UPCAST
+    AXIS_UNROLL
+    AXIS_THREAD
+    AXIS_PLACEHOLDER
+}
+
+struct RangeArg derives(Clone) {
+    axes: List<Int>,
+    axis_type: AxisType,
+}
+
+sum AddrSpace derives(Clone, Eq, Hash) {
+    ADDR_GLOBAL
+    ADDR_LOCAL
+    ADDR_REG
+}
+
+struct ParamArg derives(Clone) {
+    slot: Int,
+    has_vmin_vmax: Bool,
+    vmin: Int,
+    vmax: Int,
+    name: String,
+    addrspace: AddrSpace,
+    has_axis: Bool,
+    axis: Int,
+    device: String,
+}
+
+struct AxisSizeArg derives(Clone) {
+    pairs: List<Int>,
+}
+
+struct DeviceArg derives(Clone) {
+    devices: List<String>,
+}
+
+struct BufferizeArg derives(Clone) {
+    has_device: Bool,
+    is_device_int: Bool,
+    device_int: Int,
+    devices: List<String>,
+    addrspace: AddrSpace,
+    removable: Bool,
+}
+
+struct ProgramArg derives(Clone) {
+    name: String,
+    global_size: List<Int>,
+    has_local_size: Bool,
+    local_size: List<Int>,
+    vars: List<Int>,
+    globals: List<Int>,
+    outs: List<Int>,
+    ins: List<Int>,
+}
+
+struct CallArg derives(Clone) {
+    has_name: Bool,
+    name: String,
+    precompile: Bool,
+    precompile_backward: Bool,
+}
+
+sum Arg derives(Clone) {
+    ArgNone
+    ArgInt(value: Int)
+    ArgFloat(value: Float)
+    ArgBool(value: Bool)
+    ArgStr(text: String)
+    ArgInts(values: List<Int>)
+    ArgReduce(value: ReduceArg)
+    ArgVar(value: VarArg)
+    ArgRange(value: RangeArg)
+    ArgParam(value: ParamArg)
+    ArgAxisSizes(value: AxisSizeArg)
+    ArgDevice(value: DeviceArg)
+    ArgOp(value: Ops)
+    ArgBufferize(value: BufferizeArg)
+    ArgProgram(value: ProgramArg)
+    ArgCall(value: CallArg)
+}
+
+// op:Ops, dtype:DType, src:tuple[UOp,...] (child ids), arg:Any (Arg)
+struct UOp derives(Clone) {
+    op: Ops,
+    dtype: DType,
+    src: List<Int>,
+    arg: Arg,
+}
+
+// Structural identity key. Float isn't Eq/Hash, so arg is flattened (kind + int/float-as-string/str).
+struct NodeKey derives(Clone, Eq, Hash) {
+    op: Ops,
+    dtype: String,
+    src: List<Int>,
+    ak: Int,
+    ai: Int,
+    af: String,
+    sv: String,
+    kd: List<Int>,
+}
+
+struct UOpCache {
+    nodes: List<UOp>,
+    index: Map<NodeKey, Int>,
+    datas: List<List<Float>>,
+}
+
+fn cache_new() -> fresh UOpCache {
+    local n = List.new<UOp>()
+    local ix = Map.new<NodeKey, Int>()
+    local d = List.new<List<Float>>()
+    return UOpCache(nodes: take n, index: take ix, datas: take d)
+}
+
+fn cache_len(cache: read UOpCache) -> Int { return List.len<UOp>(list: read cache.nodes) }
+
+fn bool_to_int(b: Bool) -> Int { if b { return 1 } return 0 }
+
+fn addr_space_ord(a: read AddrSpace) -> Int {
+    match a {
+        ADDR_GLOBAL => { return 0 }
+        ADDR_LOCAL => { return 1 }
+        ADDR_REG => { return 2 }
+    }
+}
+
+fn addr_space_copy(a: read AddrSpace) -> fresh AddrSpace {
+    match a {
+        ADDR_GLOBAL => { return ADDR_GLOBAL }
+        ADDR_LOCAL => { return ADDR_LOCAL }
+        ADDR_REG => { return ADDR_REG }
+    }
+}
+
+fn addr_space_name(a: read AddrSpace) -> fresh String {
+    match a {
+        ADDR_GLOBAL => { return "GLOBAL" }
+        ADDR_LOCAL => { return "LOCAL" }
+        ADDR_REG => { return "REG" }
+    }
+}
+
+fn ops_key_name(op: read Ops) -> fresh String {
+    if op == DEFINE_VAR { return "DEFINE_VAR" }
+    if op == BIND { return "BIND" }
+    if op == SPECIAL { return "SPECIAL" }
+    if op == DEFINE_LOCAL { return "DEFINE_LOCAL" }
+    if op == DEFINE_REG { return "DEFINE_REG" }
+    if op == NOOP { return "NOOP" }
+    if op == REWRITE_ERROR { return "REWRITE_ERROR" }
+    if op == PARAM { return "PARAM" }
+    if op == FUNCTION { return "FUNCTION" }
+    if op == CALL { return "CALL" }
+    if op == PROGRAM { return "PROGRAM" }
+    if op == LINEAR { return "LINEAR" }
+    if op == SOURCE { return "SOURCE" }
+    if op == BINARY { return "BINARY" }
+    if op == SINK { return "SINK" }
+    if op == AFTER { return "AFTER" }
+    if op == GROUP { return "GROUP" }
+    if op == GEP { return "GEP" }
+    if op == STACK { return "STACK" }
+    if op == TUPLE { return "TUPLE" }
+    if op == GETTUPLE { return "GETTUPLE" }
+    if op == GETADDR { return "GETADDR" }
+    if op == INDEX { return "INDEX" }
+    if op == LOAD { return "LOAD" }
+    if op == STORE { return "STORE" }
+    if op == WMMA { return "WMMA" }
+    if op == SHAPED_WMMA { return "SHAPED_WMMA" }
+    if op == CAST { return "CAST" }
+    if op == BITCAST { return "BITCAST" }
+    if op == EXP2 { return "EXP2" }
+    if op == LOG2 { return "LOG2" }
+    if op == SIN { return "SIN" }
+    if op == SQRT { return "SQRT" }
+    if op == RECIPROCAL { return "RECIPROCAL" }
+    if op == NEG { return "NEG" }
+    if op == TRUNC { return "TRUNC" }
+    if op == ADD { return "ADD" }
+    if op == MUL { return "MUL" }
+    if op == SHL { return "SHL" }
+    if op == SHR { return "SHR" }
+    if op == CDIV { return "CDIV" }
+    if op == MAX { return "MAX" }
+    if op == CMOD { return "CMOD" }
+    if op == CMPLT { return "CMPLT" }
+    if op == CMPNE { return "CMPNE" }
+    if op == CMPEQ { return "CMPEQ" }
+    if op == XOR { return "XOR" }
+    if op == OR { return "OR" }
+    if op == AND { return "AND" }
+    if op == THREEFRY { return "THREEFRY" }
+    if op == SUB { return "SUB" }
+    if op == FDIV { return "FDIV" }
+    if op == POW { return "POW" }
+    if op == FLOORDIV { return "FLOORDIV" }
+    if op == FLOORMOD { return "FLOORMOD" }
+    if op == WHERE { return "WHERE" }
+    if op == MULACC { return "MULACC" }
+    if op == BARRIER { return "BARRIER" }
+    if op == RANGE { return "RANGE" }
+    if op == IF { return "IF" }
+    if op == END { return "END" }
+    if op == ENDIF { return "ENDIF" }
+    if op == WAIT { return "WAIT" }
+    if op == CONST { return "CONST" }
+    if op == CUSTOM { return "CUSTOM" }
+    if op == CUSTOMI { return "CUSTOMI" }
+    if op == INS { return "INS" }
+    if op == UNIQUE { return "UNIQUE" }
+    if op == DEVICE { return "DEVICE" }
+    if op == LUNIQUE { return "LUNIQUE" }
+    if op == CONTIGUOUS { return "CONTIGUOUS" }
+    if op == CONTIGUOUS_BACKWARD { return "CONTIGUOUS_BACKWARD" }
+    if op == DETACH { return "DETACH" }
+    if op == STAGE { return "STAGE" }
+    if op == COPY { return "COPY" }
+    if op == BUFFER { return "BUFFER" }
+    if op == SLICE { return "SLICE" }
+    if op == MSELECT { return "MSELECT" }
+    if op == MSTACK { return "MSTACK" }
+    if op == CUSTOM_FUNCTION { return "CUSTOM_FUNCTION" }
+    if op == RESHAPE { return "RESHAPE" }
+    if op == PERMUTE { return "PERMUTE" }
+    if op == EXPAND { return "EXPAND" }
+    if op == PAD { return "PAD" }
+    if op == SHRINK { return "SHRINK" }
+    if op == FLIP { return "FLIP" }
+    if op == MULTI { return "MULTI" }
+    if op == REDUCE { return "REDUCE" }
+    if op == ALLREDUCE { return "ALLREDUCE" }
+    if op == UNROLL { return "UNROLL" }
+    if op == CONTRACT { return "CONTRACT" }
+    if op == VCAT { return "VCAT" }
+    if op == PTRCAT { return "PTRCAT" }
+    return "OTHER"
+}
+
+fn axis_type_ord(t: read AxisType) -> Int {
+    match t {
+        AXIS_GLOBAL => { return 0 }
+        AXIS_WARP => { return 1 }
+        AXIS_LOCAL => { return 2 }
+        AXIS_LOOP => { return 3 }
+        AXIS_GROUP_REDUCE => { return 4 }
+        AXIS_REDUCE => { return 5 }
+        AXIS_UPCAST => { return 6 }
+        AXIS_UNROLL => { return 7 }
+        AXIS_THREAD => { return 8 }
+        AXIS_PLACEHOLDER => { return 9 }
+    }
+}
+
+fn axis_type_copy(t: read AxisType) -> fresh AxisType {
+    match t {
+        AXIS_GLOBAL => { return AXIS_GLOBAL }
+        AXIS_WARP => { return AXIS_WARP }
+        AXIS_LOCAL => { return AXIS_LOCAL }
+        AXIS_LOOP => { return AXIS_LOOP }
+        AXIS_GROUP_REDUCE => { return AXIS_GROUP_REDUCE }
+        AXIS_REDUCE => { return AXIS_REDUCE }
+        AXIS_UPCAST => { return AXIS_UPCAST }
+        AXIS_UNROLL => { return AXIS_UNROLL }
+        AXIS_THREAD => { return AXIS_THREAD }
+        AXIS_PLACEHOLDER => { return AXIS_PLACEHOLDER }
+    }
+}
+
+fn axis_type_name(t: read AxisType) -> fresh String {
+    match t {
+        AXIS_GLOBAL => { return "GLOBAL" }
+        AXIS_WARP => { return "WARP" }
+        AXIS_LOCAL => { return "LOCAL" }
+        AXIS_LOOP => { return "LOOP" }
+        AXIS_GROUP_REDUCE => { return "GROUP_REDUCE" }
+        AXIS_REDUCE => { return "REDUCE" }
+        AXIS_UPCAST => { return "UPCAST" }
+        AXIS_UNROLL => { return "UNROLL" }
+        AXIS_THREAD => { return "THREAD" }
+        AXIS_PLACEHOLDER => { return "PLACEHOLDER" }
+    }
+}
+
+fn axis_type_letter(t: read AxisType) -> fresh String {
+    match t {
+        AXIS_GLOBAL => { return "g" }
+        AXIS_WARP => { return "w" }
+        AXIS_LOCAL => { return "l" }
+        AXIS_LOOP => { return "L" }
+        AXIS_GROUP_REDUCE => { return "G" }
+        AXIS_REDUCE => { return "R" }
+        AXIS_UPCAST => { return "u" }
+        AXIS_UNROLL => { return "r" }
+        AXIS_THREAD => { return "t" }
+        AXIS_PLACEHOLDER => { return "?" }
+    }
+}
+
+fn copy_int_list(l: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read l) {
+        let v = List.get<Int>(list: read l, index: i)
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn copy_string_list(l: read List<String>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read l) {
+        let v = List.get<String>(list: read l, index: i)
+        List.push<String>(list: mut out, value: read String.copy(value: read v))
+        i = i + 1
+    }
+    return take out
+}
+
+fn device_arg_from_list(devices: read List<String>) -> fresh DeviceArg {
+    local d = copy_string_list(l: read devices)
+    return DeviceArg(devices: take d)
+}
+
+fn device_arg_single(device: read String) -> fresh DeviceArg {
+    local d = List.new<String>()
+    List.push<String>(list: mut d, value: read String.copy(value: read device))
+    return DeviceArg(devices: take d)
+}
+
+fn device_arg_key(d: read DeviceArg) -> fresh String {
+    let mut s = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<String>(list: read d.devices) {
+        if i > 0 { s = String.concat(left: read s, right: read "|") }
+        let v = List.get<String>(list: read d.devices, index: i)
+        s = String.concat(left: read s, right: read v)
+        i = i + 1
+    }
+    return String.copy(value: read s)
+}
+
+fn append_ints(dst: mut List<Int>, src: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        let v = List.get<Int>(list: read src, index: i)
+        List.push<Int>(list: mut dst, value: read v)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn make_key(op: Ops, dt: read DType, src: read List<Int>, arg: read Arg) -> fresh NodeKey {
+    let dtn = String.copy(value: read dt.name)
+    local s = copy_int_list(l: read src)
+    local kd0 = List.new<Int>()
+    match arg {
+        ArgNone => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 0, ai: 0, af: "", sv: "", kd: take kd0)
+        }
+        ArgInt(v) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 1, ai: v, af: "", sv: "", kd: take kd0)
+        }
+        ArgFloat(f) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 2, ai: 0, af: Float.to_string(value: read f), sv: "", kd: take kd0)
+        }
+        ArgBool(b) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 3, ai: bool_to_int(b: b), af: "", sv: "", kd: take kd0)
+        }
+        ArgStr(t) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 4, ai: 0, af: "", sv: String.copy(value: read t), kd: take kd0)
+        }
+        ArgInts(vals) => {
+            local d = copy_int_list(l: read vals)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 5, ai: 0, af: "", sv: "", kd: take d)
+        }
+        ArgReduce(r) => {
+            local d = copy_int_list(l: read r.axes)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 6, ai: r.kind, af: "", sv: "", kd: take d)
+        }
+        ArgVar(v) => {
+            local d = List.new<Int>()
+            List.push<Int>(list: mut d, value: read v.min_val)
+            List.push<Int>(list: mut d, value: read v.max_val)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 7, ai: 0, af: "", sv: String.copy(value: read v.name), kd: take d)
+        }
+        ArgRange(r) => {
+            local d = copy_int_list(l: read r.axes)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 8, ai: axis_type_ord(t: read r.axis_type), af: "", sv: "", kd: take d)
+        }
+        ArgParam(p) => {
+            local d = List.new<Int>()
+            List.push<Int>(list: mut d, value: read p.slot)
+            List.push<Int>(list: mut d, value: read bool_to_int(b: p.has_vmin_vmax))
+            List.push<Int>(list: mut d, value: read p.vmin)
+            List.push<Int>(list: mut d, value: read p.vmax)
+            List.push<Int>(list: mut d, value: read addr_space_ord(a: read p.addrspace))
+            List.push<Int>(list: mut d, value: read bool_to_int(b: p.has_axis))
+            List.push<Int>(list: mut d, value: read p.axis)
+            let ndev = String.concat(left: read p.name, right: read "|")
+            local ndev2 = String.concat(left: read ndev, right: read p.device)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 9, ai: 0, af: "", sv: take ndev2, kd: take d)
+        }
+        ArgAxisSizes(a) => {
+            local d = copy_int_list(l: read a.pairs)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 10, ai: 0, af: "", sv: "", kd: take d)
+        }
+        ArgDevice(dv) => {
+            local d = List.new<Int>()
+            List.push<Int>(list: mut d, value: read List.len<String>(list: read dv.devices))
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 11, ai: 0, af: "", sv: device_arg_key(d: read dv), kd: take d)
+        }
+        ArgOp(o) => {
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 12, ai: 0, af: "", sv: ops_key_name(op: read o), kd: take kd0)
+        }
+        ArgBufferize(b) => {
+            local d = List.new<Int>()
+            List.push<Int>(list: mut d, value: read bool_to_int(b: b.has_device))
+            List.push<Int>(list: mut d, value: read bool_to_int(b: b.is_device_int))
+            List.push<Int>(list: mut d, value: read b.device_int)
+            List.push<Int>(list: mut d, value: read addr_space_ord(a: read b.addrspace))
+            List.push<Int>(list: mut d, value: read bool_to_int(b: b.removable))
+            List.push<Int>(list: mut d, value: read List.len<String>(list: read b.devices))
+            local dev = DeviceArg(devices: copy_string_list(l: read b.devices))
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 13, ai: 0, af: "", sv: device_arg_key(d: read dev), kd: take d)
+        }
+        ArgProgram(p) => {
+            local d = List.new<Int>()
+            append_ints(dst: mut d, src: read p.global_size)
+            List.push<Int>(list: mut d, value: read bool_to_int(b: p.has_local_size))
+            append_ints(dst: mut d, src: read p.local_size)
+            append_ints(dst: mut d, src: read p.vars)
+            append_ints(dst: mut d, src: read p.globals)
+            append_ints(dst: mut d, src: read p.outs)
+            append_ints(dst: mut d, src: read p.ins)
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 14, ai: 0, af: "", sv: String.copy(value: read p.name), kd: take d)
+        }
+        ArgCall(c) => {
+            local d = List.new<Int>()
+            List.push<Int>(list: mut d, value: read bool_to_int(b: c.has_name))
+            List.push<Int>(list: mut d, value: read bool_to_int(b: c.precompile))
+            List.push<Int>(list: mut d, value: read bool_to_int(b: c.precompile_backward))
+            return NodeKey(op: op, dtype: dtn, src: take s, ak: 15, ai: 0, af: "", sv: String.copy(value: read c.name), kd: take d)
+        }
+    }
+}
+
+// UOpMetaClass.__call__: dedup by structural key, return the (shared) node id.
+fn intern(cache: mut UOpCache, op: Ops, dt: read DType, src: take List<Int>, arg: take Arg) -> Int {
+    let key = make_key(op: op.clone(), dt: read dt, src: read src, arg: read arg)
+    match Map.get<NodeKey, Int>(map: read cache.index, key: read key) {
+        Some(id) => { return id }
+        None => {
+            let id = cache_len(cache: read cache)
+            let node = UOp(op: op, dtype: dtype_copy(d: read dt), src: take src, arg: take arg)
+            List.push<UOp>(list: mut cache.nodes, value: read node)
+            Map.insert<NodeKey, Int>(map: mut cache.index, key: read key, value: read id)
+            return id
+        }
+    }
+}
+
+// UOp.const(dtype, int_value)
+fn mk_const_int(cache: mut UOpCache, dt: read DType, v: Int) -> Int {
+    local e = List.new<Int>()
+    local a = ArgInt(value: v)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
+}
+
+// UOp.const(dtype, float_value)
+fn mk_const_float(cache: mut UOpCache, dt: read DType, v: Float) -> Int {
+    local e = List.new<Int>()
+    local a = ArgFloat(value: v)
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_define_var(cache: mut UOpCache, name: read String, min_val: Int, max_val: Int, dt: read DType) -> Int {
+    local e = List.new<Int>()
+    local v = VarArg(name: String.copy(value: read name), min_val: min_val, max_val: max_val)
+    local a = ArgVar(value: take v)
+    return intern(cache: mut cache, op: DEFINE_VAR, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_bind(cache: mut UOpCache, var: Int, value: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: var)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read var)
+    List.push<Int>(list: mut src, value: read value)
+    local a = ArgNone
+    return intern(cache: mut cache, op: BIND, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_bind_int(cache: mut UOpCache, var: Int, value: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: var)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: value)
+    return mk_bind(cache: mut cache, var: var, value: c)
+}
+
+fn mk_param_arg(slot: Int, has_vmin_vmax: Bool, vmin: Int, vmax: Int, name: read String,
+                addrspace: read AddrSpace, has_axis: Bool, axis: Int, device: read String) -> fresh ParamArg {
+    return ParamArg(slot: slot, has_vmin_vmax: has_vmin_vmax, vmin: vmin, vmax: vmax,
+                    name: String.copy(value: read name), addrspace: addr_space_copy(a: read addrspace),
+                    has_axis: has_axis, axis: axis, device: String.copy(value: read device))
+}
+
+fn mk_param(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read name,
+                           addrspace: read ADDR_GLOBAL, has_axis: false, axis: 0, device: read "")
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_param_bounded(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String,
+                    vmin: Int, vmax: Int) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg(slot: slot, has_vmin_vmax: true, vmin: vmin, vmax: vmax, name: read name,
+                           addrspace: read ADDR_GLOBAL, has_axis: false, axis: 0, device: read "")
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_param_axis(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String, axis: Int) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read name,
+                           addrspace: read ADDR_GLOBAL, has_axis: true, axis: axis, device: read "")
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_param_device(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, name: read String, device: read String) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read name,
+                           addrspace: read ADDR_GLOBAL, has_axis: false, axis: 0, device: read device)
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: PARAM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_define_local(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local a = ArgInt(value: slot)
+    return intern(cache: mut cache, op: DEFINE_LOCAL, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_define_reg(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local a = ArgInt(value: slot)
+    return intern(cache: mut cache, op: DEFINE_REG, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_unique(cache: mut UOpCache, num: Int) -> Int {
+    local src = List.new<Int>()
+    let mut v = num
+    if v < 0 { v = cache_len(cache: read cache) }
+    local a = ArgInt(value: v)
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: UNIQUE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_lunique(cache: mut UOpCache, num: Int) -> Int {
+    local src = List.new<Int>()
+    let mut v = num
+    if v < 0 { v = cache_len(cache: read cache) }
+    local a = ArgInt(value: v)
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: LUNIQUE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_device(cache: mut UOpCache, device: read String) -> Int {
+    local src = List.new<Int>()
+    local d = device_arg_single(device: read device)
+    local a = ArgDevice(value: take d)
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: DEVICE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_device_tuple(cache: mut UOpCache, devices: read List<String>) -> Int {
+    local src = List.new<Int>()
+    local d = device_arg_from_list(devices: read devices)
+    local a = ArgDevice(value: take d)
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: DEVICE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_new_buffer(cache: mut UOpCache, device: read String, size: Int, dt: read DType, num: Int) -> Int {
+    let uniq = mk_unique(cache: mut cache, num: num)
+    let dev = mk_device(cache: mut cache, device: read device)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read uniq)
+    List.push<Int>(list: mut src, value: read dev)
+    local a = ArgInt(value: size)
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_new_buffer_tuple(cache: mut UOpCache, devices: read List<String>, size: Int, dt: read DType, num: Int) -> Int {
+    let uniq = mk_unique(cache: mut cache, num: num)
+    let dev = mk_device_tuple(cache: mut cache, devices: read devices)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read uniq)
+    List.push<Int>(list: mut src, value: read dev)
+    local a = ArgInt(value: size)
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_copy_to_device(cache: mut UOpCache, x: Int, device: read String) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let dev = mk_device(cache: mut cache, device: read device)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    List.push<Int>(list: mut src, value: read dev)
+    local a = ArgNone
+    return intern(cache: mut cache, op: COPY, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_allreduce(cache: mut UOpCache, x: Int, op: Ops, device: read String) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let dev = mk_device(cache: mut cache, device: read device)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    List.push<Int>(list: mut src, value: read dev)
+    local a = ArgOp(value: op)
+    return intern(cache: mut cache, op: ALLREDUCE, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_multi(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgInt(value: axis)
+    return intern(cache: mut cache, op: MULTI, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_mselect(cache: mut UOpCache, x: Int, index: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgInt(value: index)
+    return intern(cache: mut cache, op: MSELECT, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_mstack(cache: mut UOpCache, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    return intern(cache: mut cache, op: MSTACK, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_contiguous(cache: mut UOpCache, x: Int) -> Int {
+    let op = node_op(cache: read cache, id: x)
+    if op == CONTIGUOUS { return x }
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: CONTIGUOUS, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_detach(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: DETACH, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_contiguous_backward(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: CONTIGUOUS_BACKWARD, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_custom_function(cache: mut UOpCache, name: read String, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgStr(text: String.copy(value: read name))
+    return intern(cache: mut cache, op: CUSTOM_FUNCTION, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_bufferize_arg_none(addrspace: read AddrSpace, removable: Bool) -> fresh BufferizeArg {
+    local devs = List.new<String>()
+    return BufferizeArg(has_device: false, is_device_int: false, device_int: 0, devices: take devs,
+                        addrspace: addr_space_copy(a: read addrspace), removable: removable)
+}
+
+fn mk_bufferize_arg_device(device: read String, addrspace: read AddrSpace, removable: Bool) -> fresh BufferizeArg {
+    local devs = List.new<String>()
+    List.push<String>(list: mut devs, value: read String.copy(value: read device))
+    return BufferizeArg(has_device: true, is_device_int: false, device_int: 0, devices: take devs,
+                        addrspace: addr_space_copy(a: read addrspace), removable: removable)
+}
+
+fn mk_bufferize_arg_device_int(device: Int, addrspace: read AddrSpace, removable: Bool) -> fresh BufferizeArg {
+    local devs = List.new<String>()
+    return BufferizeArg(has_device: true, is_device_int: true, device_int: device, devices: take devs,
+                        addrspace: addr_space_copy(a: read addrspace), removable: removable)
+}
+
+fn mk_stage(cache: mut UOpCache, x: Int, ranges: read List<Int>, opts: read BufferizeArg) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        let r = List.get<Int>(list: read ranges, index: i)
+        List.push<Int>(list: mut src, value: read r)
+        i = i + 1
+    }
+    local a = ArgBufferize(value: opts.clone())
+    return intern(cache: mut cache, op: STAGE, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_slice(cache: mut UOpCache, base: Int, offset: Int, size: Int, dt: read DType) -> Int {
+    let off = mk_const_int(cache: mut cache, dt: read dt_int32(), v: offset)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read base)
+    List.push<Int>(list: mut src, value: read off)
+    local a = ArgInt(value: size)
+    return intern(cache: mut cache, op: SLICE, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_call_arg(name: read String, has_name: Bool, precompile: Bool, precompile_backward: Bool) -> fresh CallArg {
+    return CallArg(has_name: has_name, name: String.copy(value: read name),
+                   precompile: precompile, precompile_backward: precompile_backward)
+}
+
+fn mk_call(cache: mut UOpCache, body: Int, args: read List<Int>, call: read CallArg) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read body)
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        let a0 = List.get<Int>(list: read args, index: i)
+        List.push<Int>(list: mut src, value: read a0)
+        i = i + 1
+    }
+    local a = ArgCall(value: call.clone())
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: CALL, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_function(cache: mut UOpCache, body_tuple: Int, args: read List<Int>, call: read CallArg) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read body_tuple)
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        let a0 = List.get<Int>(list: read args, index: i)
+        List.push<Int>(list: mut src, value: read a0)
+        i = i + 1
+    }
+    local a = ArgCall(value: call.clone())
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: FUNCTION, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_program_arg(name: read String, global_size: read List<Int>, has_local_size: Bool, local_size: read List<Int>,
+                  vars: read List<Int>, globals: read List<Int>, outs: read List<Int>, ins: read List<Int>) -> fresh ProgramArg {
+    return ProgramArg(name: String.copy(value: read name), global_size: copy_int_list(l: read global_size),
+                      has_local_size: has_local_size, local_size: copy_int_list(l: read local_size),
+                      vars: copy_int_list(l: read vars), globals: copy_int_list(l: read globals),
+                      outs: copy_int_list(l: read outs), ins: copy_int_list(l: read ins))
+}
+
+fn mk_program(cache: mut UOpCache, sink: Int, device: Int, extra: read List<Int>, arg: read ProgramArg) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read sink)
+    List.push<Int>(list: mut src, value: read device)
+    let mut i = 0
+    while i < List.len<Int>(list: read extra) {
+        let e = List.get<Int>(list: read extra, index: i)
+        List.push<Int>(list: mut src, value: read e)
+        i = i + 1
+    }
+    local a = ArgProgram(value: arg.clone())
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: PROGRAM, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_linear(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: LINEAR, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_source(cache: mut UOpCache, text: read String) -> Int {
+    local src = List.new<Int>()
+    local a = ArgStr(text: String.copy(value: read text))
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: SOURCE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_binary(cache: mut UOpCache, text: read String) -> Int {
+    local src = List.new<Int>()
+    local a = ArgStr(text: String.copy(value: read text))
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: BINARY, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_custom(cache: mut UOpCache, text: read String, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgStr(text: String.copy(value: read text))
+    return intern(cache: mut cache, op: CUSTOM, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_customi(cache: mut UOpCache, text: read String, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgStr(text: String.copy(value: read text))
+    return intern(cache: mut cache, op: CUSTOMI, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_ins(cache: mut UOpCache, name: read String, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgStr(text: String.copy(value: read name))
+    return intern(cache: mut cache, op: INS, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_getaddr(cache: mut UOpCache, x: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local a = ArgNone
+    let vdt = dt_uint64()
+    return intern(cache: mut cache, op: GETADDR, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_wmma_arg(n: Int, m: Int, k: Int, threads: Int, a_elems: Int, b_elems: Int, c_elems: Int, axis_fields: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read n)
+    List.push<Int>(list: mut out, value: read m)
+    List.push<Int>(list: mut out, value: read k)
+    List.push<Int>(list: mut out, value: read threads)
+    List.push<Int>(list: mut out, value: read a_elems)
+    List.push<Int>(list: mut out, value: read b_elems)
+    List.push<Int>(list: mut out, value: read c_elems)
+    List.push<Int>(list: mut out, value: read axis_fields)
+    return take out
+}
+
+fn mk_wmma(cache: mut UOpCache, a_id: Int, b_id: Int, acc_id: Int, dt: read DType, arg: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read a_id)
+    List.push<Int>(list: mut src, value: read b_id)
+    List.push<Int>(list: mut src, value: read acc_id)
+    local a = ArgInts(values: copy_int_list(l: read arg))
+    return intern(cache: mut cache, op: WMMA, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_shaped_wmma(cache: mut UOpCache, a_id: Int, b_id: Int, acc_id: Int, dt: read DType, arg: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read a_id)
+    List.push<Int>(list: mut src, value: read b_id)
+    List.push<Int>(list: mut src, value: read acc_id)
+    local a = ArgInts(values: copy_int_list(l: read arg))
+    return intern(cache: mut cache, op: SHAPED_WMMA, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_vcat(cache: mut UOpCache, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    return intern(cache: mut cache, op: VCAT, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_ptrcat(cache: mut UOpCache, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    return intern(cache: mut cache, op: PTRCAT, dt: read dt, src: take src, arg: take a)
+}
+
+fn axis_size_pairs_product(pairs: read List<Int>) -> Int {
+    let mut prodv = 1
+    let mut i = 1
+    while i < List.len<Int>(list: read pairs) {
+        prodv = prodv * List.get<Int>(list: read pairs, index: i)
+        i = i + 2
+    }
+    return prodv
+}
+
+fn axis_size_pairs_valid(pairs: read List<Int>) -> Bool {
+    let n = List.len<Int>(list: read pairs)
+    if n == 0 { return false }
+    if n % 2 != 0 { return false }
+    let mut i = 0
+    while i < n {
+        if List.get<Int>(list: read pairs, index: i + 1) <= 0 { return false }
+        i = i + 2
+    }
+    return true
+}
+
+fn mk_axis_size_arg(pairs: read List<Int>) -> fresh AxisSizeArg {
+    local p = copy_int_list(l: read pairs)
+    return AxisSizeArg(pairs: take p)
+}
+
+fn mk_unroll(cache: mut UOpCache, x: Int, pairs: read List<Int>) -> Int {
+    let xdt = node_dtype(cache: read cache, id: x)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local asa = mk_axis_size_arg(pairs: read pairs)
+    local a = ArgAxisSizes(value: take asa)
+    return intern(cache: mut cache, op: UNROLL, dt: read xdt, src: take src, arg: take a)
+}
+
+fn mk_contract(cache: mut UOpCache, x: Int, pairs: read List<Int>) -> Int {
+    let xdt = node_dtype(cache: read cache, id: x)
+    let odt = dtype_vec(base: read xdt, sz: axis_size_pairs_product(pairs: read pairs))
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local asa = mk_axis_size_arg(pairs: read pairs)
+    local a = ArgAxisSizes(value: take asa)
+    return intern(cache: mut cache, op: CONTRACT, dt: read odt, src: take src, arg: take a)
+}
+
+fn mk_range(cache: mut UOpCache, end: Int, axis_id: Int, axis_type: read AxisType, extra_axes: read List<Int>, dt: read DType) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read end)
+    local axes = List.new<Int>()
+    List.push<Int>(list: mut axes, value: read axis_id)
+    let mut i = 0
+    while i < List.len<Int>(list: read extra_axes) {
+        let ax = List.get<Int>(list: read extra_axes, index: i)
+        List.push<Int>(list: mut axes, value: read ax)
+        i = i + 1
+    }
+    local r = RangeArg(axes: take axes, axis_type: axis_type_copy(t: read axis_type))
+    local a = ArgRange(value: take r)
+    return intern(cache: mut cache, op: RANGE, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_range_int(cache: mut UOpCache, end: Int, axis_id: Int, axis_type: read AxisType, dt: read DType) -> Int {
+    let cend = mk_const_int(cache: mut cache, dt: read dt, v: end)
+    local extra = List.new<Int>()
+    return mk_range(cache: mut cache, end: cend, axis_id: axis_id, axis_type: read axis_type, extra_axes: read extra, dt: read dt)
+}
+
+// binary ALU: UOp(op, dtype, (x, y), None) — x,y are node ids
+fn mk_alu2(cache: mut UOpCache, op: Ops, dt: read DType, x: Int, y: Int) -> Int {
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read y)
+    local a = ArgNone
+    return intern(cache: mut cache, op: op, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_alu1(cache: mut UOpCache, op: Ops, dt: read DType, x: Int) -> Int {
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: op, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_alu3(cache: mut UOpCache, op: Ops, dt: read DType, x: Int, y: Int, z: Int) -> Int {
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read y)
+    List.push<Int>(list: mut e, value: read z)
+    local a = ArgNone
+    return intern(cache: mut cache, op: op, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_tuple(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: TUPLE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn uop_tuple_source_for_gettuple(cache: read UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) == FUNCTION {
+        return node_src_id(cache: read cache, id: id, k: 0)
+    }
+    return id
+}
+
+fn mk_gettuple(cache: mut UOpCache, tuple_id: Int, idx: Int) -> Int {
+    let in_tuple = uop_tuple_source_for_gettuple(cache: read cache, id: tuple_id)
+    let child = node_src_id(cache: read cache, id: in_tuple, k: idx)
+    let dt = node_dtype(cache: read cache, id: child)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read tuple_id)
+    local a = ArgInt(value: idx)
+    return intern(cache: mut cache, op: GETTUPLE, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_group(cache: mut UOpCache, srcs: read List<Int>) -> Int {
+    if List.len<Int>(list: read srcs) == 1 {
+        return List.get<Int>(list: read srcs, index: 0)
+    }
+    local src = copy_int_list(l: read srcs)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: GROUP, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_gep(cache: mut UOpCache, x: Int, idxs: read List<Int>) -> Int {
+    let xop = node_op(cache: read cache, id: x)
+    if xop == STACK {
+        if List.len<Int>(list: read idxs) == 1 {
+            let idx = List.get<Int>(list: read idxs, index: 0)
+            return node_src_id(cache: read cache, id: x, k: idx)
+        }
+    }
+    let xdt = node_dtype(cache: read cache, id: x)
+    let scalar = dtype_scalar(d: read xdt)
+    let odt = dtype_vec(base: read scalar, sz: List.len<Int>(list: read idxs))
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read x)
+    local arg_idxs = copy_int_list(l: read idxs)
+    local a = ArgInts(values: take arg_idxs)
+    return intern(cache: mut cache, op: GEP, dt: read odt, src: take src, arg: take a)
+}
+
+fn mk_index(cache: mut UOpCache, base: Int, srcs: read List<Int>, ptr: Bool) -> Int {
+    let bdt = node_dtype(cache: read cache, id: base)
+    let mut odt = dtype_scalar(d: read bdt)
+    if ptr { odt = bdt }
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read base)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let s = List.get<Int>(list: read srcs, index: i)
+        List.push<Int>(list: mut src, value: read s)
+        i = i + 1
+    }
+    local a = ArgNone
+    return intern(cache: mut cache, op: INDEX, dt: read odt, src: take src, arg: take a)
+}
+
+fn mk_load(cache: mut UOpCache, ptr: Int, srcs: read List<Int>, dt: read DType) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read ptr)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let s = List.get<Int>(list: read srcs, index: i)
+        List.push<Int>(list: mut src, value: read s)
+        i = i + 1
+    }
+    local a = ArgNone
+    return intern(cache: mut cache, op: LOAD, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_store(cache: mut UOpCache, ptr: Int, value: Int, gate: read Option<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read ptr)
+    List.push<Int>(list: mut src, value: read value)
+    match gate {
+        Some(g) => { List.push<Int>(list: mut src, value: read g) }
+        None => {}
+    }
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: STORE, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_wait(cache: mut UOpCache, id: Int, value: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read id)
+    List.push<Int>(list: mut src, value: read value)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: WAIT, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_after(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    if List.len<Int>(list: read srcs) == 0 { return id }
+    let dt = node_dtype(cache: read cache, id: id)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read id)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let s = List.get<Int>(list: read srcs, index: i)
+        List.push<Int>(list: mut src, value: read s)
+        i = i + 1
+    }
+    local a = ArgNone
+    return intern(cache: mut cache, op: AFTER, dt: read dt, src: take src, arg: take a)
+}
+
+fn mk_end(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    if List.len<Int>(list: read srcs) == 0 { return id }
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read id)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let s = List.get<Int>(list: read srcs, index: i)
+        List.push<Int>(list: mut src, value: read s)
+        i = i + 1
+    }
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: END, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_barrier(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read id)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        let s = List.get<Int>(list: read srcs, index: i)
+        List.push<Int>(list: mut src, value: read s)
+        i = i + 1
+    }
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: BARRIER, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_if(cache: mut UOpCache, gate: Int, anchor: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read gate)
+    List.push<Int>(list: mut src, value: read anchor)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: IF, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_endif(cache: mut UOpCache, if_id: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read if_id)
+    local a = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: ENDIF, dt: read vdt, src: take src, arg: take a)
+}
+
+fn mk_cast(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
+    let xdt = node_full_dtype(cache: read cache, id: x)
+    if xdt.name == dt.name && xdt.count == dt.count && xdt.bitsize == dt.bitsize && xdt.priority == dt.priority && xdt.scalar_name == dt.scalar_name { return x }
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: CAST, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_bitcast(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
+    let xdt = node_full_dtype(cache: read cache, id: x)
+    if xdt.name == dt.name && xdt.count == dt.count && xdt.bitsize == dt.bitsize && xdt.priority == dt.priority && xdt.scalar_name == dt.scalar_name { return x }
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local a = ArgNone
+    return intern(cache: mut cache, op: BITCAST, dt: read dt, src: take e, arg: take a)
+}
+
+// a non-const leaf (SPECIAL) whose value range is [0, size-1]: src[0] = the size CONST.
+fn mk_special(cache: mut UOpCache, dt: read DType, size: Int) -> Int {
+    let sz = mk_const_int(cache: mut cache, dt: read dt, v: size)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sz)
+    local a = ArgNone
+    return intern(cache: mut cache, op: SPECIAL, dt: read dt, src: take e, arg: take a)
+}
+
+// --- accessors over (cache, id) ---
+fn node_op(cache: read UOpCache, id: Int) -> fresh Ops {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return n.op.clone()
+}
+fn node_dtype(cache: read UOpCache, id: Int) -> fresh DType {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return dtype_scalar(d: read n.dtype)
+}
+fn node_full_dtype(cache: read UOpCache, id: Int) -> fresh DType {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return dtype_copy(d: read n.dtype)
+}
+fn node_num_src(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return List.len<Int>(list: read n.src)
+}
+fn node_src_id(cache: read UOpCache, id: Int, k: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return List.get<Int>(list: read n.src, index: k)
+}
+fn node_is_const(cache: read UOpCache, id: Int) -> Bool {
+    let o = node_op(cache: read cache, id: id)
+    return o == CONST
+}
+// integer CONST value (ArgInt), else 0
+fn node_const_int(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgInt(v) => { return v }
+        ArgNone => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+fn node_is_const_int(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    if n.op == CONST {
+        match n.arg {
+            ArgInt(v) => { return true }
+            ArgNone => { return false }
+            ArgFloat(f) => { return false }
+            ArgBool(b) => { return false }
+            ArgStr(t) => { return false }
+            ArgInts(vals) => { return false }
+            ArgReduce(r) => { return false }
+            ArgVar(v) => { return false }
+            ArgRange(r) => { return false }
+            ArgParam(p) => { return false }
+            ArgAxisSizes(a) => { return false }
+            ArgDevice(dv) => { return false }
+            ArgOp(o) => { return false }
+            ArgBufferize(b) => { return false }
+            ArgProgram(p) => { return false }
+            ArgCall(c) => { return false }
+        }
+    }
+    return false
+}
+
+fn node_arg_is_int(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgInt(v) => { return true }
+        ArgNone => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgParam(p) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_str(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgStr(t) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_str_len(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgStr(t) => { return String.len(value: read t) }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_arg_is_param(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_device(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgDevice(dv) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_op(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgOp(o) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_bufferize(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBufferize(b) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_program(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgProgram(p) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_arg_is_call(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgCall(c) => { return true }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+    }
+}
+
+fn node_bufferize_addrspace(cache: read UOpCache, id: Int) -> fresh AddrSpace {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBufferize(b) => { return addr_space_copy(a: read b.addrspace) }
+        ArgNone => { return ADDR_GLOBAL }
+        ArgInt(v) => { return ADDR_GLOBAL }
+        ArgFloat(f) => { return ADDR_GLOBAL }
+        ArgBool(b) => { return ADDR_GLOBAL }
+        ArgStr(t) => { return ADDR_GLOBAL }
+        ArgInts(vals) => { return ADDR_GLOBAL }
+        ArgReduce(r) => { return ADDR_GLOBAL }
+        ArgVar(v) => { return ADDR_GLOBAL }
+        ArgRange(r) => { return ADDR_GLOBAL }
+        ArgParam(p) => { return ADDR_GLOBAL }
+        ArgAxisSizes(a) => { return ADDR_GLOBAL }
+        ArgDevice(dv) => { return ADDR_GLOBAL }
+        ArgOp(o) => { return ADDR_GLOBAL }
+        ArgProgram(p) => { return ADDR_GLOBAL }
+        ArgCall(c) => { return ADDR_GLOBAL }
+    }
+}
+
+fn node_program_name(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgProgram(p) => { return String.copy(value: read p.name) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_arg(cache: read UOpCache, id: Int) -> fresh Arg {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    return n.arg.clone()
+}
+
+fn node_device_count(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgDevice(dv) => { return List.len<String>(list: read dv.devices) }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_device_name(cache: read UOpCache, id: Int, index: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgDevice(dv) => {
+            if index >= 0 && index < List.len<String>(list: read dv.devices) {
+                let v = List.get<String>(list: read dv.devices, index: index)
+                return String.copy(value: read v)
+            }
+            return ""
+        }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_device_key(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgDevice(dv) => { return device_arg_key(d: read dv) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_arg_op(cache: read UOpCache, id: Int) -> fresh Ops {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgOp(o) => {
+            if o == ADD { return ADD }
+            if o == MUL { return MUL }
+            if o == MAX { return MAX }
+            return NOOP
+        }
+        ArgNone => { return NOOP }
+        ArgInt(v) => { return NOOP }
+        ArgFloat(f) => { return NOOP }
+        ArgBool(b) => { return NOOP }
+        ArgStr(t) => { return NOOP }
+        ArgInts(vals) => { return NOOP }
+        ArgReduce(r) => { return NOOP }
+        ArgVar(v) => { return NOOP }
+        ArgRange(r) => { return NOOP }
+        ArgParam(p) => { return NOOP }
+        ArgAxisSizes(a) => { return NOOP }
+        ArgDevice(dv) => { return NOOP }
+        ArgBufferize(b) => { return NOOP }
+        ArgProgram(p) => { return NOOP }
+        ArgCall(c) => { return NOOP }
+    }
+}
+
+fn node_effective_device_count(cache: read UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEVICE {
+        return node_device_count(cache: read cache, id: id)
+    }
+    if op == BUFFER {
+        if node_is_upstream_buffer(cache: read cache, id: id) {
+            let d = node_src_id(cache: read cache, id: id, k: 1)
+            return node_effective_device_count(cache: read cache, id: d)
+        }
+        return 0
+    }
+    if op == COPY || op == ALLREDUCE {
+        if node_num_src(cache: read cache, id: id) >= 2 {
+            let d = node_src_id(cache: read cache, id: id, k: 1)
+            return node_effective_device_count(cache: read cache, id: d)
+        }
+        return 0
+    }
+    if op == MSELECT {
+        return 1
+    }
+    if op == MSTACK {
+        return node_num_src(cache: read cache, id: id)
+    }
+    if op == PARAM {
+        let name = node_param_device(cache: read cache, id: id)
+        if String.len(value: read name) > 0 { return 1 }
+        return 0
+    }
+    if node_num_src(cache: read cache, id: id) > 0 {
+        let s = node_src_id(cache: read cache, id: id, k: 0)
+        return node_effective_device_count(cache: read cache, id: s)
+    }
+    return 0
+}
+
+fn node_is_upstream_buffer(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) != BUFFER { return false }
+    if node_num_src(cache: read cache, id: id) != 2 { return false }
+    let u = node_src_id(cache: read cache, id: id, k: 0)
+    let d = node_src_id(cache: read cache, id: id, k: 1)
+    let uop = node_op(cache: read cache, id: u)
+    if uop != UNIQUE && uop != LUNIQUE { return false }
+    if node_op(cache: read cache, id: d) != DEVICE { return false }
+    return node_arg_is_int(cache: read cache, id: id)
+}
+
+// --- shapes (this tinygrad encodes shape as a child UOp; all-int case) ---
+
+// the ArgInts payload of a vector-const node (else empty)
+fn node_argints(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    local e = List.new<Int>()
+    match n.arg {
+        ArgInts(vals) => { return copy_int_list(l: read vals) }
+        ArgNone => { return take e }
+        ArgInt(v) => { return take e }
+        ArgFloat(f) => { return take e }
+        ArgBool(b) => { return take e }
+        ArgStr(t) => { return take e }
+        ArgReduce(r) => { return copy_int_list(l: read r.axes) }
+        ArgVar(v) => { return take e }
+        ArgRange(r) => { return copy_int_list(l: read r.axes) }
+        ArgParam(p) => { return take e }
+        ArgAxisSizes(a) => { return copy_int_list(l: read a.pairs) }
+        ArgDevice(dv) => { return take e }
+        ArgOp(o) => { return take e }
+        ArgBufferize(b) => { return take e }
+        ArgProgram(p) => { return take e }
+        ArgCall(c) => { return take e }
+    }
+}
+
+fn node_reduce_kind(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgReduce(r) => { return r.kind }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_var_name(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgVar(v) => { return String.copy(value: read v.name) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return String.copy(value: read p.name) }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_var_min(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgVar(v) => { return v.min_val }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_var_max(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgVar(v) => { return v.max_val }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgParam(p) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_range_axes(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    local e = List.new<Int>()
+    match n.arg {
+        ArgRange(r) => { return copy_int_list(l: read r.axes) }
+        ArgNone => { return take e }
+        ArgInt(v) => { return take e }
+        ArgFloat(f) => { return take e }
+        ArgBool(b) => { return take e }
+        ArgStr(t) => { return take e }
+        ArgInts(vals) => { return take e }
+        ArgReduce(r) => { return take e }
+        ArgVar(v) => { return take e }
+        ArgParam(p) => { return take e }
+        ArgAxisSizes(a) => { return take e }
+        ArgDevice(dv) => { return take e }
+        ArgOp(o) => { return take e }
+        ArgBufferize(b) => { return take e }
+        ArgProgram(p) => { return take e }
+        ArgCall(c) => { return take e }
+    }
+}
+
+fn node_range_axis_id(cache: read UOpCache, id: Int) -> Int {
+    let axes = node_range_axes(cache: read cache, id: id)
+    if List.len<Int>(list: read axes) == 0 { return 0 }
+    return List.get<Int>(list: read axes, index: 0)
+}
+
+fn node_range_num_axes(cache: read UOpCache, id: Int) -> Int {
+    let axes = node_range_axes(cache: read cache, id: id)
+    return List.len<Int>(list: read axes)
+}
+
+fn node_range_type(cache: read UOpCache, id: Int) -> fresh AxisType {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgRange(r) => { return axis_type_copy(t: read r.axis_type) }
+        ArgNone => { return AXIS_LOOP }
+        ArgInt(v) => { return AXIS_LOOP }
+        ArgFloat(f) => { return AXIS_LOOP }
+        ArgBool(b) => { return AXIS_LOOP }
+        ArgStr(t) => { return AXIS_LOOP }
+        ArgInts(vals) => { return AXIS_LOOP }
+        ArgReduce(r) => { return AXIS_LOOP }
+        ArgVar(v) => { return AXIS_LOOP }
+        ArgParam(p) => { return AXIS_LOOP }
+        ArgAxisSizes(a) => { return AXIS_LOOP }
+        ArgDevice(dv) => { return AXIS_LOOP }
+        ArgOp(o) => { return AXIS_LOOP }
+        ArgBufferize(b) => { return AXIS_LOOP }
+        ArgProgram(p) => { return AXIS_LOOP }
+        ArgCall(c) => { return AXIS_LOOP }
+    }
+}
+
+fn node_param_slot(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.slot }
+        ArgInt(v) => { return v }
+        ArgNone => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_param_has_vmin_vmax(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.has_vmin_vmax }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_param_vmin(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.vmin }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_param_vmax(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.vmax }
+        ArgNone => { return 0 }
+        ArgInt(v) => { return 0 }
+        ArgFloat(f) => { return 0 }
+        ArgBool(b) => { return 0 }
+        ArgStr(t) => { return 0 }
+        ArgInts(vals) => { return 0 }
+        ArgReduce(r) => { return 0 }
+        ArgVar(v) => { return 0 }
+        ArgRange(r) => { return 0 }
+        ArgAxisSizes(a) => { return 0 }
+        ArgDevice(dv) => { return 0 }
+        ArgOp(o) => { return 0 }
+        ArgBufferize(b) => { return 0 }
+        ArgProgram(p) => { return 0 }
+        ArgCall(c) => { return 0 }
+    }
+}
+
+fn node_param_name(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return String.copy(value: read p.name) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_param_has_axis(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.has_axis }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_param_axis(cache: read UOpCache, id: Int) -> Int {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return p.axis }
+        ArgNone => { return 0 - 1 }
+        ArgInt(v) => { return 0 - 1 }
+        ArgFloat(f) => { return 0 - 1 }
+        ArgBool(b) => { return 0 - 1 }
+        ArgStr(t) => { return 0 - 1 }
+        ArgInts(vals) => { return 0 - 1 }
+        ArgReduce(r) => { return 0 - 1 }
+        ArgVar(v) => { return 0 - 1 }
+        ArgRange(r) => { return 0 - 1 }
+        ArgAxisSizes(a) => { return 0 - 1 }
+        ArgDevice(dv) => { return 0 - 1 }
+        ArgOp(o) => { return 0 - 1 }
+        ArgBufferize(b) => { return 0 - 1 }
+        ArgProgram(p) => { return 0 - 1 }
+        ArgCall(c) => { return 0 - 1 }
+    }
+}
+
+fn node_param_device(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return String.copy(value: read p.device) }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgBufferize(b) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
+fn node_param_addrspace(cache: read UOpCache, id: Int) -> fresh AddrSpace {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgParam(p) => { return addr_space_copy(a: read p.addrspace) }
+        ArgNone => { return ADDR_GLOBAL }
+        ArgInt(v) => { return ADDR_GLOBAL }
+        ArgFloat(f) => { return ADDR_GLOBAL }
+        ArgBool(b) => { return ADDR_GLOBAL }
+        ArgStr(t) => { return ADDR_GLOBAL }
+        ArgInts(vals) => { return ADDR_GLOBAL }
+        ArgReduce(r) => { return ADDR_GLOBAL }
+        ArgVar(v) => { return ADDR_GLOBAL }
+        ArgRange(r) => { return ADDR_GLOBAL }
+        ArgAxisSizes(a) => { return ADDR_GLOBAL }
+        ArgDevice(dv) => { return ADDR_GLOBAL }
+        ArgOp(o) => { return ADDR_GLOBAL }
+        ArgBufferize(b) => { return ADDR_GLOBAL }
+        ArgProgram(p) => { return ADDR_GLOBAL }
+        ArgCall(c) => { return ADDR_GLOBAL }
+    }
+}
+
+fn node_addrspace(cache: read UOpCache, id: Int) -> fresh AddrSpace {
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM { return node_param_addrspace(cache: read cache, id: id) }
+    if op == DEFINE_LOCAL { return ADDR_LOCAL }
+    if op == DEFINE_REG { return ADDR_REG }
+    if op == BUFFER { return ADDR_GLOBAL }
+    if op == LOAD { return ADDR_REG }
+    if op == INDEX {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == CAST {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == AFTER {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == REDUCE {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == GEP {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    if op == STORE {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return node_addrspace(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+    }
+    return ADDR_GLOBAL
+}
+
+fn node_axis_size_pairs(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    local e = List.new<Int>()
+    match n.arg {
+        ArgAxisSizes(a) => { return copy_int_list(l: read a.pairs) }
+        ArgNone => { return take e }
+        ArgInt(v) => { return take e }
+        ArgFloat(f) => { return take e }
+        ArgBool(b) => { return take e }
+        ArgStr(t) => { return take e }
+        ArgInts(vals) => { return take e }
+        ArgReduce(r) => { return take e }
+        ArgVar(v) => { return take e }
+        ArgRange(r) => { return take e }
+        ArgParam(p) => { return take e }
+        ArgDevice(dv) => { return take e }
+        ArgOp(o) => { return take e }
+        ArgBufferize(b) => { return take e }
+        ArgProgram(p) => { return take e }
+        ArgCall(c) => { return take e }
+    }
+}
+
+fn node_axis_size_product(cache: read UOpCache, id: Int) -> Int {
+    let pairs = node_axis_size_pairs(cache: read cache, id: id)
+    return axis_size_pairs_product(pairs: read pairs)
+}
+
+fn node_axis_size_pairs_valid(cache: read UOpCache, id: Int) -> Bool {
+    let pairs = node_axis_size_pairs(cache: read cache, id: id)
+    return axis_size_pairs_valid(pairs: read pairs)
+}
+
+// shape_to_shape_arg: encode an all-int shape as a CONST vector node (tinygrad uses weakint.vec)
+fn shape_to_shape_arg(cache: mut UOpCache, dims: read List<Int>) -> Int {
+    let i32 = dt_int32()
+    local e = List.new<Int>()
+    local d = copy_int_list(l: read dims)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: CONST, dt: read i32, src: take e, arg: take a)
+}
+
+// a BUFFER leaf carrying its shape as src[0] (a shape-const)
+fn mk_buffer(cache: mut UOpCache, dt: read DType, shape: read List<Int>) -> Int {
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take e, arg: take a)
+}
+
+// RESHAPE/EXPAND: src[1] = the target shape-const
+fn mk_reshape(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: RESHAPE, dt: read dt, src: take e, arg: take a)
+}
+fn mk_expand(cache: mut UOpCache, x: Int, new_shape: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read new_shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgNone
+    return intern(cache: mut cache, op: EXPAND, dt: read dt, src: take e, arg: take a)
+}
+
+// PERMUTE/FLIP: the axis order is the arg
+fn mk_permute(cache: mut UOpCache, x: Int, perm: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read perm)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: PERMUTE, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_flip(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read axes)
+    local a = ArgInts(values: take d)
+    return intern(cache: mut cache, op: FLIP, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_shrink(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let st = shape_to_shape_arg(cache: mut cache, dims: read starts)
+    let en = shape_to_shape_arg(cache: mut cache, dims: read ends)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read st)
+    List.push<Int>(list: mut e, value: read en)
+    local a = ArgNone
+    return intern(cache: mut cache, op: SHRINK, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_pad(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let bf = shape_to_shape_arg(cache: mut cache, dims: read before)
+    let af = shape_to_shape_arg(cache: mut cache, dims: read after)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read bf)
+    List.push<Int>(list: mut e, value: read af)
+    local a = ArgNone
+    return intern(cache: mut cache, op: PAD, dt: read dt, src: take e, arg: take a)
+}
+
+// REDUCE metadata is explicit: kind 0=sum/ADD, 1=prod/MUL, 2=max/MAX.
+fn mk_sum(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read axes)
+    local r = ReduceArg(kind: 0, axes: take d)
+    local a = ArgReduce(value: take r)
+    return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_prod_reduce(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read axes)
+    local r = ReduceArg(kind: 1, axes: take d)
+    local a = ArgReduce(value: take r)
+    return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_max_reduce(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    local d = copy_int_list(l: read axes)
+    local r = ReduceArg(kind: 2, axes: take d)
+    local a = ArgReduce(value: take r)
+    return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take e, arg: take a)
+}
+
+// float CONST value (ArgFloat), else 0.0
+fn node_const_float(cache: read UOpCache, id: Int) -> Float {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgFloat(v) => { return v }
+        ArgNone => { return 0.0 }
+        ArgInt(v) => { return 0.0 }
+        ArgBool(b) => { return 0.0 }
+        ArgStr(t) => { return 0.0 }
+        ArgInts(vals) => { return 0.0 }
+        ArgReduce(r) => { return 0.0 }
+        ArgVar(v) => { return 0.0 }
+        ArgRange(r) => { return 0.0 }
+        ArgParam(p) => { return 0.0 }
+        ArgAxisSizes(a) => { return 0.0 }
+        ArgDevice(dv) => { return 0.0 }
+        ArgOp(o) => { return 0.0 }
+        ArgBufferize(b) => { return 0.0 }
+        ArgProgram(p) => { return 0.0 }
+        ArgCall(c) => { return 0.0 }
+    }
+}
+
+// a data-carrying BUFFER leaf: data stored in cache.datas[idx], arg = ArgInt(idx), src[0] = shape.
+// (idx makes each buffer unique, so they aren't deduped by data — matches tinygrad's UNIQUE buffers.)
+fn mk_data_tensor(cache: mut UOpCache, dt: read DType, shape: read List<Int>, data: read List<Float>) -> Int {
+    let di = List.len<List<Float>>(list: read cache.datas)
+    List.push<List<Float>>(list: mut cache.datas, value: read data)
+    let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read sh)
+    local a = ArgInt(value: di)
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take e, arg: take a)
+}
+fn node_data_idx(cache: read UOpCache, id: Int) -> Int { return node_const_int(cache: read cache, id: id) }

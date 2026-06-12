@@ -5,9 +5,133 @@ features: local
 
 fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
     let op = node_op(cache: read cache, id: id)
+    if op == GETTUPLE {
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let in_tuple = uop_tuple_source_for_gettuple(cache: read cache, id: src)
+        let idx = node_const_int(cache: read cache, id: id)
+        if node_op(cache: read cache, id: in_tuple) == TUPLE {
+            if idx >= 0 && idx < node_num_src(cache: read cache, id: in_tuple) {
+                let child = node_src_id(cache: read cache, id: in_tuple, k: idx)
+                return uop_shape(cache: read cache, id: child)
+            }
+        }
+        local out = List.new<Int>()
+        return take out
+    }
+    if op == BINARY {
+        local out = List.new<Int>()
+        let sz = node_arg_str_len(cache: read cache, id: id)
+        List.push<Int>(list: mut out, value: read sz)
+        return take out
+    }
+    if op == STACK {
+        local out = List.new<Int>()
+        let nsrc = node_num_src(cache: read cache, id: id)
+        if nsrc == 0 { return take out }
+        List.push<Int>(list: mut out, value: read nsrc)
+        let child = node_src_id(cache: read cache, id: id, k: 0)
+        local base = uop_shape(cache: read cache, id: child)
+        let mut i = 0
+        while i < List.len<Int>(list: read base) {
+            let dim = List.get<Int>(list: read base, index: i)
+            List.push<Int>(list: mut out, value: read dim)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == GEP {
+        local out = List.new<Int>()
+        local idxs = node_argints(cache: read cache, id: id)
+        let nidx = List.len<Int>(list: read idxs)
+        if nidx > 1 { List.push<Int>(list: mut out, value: read nidx) }
+        return take out
+    }
+    if op == INDEX {
+        local out = List.new<Int>()
+        let mut i = 1
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            local child_shape = uop_shape(cache: read cache, id: child)
+            let mut j = 0
+            while j < List.len<Int>(list: read child_shape) {
+                let dim = List.get<Int>(list: read child_shape, index: j)
+                List.push<Int>(list: mut out, value: read dim)
+                j = j + 1
+            }
+            i = i + 1
+        }
+        let base_id = node_src_id(cache: read cache, id: id, k: 0)
+        local base = uop_shape(cache: read cache, id: base_id)
+        let mut k = node_num_src(cache: read cache, id: id) - 1
+        while k < List.len<Int>(list: read base) {
+            let dim = List.get<Int>(list: read base, index: k)
+            List.push<Int>(list: mut out, value: read dim)
+            k = k + 1
+        }
+        return take out
+    }
+    if op == CONST || op == DEFINE_VAR || op == CONTRACT || op == UNROLL {
+        local out = List.new<Int>()
+        let dt = node_full_dtype(cache: read cache, id: id)
+        if dt.count > 1 { List.push<Int>(list: mut out, value: read dt.count) }
+        return take out
+    }
     if op == BUFFER {
+        if node_is_upstream_buffer(cache: read cache, id: id) {
+            local out = List.new<Int>()
+            let sz = node_const_int(cache: read cache, id: id)
+            List.push<Int>(list: mut out, value: read sz)
+            return take out
+        }
         let sh = node_src_id(cache: read cache, id: id, k: 0)
         return node_argints(cache: read cache, id: sh)
+    }
+    if op == STAGE {
+        local out = List.new<Int>()
+        let mut i = 1
+        while i < node_num_src(cache: read cache, id: id) {
+            let rid = node_src_id(cache: read cache, id: id, k: i)
+            let rr = uop_min_max(cache: read cache, id: rid)
+            let extent = rr.hi - rr.lo + 1
+            List.push<Int>(list: mut out, value: read extent)
+            i = i + 1
+        }
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local base = uop_shape(cache: read cache, id: x)
+        let mut j = 0
+        while j < List.len<Int>(list: read base) {
+            let dim = List.get<Int>(list: read base, index: j)
+            List.push<Int>(list: mut out, value: read dim)
+            j = j + 1
+        }
+        return take out
+    }
+    if op == SLICE {
+        let base_id = node_src_id(cache: read cache, id: id, k: 0)
+        if node_op(cache: read cache, id: base_id) == INDEX {
+            local out = List.new<Int>()
+            return take out
+        }
+        local out = List.new<Int>()
+        let sz = node_const_int(cache: read cache, id: id)
+        List.push<Int>(list: mut out, value: read sz)
+        return take out
+    }
+    if op == GETADDR {
+        local out = List.new<Int>()
+        return take out
+    }
+    if op == VCAT || op == PTRCAT {
+        local out = List.new<Int>()
+        let dt = node_full_dtype(cache: read cache, id: id)
+        if dt.count > 1 {
+            List.push<Int>(list: mut out, value: read dt.count)
+        }
+        return take out
+    }
+    if op == WMMA || op == SHAPED_WMMA {
+        let acc = node_src_id(cache: read cache, id: id, k: 2)
+        return uop_shape(cache: read cache, id: acc)
     }
     if op == RESHAPE {
         let sh = node_src_id(cache: read cache, id: id, k: 1)
@@ -26,6 +150,45 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
         while i < List.len<Int>(list: read perm) {
             let axis = List.get<Int>(list: read perm, index: i)
             let d = List.get<Int>(list: read base, index: axis)
+            List.push<Int>(list: mut out, value: read d)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == FLIP {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return uop_shape(cache: read cache, id: x)
+    }
+    if op == PAD {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let bid = node_src_id(cache: read cache, id: id, k: 1)
+        let aid = node_src_id(cache: read cache, id: id, k: 2)
+        local base = uop_shape(cache: read cache, id: x)
+        local before = node_argints(cache: read cache, id: bid)
+        local after = node_argints(cache: read cache, id: aid)
+        local out = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read base) {
+            let b = List.get<Int>(list: read before, index: i)
+            let d = List.get<Int>(list: read base, index: i)
+            let a = List.get<Int>(list: read after, index: i)
+            let od = b + d + a
+            List.push<Int>(list: mut out, value: read od)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == SHRINK {
+        let sid = node_src_id(cache: read cache, id: id, k: 1)
+        let eid = node_src_id(cache: read cache, id: id, k: 2)
+        local starts = node_argints(cache: read cache, id: sid)
+        local ends = node_argints(cache: read cache, id: eid)
+        local out = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read starts) {
+            let s = List.get<Int>(list: read starts, index: i)
+            let e = List.get<Int>(list: read ends, index: i)
+            let d = e - s
             List.push<Int>(list: mut out, value: read d)
             i = i + 1
         }
@@ -50,8 +213,32 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
         }
         return take out
     }
+    if op == CAST {
+        let dt = node_full_dtype(cache: read cache, id: id)
+        if dt.count > 1 {
+            local out = List.new<Int>()
+            List.push<Int>(list: mut out, value: read dt.count)
+            return take out
+        }
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return uop_shape(cache: read cache, id: x)
+    }
+    if op == BITCAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return uop_shape(cache: read cache, id: x)
+    }
+    if group_unary(op: read op) {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return uop_shape(cache: read cache, id: x)
+    }
     // elementwise / binary: shape of src[0]
     if group_binary(op: read op) {
+        if node_num_src(cache: read cache, id: id) >= 1 {
+            let x = node_src_id(cache: read cache, id: id, k: 0)
+            return uop_shape(cache: read cache, id: x)
+        }
+    }
+    if group_ternary(op: read op) {
         if node_num_src(cache: read cache, id: id) >= 1 {
             let x = node_src_id(cache: read cache, id: id, k: 0)
             return uop_shape(cache: read cache, id: x)
@@ -100,4 +287,82 @@ fn broadcast_shape(s1: read List<Int>, s2: read List<Int>) -> fresh List<Int> {
         i = i + 1
     }
     return take out
+}
+
+// ---- View / ShapeTracker core from tinygrad shape handling ----
+struct View derives(Clone) {
+    shape: List<Int>,
+    strides: List<Int>,
+    offset: Int,
+}
+
+fn shape_copy_ints(src: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        let v = List.get<Int>(list: read src, index: i)
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn view_create(shape: read List<Int>) -> fresh View {
+    local sh = shape_copy_ints(src: read shape)
+    local st = strides_for_shape(shape: read shape)
+    return View(shape: take sh, strides: take st, offset: 0)
+}
+
+fn view_permute(v: read View, perm: read List<Int>) -> fresh View {
+    local sh = List.new<Int>()
+    local st = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read perm) {
+        let p = List.get<Int>(list: read perm, index: i)
+        let d = List.get<Int>(list: read v.shape, index: p)
+        let s = List.get<Int>(list: read v.strides, index: p)
+        List.push<Int>(list: mut sh, value: read d)
+        List.push<Int>(list: mut st, value: read s)
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset)
+}
+
+fn view_expand(v: read View, new_shape: read List<Int>) -> fresh View {
+    local sh = shape_copy_ints(src: read new_shape)
+    local st = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read v.shape) {
+        let mut s = List.get<Int>(list: read v.strides, index: i)
+        let d = List.get<Int>(list: read v.shape, index: i)
+        if d == 1 { s = 0 }
+        List.push<Int>(list: mut st, value: read s)
+        i = i + 1
+    }
+    return View(shape: take sh, strides: take st, offset: v.offset)
+}
+
+fn view_expr(v: read View, idx: read List<Int>) -> Int {
+    let mut acc = v.offset
+    let mut i = 0
+    while i < List.len<Int>(list: read idx) {
+        let ix = List.get<Int>(list: read idx, index: i)
+        let st = List.get<Int>(list: read v.strides, index: i)
+        acc = acc + ix * st
+        i = i + 1
+    }
+    return acc
+}
+
+fn view_contiguous(v: read View) -> Bool {
+    local canon = strides_for_shape(shape: read v.shape)
+    if List.len<Int>(list: read canon) != List.len<Int>(list: read v.strides) { return false }
+    let mut i = 0
+    while i < List.len<Int>(list: read canon) {
+        let a = List.get<Int>(list: read canon, index: i)
+        let b = List.get<Int>(list: read v.strides, index: i)
+        if a != b { return false }
+        i = i + 1
+    }
+    return true
 }

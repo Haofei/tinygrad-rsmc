@@ -1,0 +1,549 @@
+// Scalar-float graph evaluator: recursively computes the numeric value of a CONST/ALU float graph
+// (the CPU-interpreter path, scalar slice). Mirrors tinygrad exec_alu for floats.
+features: local
+
+fn eval_float(cache: read UOpCache, id: Int) -> Float {
+    let op = node_op(cache: read cache, id: id)
+    if op == CONST {
+        if node_is_const_int(cache: read cache, id: id) {
+            return Int.to_float(value: read node_const_int(cache: read cache, id: id))
+        }
+        return node_const_float(cache: read cache, id: id)
+    }
+    if op == CAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let v = eval_float(cache: read cache, id: x)
+        let dt = node_dtype(cache: read cache, id: id)
+        return eval_cast_value(v: v, dt: read dt)
+    }
+    if op == NEG {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return 0.0 - x
+    }
+    if op == RECIPROCAL {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return 1.0 / x
+    }
+    if op == SQRT {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return Math.sqrt(value: x)
+    }
+    if op == EXP2 {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return Math.exp2(value: x)
+    }
+    if op == LOG2 {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return Math.log2(value: x)
+    }
+    if op == SIN {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return Math.sin(value: x)
+    }
+    if op == TRUNC {
+        let x = eval_float(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return Math.trunc_float(value: x)
+    }
+    if node_num_src(cache: read cache, id: id) == 2 {
+        let xid = node_src_id(cache: read cache, id: id, k: 0)
+        let yid = node_src_id(cache: read cache, id: id, k: 1)
+        let xv = eval_float(cache: read cache, id: xid)
+        let yv = eval_float(cache: read cache, id: yid)
+        if op == ADD { return xv + yv }
+        if op == SUB { return xv - yv }
+        if op == MUL { return xv * yv }
+        if op == FDIV { return xv / yv }
+        if op == POW { return Math.pow_float(base: xv, exponent: yv) }
+        if op == SHL {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read (xi << yi))
+        }
+        if op == SHR {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read (xi >> yi))
+        }
+        if op == CDIV {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read cdiv(x: xi, y: yi))
+        }
+        if op == CMOD {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read cmod(x: xi, y: yi))
+        }
+        if op == FLOORDIV {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read floordiv(x: xi, y: yi))
+        }
+        if op == FLOORMOD {
+            let xi = trunc_float_to_int(v: xv)
+            let yi = trunc_float_to_int(v: yv)
+            return Int.to_float(value: read floormod(x: xi, y: yi))
+        }
+        if op == MAX {
+            if xv > yv { return xv }
+            return yv
+        }
+    }
+    return 0.0
+}
+
+// --- tensor evaluator (CPU interpreter): materialize a node to a flat row-major Float array ---
+
+fn numel(shape: read List<Int>) -> Int {
+    let mut p = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        let d = List.get<Int>(list: read shape, index: i)
+        p = p * d
+        i = i + 1
+    }
+    return p
+}
+fn copy_float_list(l: read List<Float>) -> fresh List<Float> {
+    local out = List.new<Float>()
+    let mut i = 0
+    while i < List.len<Float>(list: read l) {
+        let v = List.get<Float>(list: read l, index: i)
+        List.push<Float>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+// multi-index coords of a flat index within shape (row-major)
+fn flat_to_multi(flat: Int, shape: read List<Int>) -> fresh List<Int> {
+    let n = List.len<Int>(list: read shape)
+    local coords = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        let mut st = 1
+        let mut j = i + 1
+        while j < n {
+            let d = List.get<Int>(list: read shape, index: j)
+            st = st * d
+            j = j + 1
+        }
+        let si = List.get<Int>(list: read shape, index: i)
+        let q = flat / st
+        let c = q % si
+        List.push<Int>(list: mut coords, value: read c)
+        i = i + 1
+    }
+    return take coords
+}
+fn dot_flat(coords: read List<Int>, strides: read List<Int>) -> Int {
+    let mut acc = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read coords) {
+        let c = List.get<Int>(list: read coords, index: i)
+        let s = List.get<Int>(list: read strides, index: i)
+        acc = acc + c * s
+        i = i + 1
+    }
+    return acc
+}
+
+fn expand_source_flat(coords: read List<Int>, sshape: read List<Int>, sstrides: read List<Int>) -> Int {
+    let ns = List.len<Int>(list: read sshape)
+    let nt = List.len<Int>(list: read coords)
+    let off = nt - ns
+    let mut acc = 0
+    let mut i = 0
+    while i < ns {
+        let sd = List.get<Int>(list: read sshape, index: i)
+        let st = List.get<Int>(list: read sstrides, index: i)
+        let mut c = 0
+        if sd != 1 {
+            c = List.get<Int>(list: read coords, index: off + i)
+        }
+        acc = acc + c * st
+        i = i + 1
+    }
+    return acc
+}
+
+fn trunc_float_to_int(v: Float) -> Int {
+    if v >= 0.0 { return Math.floor(value: v) }
+    return 0 - Math.floor(value: 0.0 - v)
+}
+
+fn eval_cast_value(v: Float, dt: read DType) -> Float {
+    if dtype_is_bool(d: read dt) {
+        if v != 0.0 { return 1.0 }
+        return 0.0
+    }
+    if dtype_is_int(d: read dt) {
+        let iv = trunc_float_to_int(v: v)
+        return Int.to_float(value: read iv)
+    }
+    return v
+}
+
+fn eval_axis_contains(axes: read List<Int>, axis: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read axes) {
+        if List.get<Int>(list: read axes, index: i) == axis { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn eval_const_value(cache: read UOpCache, id: Int) -> Float {
+    if node_is_const_int(cache: read cache, id: id) {
+        return Int.to_float(value: read node_const_int(cache: read cache, id: id))
+    }
+    return node_const_float(cache: read cache, id: id)
+}
+
+fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
+    let op = node_op(cache: read cache, id: id)
+    if op == BUFFER {
+        let di = node_data_idx(cache: read cache, id: id)
+        let d = List.get<List<Float>>(list: read cache.datas, index: di)
+        return copy_float_list(l: read d)
+    }
+    if op == CONST {
+        local out = List.new<Float>()
+        let v = eval_const_value(cache: read cache, id: id)
+        List.push<Float>(list: mut out, value: read v)
+        return take out
+    }
+    if op == CAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local src = eval_tensor(cache: read cache, id: x)
+        let dt = node_dtype(cache: read cache, id: id)
+        local out = List.new<Float>()
+        let mut i = 0
+        while i < List.len<Float>(list: read src) {
+            let v = List.get<Float>(list: read src, index: i)
+            List.push<Float>(list: mut out, value: read eval_cast_value(v: v, dt: read dt))
+            i = i + 1
+        }
+        return take out
+    }
+    if op == BITCAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return eval_tensor(cache: read cache, id: x)
+    }
+    if op == RESHAPE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return eval_tensor(cache: read cache, id: x)
+    }
+    if op == EXPAND {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local src = eval_tensor(cache: read cache, id: x)
+        local sshape = uop_shape(cache: read cache, id: x)
+        local tshape = uop_shape(cache: read cache, id: id)
+        local sstrides = strides_for_shape(shape: read sshape)
+        local out = List.new<Float>()
+        let total = numel(shape: read tshape)
+        let mut i = 0
+        while i < total {
+            local coords = flat_to_multi(flat: i, shape: read tshape)
+            let sf = expand_source_flat(coords: read coords, sshape: read sshape, sstrides: read sstrides)
+            let v = List.get<Float>(list: read src, index: sf)
+            List.push<Float>(list: mut out, value: read v)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == PERMUTE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local src = eval_tensor(cache: read cache, id: x)
+        local sshape = uop_shape(cache: read cache, id: x)
+        local tshape = uop_shape(cache: read cache, id: id)
+        local perm = node_argints(cache: read cache, id: id)
+        local sstrides = strides_for_shape(shape: read sshape)
+        // permuted strides: pstrides[k] = sstrides[perm[k]]
+        local pstrides = List.new<Int>()
+        let mut k = 0
+        while k < List.len<Int>(list: read perm) {
+            let ax = List.get<Int>(list: read perm, index: k)
+            let st = List.get<Int>(list: read sstrides, index: ax)
+            List.push<Int>(list: mut pstrides, value: read st)
+            k = k + 1
+        }
+        local out = List.new<Float>()
+        let total = numel(shape: read tshape)
+        let mut i = 0
+        while i < total {
+            local coords = flat_to_multi(flat: i, shape: read tshape)
+            let sf = dot_flat(coords: read coords, strides: read pstrides)
+            let v = List.get<Float>(list: read src, index: sf)
+            List.push<Float>(list: mut out, value: read v)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == FLIP {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local src = eval_tensor(cache: read cache, id: x)
+        local shape = uop_shape(cache: read cache, id: x)
+        local axes = node_argints(cache: read cache, id: id)
+        local strides = strides_for_shape(shape: read shape)
+        local out = List.new<Float>()
+        let total = numel(shape: read shape)
+        let mut i = 0
+        while i < total {
+            local coords = flat_to_multi(flat: i, shape: read shape)
+            local src_coords = List.new<Int>()
+            let mut j = 0
+            while j < List.len<Int>(list: read coords) {
+                let c = List.get<Int>(list: read coords, index: j)
+                let mut sc = c
+                if int_contains(items: read axes, v: j) {
+                    let d = List.get<Int>(list: read shape, index: j)
+                    sc = d - 1 - c
+                }
+                List.push<Int>(list: mut src_coords, value: read sc)
+                j = j + 1
+            }
+            let sf = dot_flat(coords: read src_coords, strides: read strides)
+            let v = List.get<Float>(list: read src, index: sf)
+            List.push<Float>(list: mut out, value: read v)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == PAD {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let bid = node_src_id(cache: read cache, id: id, k: 1)
+        local src = eval_tensor(cache: read cache, id: x)
+        local sshape = uop_shape(cache: read cache, id: x)
+        local tshape = uop_shape(cache: read cache, id: id)
+        local before = node_argints(cache: read cache, id: bid)
+        local sstrides = strides_for_shape(shape: read sshape)
+        local out = List.new<Float>()
+        let total = numel(shape: read tshape)
+        let mut i = 0
+        while i < total {
+            local coords = flat_to_multi(flat: i, shape: read tshape)
+            local src_coords = List.new<Int>()
+            let mut inside = true
+            let mut j = 0
+            while j < List.len<Int>(list: read coords) {
+                let c = List.get<Int>(list: read coords, index: j)
+                let b = List.get<Int>(list: read before, index: j)
+                let sd = List.get<Int>(list: read sshape, index: j)
+                let sc = c - b
+                if sc < 0 { inside = false }
+                if sc >= sd { inside = false }
+                List.push<Int>(list: mut src_coords, value: read sc)
+                j = j + 1
+            }
+            let mut v = 0.0
+            if inside {
+                let sf = dot_flat(coords: read src_coords, strides: read sstrides)
+                v = List.get<Float>(list: read src, index: sf)
+            }
+            List.push<Float>(list: mut out, value: read v)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == SHRINK {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let sid = node_src_id(cache: read cache, id: id, k: 1)
+        local src = eval_tensor(cache: read cache, id: x)
+        local sshape = uop_shape(cache: read cache, id: x)
+        local tshape = uop_shape(cache: read cache, id: id)
+        local starts = node_argints(cache: read cache, id: sid)
+        local sstrides = strides_for_shape(shape: read sshape)
+        local out = List.new<Float>()
+        let total = numel(shape: read tshape)
+        let mut i = 0
+        while i < total {
+            local coords = flat_to_multi(flat: i, shape: read tshape)
+            local src_coords = List.new<Int>()
+            let mut j = 0
+            while j < List.len<Int>(list: read coords) {
+                let base = List.get<Int>(list: read starts, index: j)
+                let c = List.get<Int>(list: read coords, index: j)
+                let sc = base + c
+                List.push<Int>(list: mut src_coords, value: read sc)
+                j = j + 1
+            }
+            let sf = dot_flat(coords: read src_coords, strides: read sstrides)
+            let v = List.get<Float>(list: read src, index: sf)
+            List.push<Float>(list: mut out, value: read v)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == REDUCE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        local src = eval_tensor(cache: read cache, id: x)
+        local sshape = uop_shape(cache: read cache, id: x)
+        local tshape = uop_shape(cache: read cache, id: id)
+        local axes = node_argints(cache: read cache, id: id)
+        let kind = node_reduce_kind(cache: read cache, id: id)
+        local tstrides = strides_for_shape(shape: read tshape)
+        local out = List.new<Float>()
+        let total = numel(shape: read tshape)
+        let mut i = 0
+        while i < total {
+            let mut acc = 0.0
+            if kind == 1 { acc = 1.0 }
+            if kind == 2 { acc = 0.0 - 1000000000000000000.0 }
+            List.push<Float>(list: mut out, value: read acc)
+            i = i + 1
+        }
+        let src_total = numel(shape: read sshape)
+        let mut sf = 0
+        while sf < src_total {
+            local scoords = flat_to_multi(flat: sf, shape: read sshape)
+            local ocoords = List.new<Int>()
+            let mut j = 0
+            while j < List.len<Int>(list: read scoords) {
+                if eval_axis_contains(axes: read axes, axis: j) {
+                    let z = 0
+                    List.push<Int>(list: mut ocoords, value: read z)
+                } else {
+                    let c = List.get<Int>(list: read scoords, index: j)
+                    List.push<Int>(list: mut ocoords, value: read c)
+                }
+                j = j + 1
+            }
+            let of = dot_flat(coords: read ocoords, strides: read tstrides)
+            let v = List.get<Float>(list: read src, index: sf)
+            let old = List.get<Float>(list: read out, index: of)
+            let mut nv = old + v
+            if kind == 1 { nv = old * v }
+            if kind == 2 {
+                nv = old
+                if v > old { nv = v }
+            }
+            List.set<Float>(list: mut out, index: of, value: read nv)
+            sf = sf + 1
+        }
+        return take out
+    }
+    if op == WHERE {
+        let cid = node_src_id(cache: read cache, id: id, k: 0)
+        let xid = node_src_id(cache: read cache, id: id, k: 1)
+        let yid = node_src_id(cache: read cache, id: id, k: 2)
+        local c = eval_tensor(cache: read cache, id: cid)
+        local a = eval_tensor(cache: read cache, id: xid)
+        local b = eval_tensor(cache: read cache, id: yid)
+        local out = List.new<Float>()
+        let mut i = 0
+        while i < List.len<Float>(list: read a) {
+            let cv = List.get<Float>(list: read c, index: i)
+            let av = List.get<Float>(list: read a, index: i)
+            let bv = List.get<Float>(list: read b, index: i)
+            if cv != 0.0 {
+                List.push<Float>(list: mut out, value: read av)
+            } else {
+                List.push<Float>(list: mut out, value: read bv)
+            }
+            i = i + 1
+        }
+        return take out
+    }
+    if group_unary(op: read op) {
+        let xid = node_src_id(cache: read cache, id: id, k: 0)
+        local a = eval_tensor(cache: read cache, id: xid)
+        local out = List.new<Float>()
+        let mut i = 0
+        while i < List.len<Float>(list: read a) {
+            let av = List.get<Float>(list: read a, index: i)
+            let mut r = 0.0
+            if op == NEG { r = 0.0 - av }
+            if op == RECIPROCAL { r = 1.0 / av }
+            if op == SQRT { r = Math.sqrt(value: av) }
+            if op == EXP2 { r = Math.exp2(value: av) }
+            if op == LOG2 { r = Math.log2(value: av) }
+            if op == SIN { r = Math.sin(value: av) }
+            if op == TRUNC { r = Math.trunc_float(value: av) }
+            List.push<Float>(list: mut out, value: read r)
+            i = i + 1
+        }
+        return take out
+    }
+    if node_num_src(cache: read cache, id: id) == 2 {
+        let xid = node_src_id(cache: read cache, id: id, k: 0)
+        let yid = node_src_id(cache: read cache, id: id, k: 1)
+        local a = eval_tensor(cache: read cache, id: xid)
+        local b = eval_tensor(cache: read cache, id: yid)
+        local out = List.new<Float>()
+        let mut i = 0
+        while i < List.len<Float>(list: read a) {
+            let av = List.get<Float>(list: read a, index: i)
+            let bv = List.get<Float>(list: read b, index: i)
+            let mut r = 0.0
+            if op == ADD { r = av + bv }
+            if op == SUB { r = av - bv }
+            if op == MUL { r = av * bv }
+            if op == FDIV { r = av / bv }
+            if op == POW { r = Math.pow_float(base: av, exponent: bv) }
+            if op == MAX {
+                let mut m = bv
+                if av > bv { m = av }
+                r = m
+            }
+            if op == CMPLT {
+                if av < bv { r = 1.0 } else { r = 0.0 }
+            }
+            if op == CMPNE {
+                if av != bv { r = 1.0 } else { r = 0.0 }
+            }
+            if op == CMPEQ {
+                if av == bv { r = 1.0 } else { r = 0.0 }
+            }
+            if op == AND {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read (ai & bi))
+            }
+            if op == OR {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read (ai | bi))
+            }
+            if op == XOR {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read (ai ^ bi))
+            }
+            if op == SHL {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read (ai << bi))
+            }
+            if op == SHR {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read (ai >> bi))
+            }
+            if op == CDIV {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read cdiv(x: ai, y: bi))
+            }
+            if op == CMOD {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read cmod(x: ai, y: bi))
+            }
+            if op == FLOORDIV {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read floordiv(x: ai, y: bi))
+            }
+            if op == FLOORMOD {
+                let ai = trunc_float_to_int(v: av)
+                let bi = trunc_float_to_int(v: bv)
+                r = Int.to_float(value: read floormod(x: ai, y: bi))
+            }
+            List.push<Float>(list: mut out, value: read r)
+            i = i + 1
+        }
+        return take out
+    }
+    local empty = List.new<Float>()
+    return take empty
+}

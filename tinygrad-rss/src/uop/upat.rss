@@ -1,0 +1,401 @@
+// Integrated UPat/PatternMatcher slice over the real interned UOp DAG.
+//
+// The standalone port-rss UPat demos used recursive toy UOps. This file keeps
+// tinygrad-rss' actual representation: a UOp is an Int id into UOpCache, and
+// patterns match/rewrite by inspecting ids through node_* accessors.
+features: local
+
+sum UPatKind derives(Clone, Eq) {
+    UpatAny
+    UpatConst
+    UpatOp
+}
+
+sum UPatAction derives(Clone, Eq) {
+    PActReturnName
+    PActConstZero
+    PActFoldAdd
+    PActFoldMul
+}
+
+struct UPat derives(Clone) {
+    kind: UPatKind,
+    op: Ops,
+    cval: Int,
+    exact_const: Bool,
+    name: String,
+    ops: List<Ops>,
+    dtype_name: String,
+    allow_any_len: Bool,
+    children: List<UPat>,
+}
+
+struct PatternRule derives(Clone) {
+    pat: UPat,
+    act: UPatAction,
+    ret_name: String,
+    lhs_name: String,
+    rhs_name: String,
+}
+
+fn upat_empty_ops() -> fresh List<Ops> {
+    return List.new<Ops>()
+}
+
+fn upat_no_children() -> fresh List<UPat> {
+    return List.new<UPat>()
+}
+
+fn upat_any(name: read String) -> fresh UPat {
+    return UPat(kind: UpatAny, op: NOOP, cval: 0, exact_const: false,
+                name: String.copy(value: read name), ops: upat_empty_ops(),
+                dtype_name: "", allow_any_len: false, children: upat_no_children())
+}
+
+fn upat_var(name: read String) -> fresh UPat {
+    return upat_any(name: read name)
+}
+
+fn upat_any_dtype(name: read String, dtype_name: read String) -> fresh UPat {
+    return UPat(kind: UpatAny, op: NOOP, cval: 0, exact_const: false,
+                name: String.copy(value: read name), ops: upat_empty_ops(),
+                dtype_name: String.copy(value: read dtype_name),
+                allow_any_len: false, children: upat_no_children())
+}
+
+fn upat_const_int(v: Int) -> fresh UPat {
+    return UPat(kind: UpatConst, op: CONST, cval: v, exact_const: true,
+                name: "", ops: upat_empty_ops(), dtype_name: "",
+                allow_any_len: false, children: upat_no_children())
+}
+
+fn upat_cvar(name: read String) -> fresh UPat {
+    return UPat(kind: UpatConst, op: CONST, cval: 0, exact_const: false,
+                name: String.copy(value: read name), ops: upat_empty_ops(),
+                dtype_name: "", allow_any_len: false, children: upat_no_children())
+}
+
+fn upat_op2(op: Ops, a: read UPat, b: read UPat) -> fresh UPat {
+    local kids = List.new<UPat>()
+    List.push<UPat>(list: mut kids, value: read a)
+    List.push<UPat>(list: mut kids, value: read b)
+    return UPat(kind: UpatOp, op: op, cval: 0, exact_const: false,
+                name: "", ops: upat_empty_ops(), dtype_name: "",
+                allow_any_len: false, children: take kids)
+}
+
+fn upat_opset_any(o1: Ops, o2: Ops, name: read String) -> fresh UPat {
+    local ops = List.new<Ops>()
+    List.push<Ops>(list: mut ops, value: read o1)
+    List.push<Ops>(list: mut ops, value: read o2)
+    return UPat(kind: UpatOp, op: NOOP, cval: 0, exact_const: false,
+                name: String.copy(value: read name), ops: take ops,
+                dtype_name: "", allow_any_len: true, children: upat_no_children())
+}
+
+fn upat_sink_anylen(a: read UPat, b: read UPat) -> fresh UPat {
+    local kids = List.new<UPat>()
+    List.push<UPat>(list: mut kids, value: read a)
+    List.push<UPat>(list: mut kids, value: read b)
+    return UPat(kind: UpatOp, op: SINK, cval: 0, exact_const: false,
+                name: "", ops: upat_empty_ops(), dtype_name: "",
+                allow_any_len: true, children: take kids)
+}
+
+fn upat_op_in_set(ops: read List<Ops>, op: read Ops) -> Bool {
+    let target = op.clone()
+    let mut i = 0
+    while i < List.len<Ops>(list: read ops) {
+        let o = List.get<Ops>(list: read ops, index: i)
+        if o == target { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn upat_bind(name: read String, id: Int, binds: mut Map<String, Int>) -> Bool {
+    if String.len(value: read name) == 0 { return true }
+    match Map.get<String, Int>(map: read binds, key: read name) {
+        Some(prev) => {
+            return prev == id
+        }
+        None => {
+            Map.insert<String, Int>(map: mut binds, key: read name, value: read id)
+            return true
+        }
+    }
+}
+
+fn upat_match(cache: read UOpCache, pat: read UPat, id: Int, binds: mut Map<String, Int>) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+
+    if pat.kind == UpatOp {
+        let nset = List.len<Ops>(list: read pat.ops)
+        if nset > 0 {
+            if upat_op_in_set(ops: read pat.ops, op: read op) == false { return false }
+        } else {
+            if op == pat.op { } else { return false }
+        }
+    }
+
+    if pat.kind == UpatConst {
+        if op == CONST { } else { return false }
+        if pat.exact_const {
+            if node_is_const_int(cache: read cache, id: id) { } else { return false }
+            if node_const_int(cache: read cache, id: id) == pat.cval { } else { return false }
+        }
+    }
+
+    if String.len(value: read pat.dtype_name) > 0 {
+        let dt = node_dtype(cache: read cache, id: id)
+        if dt.name == pat.dtype_name { } else { return false }
+    }
+
+    let nc = List.len<UPat>(list: read pat.children)
+    if nc > 0 {
+        let ns = node_num_src(cache: read cache, id: id)
+        if pat.allow_any_len {
+            if ns < nc { return false }
+        } else {
+            if ns == nc { } else { return false }
+        }
+        let mut i = 0
+        while i < nc {
+            let cp = List.get<UPat>(list: read pat.children, index: i)
+            let cid = node_src_id(cache: read cache, id: id, k: i)
+            if upat_match(cache: read cache, pat: read cp, id: cid, binds: mut binds) == false { return false }
+            i = i + 1
+        }
+    }
+
+    return upat_bind(name: read pat.name, id: id, binds: mut binds)
+}
+
+fn pattern_rule(pat: read UPat, act: UPatAction, ret_name: read String, lhs_name: read String, rhs_name: read String) -> fresh PatternRule {
+    return PatternRule(pat: pat.clone(), act: act, ret_name: String.copy(value: read ret_name),
+                       lhs_name: String.copy(value: read lhs_name), rhs_name: String.copy(value: read rhs_name))
+}
+
+fn pattern_apply_rule(cache: mut UOpCache, rule: read PatternRule, binds: read Map<String, Int>, original: Int) -> Option<Int> {
+    match rule.act {
+        PActReturnName => {
+            match Map.get<String, Int>(map: read binds, key: read rule.ret_name) {
+                Some(v) => { return Some(v) }
+                None => { return None }
+            }
+        }
+        PActConstZero => {
+            let dt = node_dtype(cache: read cache, id: original)
+            return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+        }
+        PActFoldAdd => {
+            match Map.get<String, Int>(map: read binds, key: read rule.lhs_name) {
+                Some(a) => {
+                    match Map.get<String, Int>(map: read binds, key: read rule.rhs_name) {
+                        Some(b) => {
+                            if node_is_const_int(cache: read cache, id: a) {
+                                if node_is_const_int(cache: read cache, id: b) {
+                                    let dt = node_dtype(cache: read cache, id: original)
+                                    let av = node_const_int(cache: read cache, id: a)
+                                    let bv = node_const_int(cache: read cache, id: b)
+                                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av + bv))
+                                }
+                            }
+                            return None
+                        }
+                        None => { return None }
+                    }
+                }
+                None => { return None }
+            }
+        }
+        PActFoldMul => {
+            match Map.get<String, Int>(map: read binds, key: read rule.lhs_name) {
+                Some(a) => {
+                    match Map.get<String, Int>(map: read binds, key: read rule.rhs_name) {
+                        Some(b) => {
+                            if node_is_const_int(cache: read cache, id: a) {
+                                if node_is_const_int(cache: read cache, id: b) {
+                                    let dt = node_dtype(cache: read cache, id: original)
+                                    let av = node_const_int(cache: read cache, id: a)
+                                    let bv = node_const_int(cache: read cache, id: b)
+                                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av * bv))
+                                }
+                            }
+                            return None
+                        }
+                        None => { return None }
+                    }
+                }
+                None => { return None }
+            }
+        }
+    }
+}
+
+fn pattern_try_rules(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Option<Int> {
+    let mut i = 0
+    while i < List.len<PatternRule>(list: read rules) {
+        let rule = List.get<PatternRule>(list: read rules, index: i)
+        local binds = Map.new<String, Int>()
+        if upat_match(cache: read cache, pat: read rule.pat, id: id, binds: mut binds) {
+            match pattern_apply_rule(cache: mut cache, rule: read rule, binds: read binds, original: id) {
+                Some(r) => { return Some(r) }
+                None => {}
+            }
+        }
+        i = i + 1
+    }
+    return None
+}
+
+fn pattern_fixpoint(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Int {
+    match pattern_try_rules(cache: mut cache, id: id, rules: read rules) {
+        Some(r) => {
+            if r == id { return id }
+            return pattern_fixpoint(cache: mut cache, id: r, rules: read rules)
+        }
+        None => { return id }
+    }
+}
+
+fn pattern_graph_rewrite(cache: mut UOpCache, id: Int, rules: read List<PatternRule>) -> Int {
+    local new_src = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let nc = pattern_graph_rewrite(cache: mut cache, id: child, rules: read rules)
+        List.push<Int>(list: mut new_src, value: read nc)
+        i = i + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+    return pattern_fixpoint(cache: mut cache, id: rebuilt, rules: read rules)
+}
+
+fn pattern_symbolic_rules() -> fresh List<PatternRule> {
+    local rules = List.new<PatternRule>()
+
+    let x1 = upat_op2(op: MUL, a: read upat_var(name: read "x"), b: read upat_const_int(v: 1))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read x1, act: PActReturnName, ret_name: read "x", lhs_name: read "", rhs_name: read ""))
+    let x2 = upat_op2(op: MUL, a: read upat_const_int(v: 1), b: read upat_var(name: read "x"))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read x2, act: PActReturnName, ret_name: read "x", lhs_name: read "", rhs_name: read ""))
+    let x3 = upat_op2(op: MUL, a: read upat_var(name: read "x"), b: read upat_const_int(v: 0))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read x3, act: PActConstZero, ret_name: read "", lhs_name: read "", rhs_name: read ""))
+    let x4 = upat_op2(op: MUL, a: read upat_const_int(v: 0), b: read upat_var(name: read "x"))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read x4, act: PActConstZero, ret_name: read "", lhs_name: read "", rhs_name: read ""))
+
+    let a1 = upat_op2(op: ADD, a: read upat_var(name: read "x"), b: read upat_const_int(v: 0))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read a1, act: PActReturnName, ret_name: read "x", lhs_name: read "", rhs_name: read ""))
+    let a2 = upat_op2(op: ADD, a: read upat_const_int(v: 0), b: read upat_var(name: read "x"))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read a2, act: PActReturnName, ret_name: read "x", lhs_name: read "", rhs_name: read ""))
+
+    let f1 = upat_op2(op: MUL, a: read upat_cvar(name: read "a"), b: read upat_cvar(name: read "b"))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read f1, act: PActFoldMul, ret_name: read "", lhs_name: read "a", rhs_name: read "b"))
+    let f2 = upat_op2(op: ADD, a: read upat_cvar(name: read "a"), b: read upat_cvar(name: read "b"))
+    List.push<PatternRule>(list: mut rules, value: read pattern_rule(pat: read f2, act: PActFoldAdd, ret_name: read "", lhs_name: read "a", rhs_name: read "b"))
+
+    return take rules
+}
+
+fn mk_sink(cache: mut UOpCache, ids: read List<Int>) -> Int {
+    local src = copy_int_list(l: read ids)
+    local arg = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: SINK, dt: read vdt, src: take src, arg: take arg)
+}
+
+fn ops_name(op: read Ops) -> fresh String {
+    if op == DEFINE_VAR { return "DEFINE_VAR" }
+    if op == BIND { return "BIND" }
+    if op == PARAM { return "PARAM" }
+    if op == DEFINE_LOCAL { return "DEFINE_LOCAL" }
+    if op == DEFINE_REG { return "DEFINE_REG" }
+    if op == UNIQUE { return "UNIQUE" }
+    if op == LUNIQUE { return "LUNIQUE" }
+    if op == DEVICE { return "DEVICE" }
+    if op == CONST { return "CONST" }
+    if op == SPECIAL { return "SPECIAL" }
+    if op == ADD { return "ADD" }
+    if op == MUL { return "MUL" }
+    if op == SHL { return "SHL" }
+    if op == SHR { return "SHR" }
+    if op == CDIV { return "CDIV" }
+    if op == CMOD { return "CMOD" }
+    if op == SUB { return "SUB" }
+    if op == FDIV { return "FDIV" }
+    if op == POW { return "POW" }
+    if op == FLOORDIV { return "FLOORDIV" }
+    if op == FLOORMOD { return "FLOORMOD" }
+    if op == CMPLT { return "CMPLT" }
+    if op == CMPNE { return "CMPNE" }
+    if op == CMPEQ { return "CMPEQ" }
+    if op == WHERE { return "WHERE" }
+    if op == MULACC { return "MULACC" }
+    if op == EXP2 { return "EXP2" }
+    if op == LOG2 { return "LOG2" }
+    if op == SIN { return "SIN" }
+    if op == NEG { return "NEG" }
+    if op == TRUNC { return "TRUNC" }
+    if op == RECIPROCAL { return "RECIPROCAL" }
+    if op == SQRT { return "SQRT" }
+    if op == AND { return "AND" }
+    if op == OR { return "OR" }
+    if op == XOR { return "XOR" }
+    if op == SINK { return "SINK" }
+    if op == AFTER { return "AFTER" }
+    if op == GROUP { return "GROUP" }
+    if op == RANGE { return "RANGE" }
+    if op == GEP { return "GEP" }
+    if op == STACK { return "STACK" }
+    if op == TUPLE { return "TUPLE" }
+    if op == GETTUPLE { return "GETTUPLE" }
+    if op == GETADDR { return "GETADDR" }
+    if op == INDEX { return "INDEX" }
+    if op == LOAD { return "LOAD" }
+    if op == STORE { return "STORE" }
+    if op == WMMA { return "WMMA" }
+    if op == SHAPED_WMMA { return "SHAPED_WMMA" }
+    if op == WAIT { return "WAIT" }
+    if op == END { return "END" }
+    if op == BARRIER { return "BARRIER" }
+    if op == IF { return "IF" }
+    if op == ENDIF { return "ENDIF" }
+    if op == CUSTOM { return "CUSTOM" }
+    if op == CUSTOMI { return "CUSTOMI" }
+    if op == INS { return "INS" }
+    if op == FUNCTION { return "FUNCTION" }
+    if op == CALL { return "CALL" }
+    if op == PROGRAM { return "PROGRAM" }
+    if op == LINEAR { return "LINEAR" }
+    if op == SOURCE { return "SOURCE" }
+    if op == BINARY { return "BINARY" }
+    if op == CAST { return "CAST" }
+    if op == BITCAST { return "BITCAST" }
+    if op == COPY { return "COPY" }
+    if op == ALLREDUCE { return "ALLREDUCE" }
+    if op == MULTI { return "MULTI" }
+    if op == MSELECT { return "MSELECT" }
+    if op == MSTACK { return "MSTACK" }
+    if op == CONTIGUOUS { return "CONTIGUOUS" }
+    if op == CONTIGUOUS_BACKWARD { return "CONTIGUOUS_BACKWARD" }
+    if op == DETACH { return "DETACH" }
+    if op == STAGE { return "STAGE" }
+    if op == SLICE { return "SLICE" }
+    if op == CUSTOM_FUNCTION { return "CUSTOM_FUNCTION" }
+    if op == BUFFER { return "BUFFER" }
+    if op == RESHAPE { return "RESHAPE" }
+    if op == PERMUTE { return "PERMUTE" }
+    if op == FLIP { return "FLIP" }
+    if op == EXPAND { return "EXPAND" }
+    if op == PAD { return "PAD" }
+    if op == SHRINK { return "SHRINK" }
+    if op == REDUCE { return "REDUCE" }
+    if op == UNROLL { return "UNROLL" }
+    if op == CONTRACT { return "CONTRACT" }
+    if op == VCAT { return "VCAT" }
+    if op == PTRCAT { return "PTRCAT" }
+    return "OTHER"
+}

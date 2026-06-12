@@ -10,7 +10,7 @@ numbers as tinygrad's reference CPU backend.
 """
 import os, re, sys, struct, subprocess, tempfile, math
 sys.path.insert(0, os.path.dirname(__file__))
-from tinygrad import Tensor, Device
+from tinygrad import Tensor, Device, dtypes
 from tinygrad.uop.ops import Ops
 from tinygrad.codegen import to_program
 from tinygrad.helpers import Context
@@ -114,4 +114,5 @@ if __name__ == "__main__":
   ok &= run_case("affine", lambda x: x * 2.0 + 1.0,    [a],    8, 8)
   ok &= run_case("relu",   lambda x: (x - 4.0).relu(), [a],    8, 8)
   ok &= run_case("sum",    lambda x: x.sum(),          [a],    8, 1)
+  ok &= run_case("bitcast_roundtrip", lambda x: x.bitcast(dtypes.uint32).bitcast(dtypes.float32) + 1.0, [a], 8, 8)
   sys.exit(0 if ok else 1)

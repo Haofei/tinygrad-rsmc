@@ -1,0 +1,1175 @@
+// Integrated UOp method/helper surface over the real interned UOp DAG.
+//
+// This mirrors part of tinygrad/uop/ops.py's UOp convenience API, but keeps
+// tinygrad-rss' explicit cache/id representation: every "method" receives
+// (cache, id) and returns an interned node id.
+features: local
+
+struct UOpBindValue derives(Clone) {
+    var_id: Int,
+    value: Int,
+}
+
+struct UOpUnbindAllResult derives(Clone) {
+    root: Int,
+    bindings: List<UOpBindValue>,
+}
+
+fn uop_string_compare(a: read String, b: read String) -> Int {
+    let alen = String.len(value: read a)
+    let blen = String.len(value: read b)
+    let mut i = 0
+    while i < alen && i < blen {
+        let mut ac = 0
+        let mut bc = 0
+        match String.char_at(value: read a, index: i) {
+            Some(ch) => { ac = Char.to_code(value: read ch) }
+            None => {}
+        }
+        match String.char_at(value: read b, index: i) {
+            Some(ch) => { bc = Char.to_code(value: read ch) }
+            None => {}
+        }
+        if ac < bc { return 0 - 1 }
+        if ac > bc { return 1 }
+        i = i + 1
+    }
+    if alen < blen { return 0 - 1 }
+    if alen > blen { return 1 }
+    return 0
+}
+
+fn uop_var_less(cache: read UOpCache, a: Int, b: Int) -> Bool {
+    let an = node_var_name(cache: read cache, id: a)
+    let bn = node_var_name(cache: read cache, id: b)
+    let nc = uop_string_compare(a: read an, b: read bn)
+    if nc < 0 { return true }
+    if nc > 0 { return false }
+    let amin = node_var_min(cache: read cache, id: a)
+    let bmin = node_var_min(cache: read cache, id: b)
+    if amin < bmin { return true }
+    if amin > bmin { return false }
+    return node_var_max(cache: read cache, id: a) < node_var_max(cache: read cache, id: b)
+}
+
+fn uop_copy_src(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let s = node_src_id(cache: read cache, id: id, k: i)
+        List.push<Int>(list: mut out, value: read s)
+        i = i + 1
+    }
+    return take out
+}
+
+fn uop_int_list_to_string(vals: read List<Int>) -> fresh String {
+    let mut s = String.copy(value: read "[")
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        s = String.concat(left: read s, right: read Int.to_string(value: read List.get<Int>(list: read vals, index: i)))
+        if i < List.len<Int>(list: read vals) - 1 { s = String.concat(left: read s, right: read ",") }
+        i = i + 1
+    }
+    return String.concat(left: read s, right: read "]")
+}
+
+fn uop_arg_to_string(arg: read Arg) -> fresh String {
+    match arg {
+        ArgNone => { return "None" }
+        ArgInt(v) => { return Int.to_string(value: read v) }
+        ArgFloat(f) => { return Float.to_string(value: read f) }
+        ArgBool(b) => {
+            if b { return "true" }
+            return "false"
+        }
+        ArgStr(t) => { return String.copy(value: read t) }
+        ArgInts(vals) => {
+            return uop_int_list_to_string(vals: read vals)
+        }
+        ArgReduce(r) => {
+            let axes = uop_int_list_to_string(vals: read r.axes)
+            let mut s = String.copy(value: read "Reduce(kind=")
+            s = String.concat(left: read s, right: read Int.to_string(value: read r.kind))
+            s = String.concat(left: read s, right: read ",axes=")
+            s = String.concat(left: read s, right: read axes)
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgVar(v) => {
+            let mut s = String.copy(value: read v.name)
+            s = String.concat(left: read s, right: read "[")
+            s = String.concat(left: read s, right: read Int.to_string(value: read v.min_val))
+            s = String.concat(left: read s, right: read ",")
+            s = String.concat(left: read s, right: read Int.to_string(value: read v.max_val))
+            return String.concat(left: read s, right: read "]")
+        }
+        ArgRange(r) => {
+            let axes = uop_int_list_to_string(vals: read r.axes)
+            let mut s = String.copy(value: read "Range(axes=")
+            s = String.concat(left: read s, right: read axes)
+            s = String.concat(left: read s, right: read ",type=")
+            s = String.concat(left: read s, right: read axis_type_name(t: read r.axis_type))
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgParam(p) => {
+            let mut s = String.copy(value: read "ParamArg(")
+            s = String.concat(left: read s, right: read Int.to_string(value: read p.slot))
+            if String.len(value: read p.name) > 0 {
+                s = String.concat(left: read s, right: read ",name=")
+                s = String.concat(left: read s, right: read p.name)
+            }
+            s = String.concat(left: read s, right: read ",addrspace=")
+            s = String.concat(left: read s, right: read addr_space_name(a: read p.addrspace))
+            if p.has_vmin_vmax {
+                s = String.concat(left: read s, right: read ",vmin=")
+                s = String.concat(left: read s, right: read Int.to_string(value: read p.vmin))
+                s = String.concat(left: read s, right: read ",vmax=")
+                s = String.concat(left: read s, right: read Int.to_string(value: read p.vmax))
+            }
+            if p.has_axis {
+                s = String.concat(left: read s, right: read ",axis=")
+                s = String.concat(left: read s, right: read Int.to_string(value: read p.axis))
+            }
+            if String.len(value: read p.device) > 0 {
+                s = String.concat(left: read s, right: read ",device=")
+                s = String.concat(left: read s, right: read p.device)
+            }
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgAxisSizes(a) => {
+            let pairs = uop_int_list_to_string(vals: read a.pairs)
+            let mut s = String.copy(value: read "AxisSizes(")
+            s = String.concat(left: read s, right: read pairs)
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgDevice(dv) => {
+            let mut s = String.copy(value: read "Device(")
+            let mut i = 0
+            while i < List.len<String>(list: read dv.devices) {
+                let d = List.get<String>(list: read dv.devices, index: i)
+                s = String.concat(left: read s, right: read d)
+                if i < List.len<String>(list: read dv.devices) - 1 { s = String.concat(left: read s, right: read ",") }
+                i = i + 1
+            }
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgOp(o) => {
+            return ops_key_name(op: read o)
+        }
+        ArgBufferize(b) => {
+            let mut s = String.copy(value: read "Bufferize(")
+            s = String.concat(left: read s, right: read addr_space_name(a: read b.addrspace))
+            if b.has_device {
+                s = String.concat(left: read s, right: read ",device=")
+                if b.is_device_int {
+                    s = String.concat(left: read s, right: read Int.to_string(value: read b.device_int))
+                } else {
+                    local dv = DeviceArg(devices: copy_string_list(l: read b.devices))
+                    s = String.concat(left: read s, right: read device_arg_key(d: read dv))
+                }
+            }
+            if b.removable { s = String.concat(left: read s, right: read ",removable") }
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgProgram(p) => {
+            let mut s = String.copy(value: read "Program(")
+            s = String.concat(left: read s, right: read p.name)
+            return String.concat(left: read s, right: read ")")
+        }
+        ArgCall(c) => {
+            let mut s = String.copy(value: read "Call(")
+            if c.has_name { s = String.concat(left: read s, right: read c.name) }
+            if c.precompile { s = String.concat(left: read s, right: read ",precompile") }
+            if c.precompile_backward { s = String.concat(left: read s, right: read ",precompile_backward") }
+            return String.concat(left: read s, right: read ")")
+        }
+    }
+}
+
+fn uop_range_str(cache: read UOpCache, id: Int) -> fresh String {
+    let axes = node_range_axes(cache: read cache, id: id)
+    let mut s = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read axes) {
+        if i > 0 { s = String.concat(left: read s, right: read "_") }
+        s = String.concat(left: read s, right: read Int.to_string(value: read List.get<Int>(list: read axes, index: i)))
+        i = i + 1
+    }
+    return String.concat(left: read s, right: read axis_type_letter(t: read node_range_type(cache: read cache, id: id)))
+}
+
+fn uop_const_like(cache: mut UOpCache, id: Int, v: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: id)
+    return mk_const_int(cache: mut cache, dt: read dt, v: v)
+}
+
+fn uop_ufix(cache: mut UOpCache, id: Int, v: Int) -> Int {
+    return uop_const_like(cache: mut cache, id: id, v: v)
+}
+
+fn uop_invalid(cache: mut UOpCache, count: Int) -> Int {
+    let base = dt_weakint()
+    let dt = dtype_vec(base: read base, sz: count)
+    local src = List.new<Int>()
+    local a = ArgStr(text: String.copy(value: read "__INVALID__"))
+    return intern(cache: mut cache, op: CONST, dt: read dt, src: take src, arg: take a)
+}
+
+fn uop_is_invalid(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) != CONST { return false }
+    local arg = node_arg(cache: read cache, id: id)
+    match arg {
+        ArgStr(t) => { return t == "__INVALID__" }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgBufferize(b) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn uop_valid(cache: mut UOpCache, id: Int, cond: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let wbase = dt_weakint()
+    let wdt = dtype_vec(base: read wbase, sz: dt.count)
+    let idx = mk_cast(cache: mut cache, x: id, dt: read wdt)
+    let invalid = uop_invalid(cache: mut cache, count: dt.count)
+    return mk_where(cache: mut cache, dt: read wdt, cond: cond, tval: idx, fval: invalid)
+}
+
+fn uop_get_idx(cache: read UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) == WHERE {
+        if node_num_src(cache: read cache, id: id) == 3 {
+            let invalid = node_src_id(cache: read cache, id: id, k: 2)
+            if uop_is_invalid(cache: read cache, id: invalid) {
+                return node_src_id(cache: read cache, id: id, k: 1)
+            }
+        }
+    }
+    return id
+}
+
+fn uop_get_valid(cache: mut UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) == WHERE {
+        if node_num_src(cache: read cache, id: id) == 3 {
+            let invalid = node_src_id(cache: read cache, id: id, k: 2)
+            if uop_is_invalid(cache: read cache, id: invalid) {
+                return node_src_id(cache: read cache, id: id, k: 0)
+            }
+        }
+    }
+    let mut v = 1
+    if uop_is_invalid(cache: read cache, id: id) { v = 0 }
+    let bdt = dt_bool()
+    return mk_const_int(cache: mut cache, dt: read bdt, v: v)
+}
+
+fn uop_expr(cache: read UOpCache, id: Int) -> fresh String {
+    return node_var_name(cache: read cache, id: id)
+}
+
+fn uop_unbind(cache: read UOpCache, id: Int) -> Option<UOpBindValue> {
+    let op = node_op(cache: read cache, id: id)
+    if op == BIND {
+        if node_num_src(cache: read cache, id: id) == 2 {
+            let var = node_src_id(cache: read cache, id: id, k: 0)
+            let val = node_src_id(cache: read cache, id: id, k: 1)
+            let vop = node_op(cache: read cache, id: var)
+            if vop == DEFINE_VAR {
+                if node_is_const_int(cache: read cache, id: val) {
+                    return Some(UOpBindValue(var_id: var, value: node_const_int(cache: read cache, id: val)))
+                }
+            }
+        }
+    }
+    return None
+}
+
+fn uop_val(cache: read UOpCache, id: Int) -> Int {
+    match uop_unbind(cache: read cache, id: id) {
+        Some(v) => { return v.value }
+        None => { return 0 }
+    }
+}
+
+fn uop_bind_values_upsert(bindings: mut List<UOpBindValue>, var_id: Int, value: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<UOpBindValue>(list: read bindings) {
+        let cur = List.get<UOpBindValue>(list: read bindings, index: i)
+        if cur.var_id == var_id {
+            local repl = UOpBindValue(var_id: var_id, value: value)
+            List.set<UOpBindValue>(list: mut bindings, index: i, value: read (manage repl))
+            return Unit
+        }
+        i = i + 1
+    }
+    local item = UOpBindValue(var_id: var_id, value: value)
+    List.push<UOpBindValue>(list: mut bindings, value: read (manage item))
+    return Unit
+}
+
+fn uop_unbind_all_rewrite(cache: mut UOpCache, id: Int, bindings: mut List<UOpBindValue>) -> Int {
+    match uop_unbind(cache: read cache, id: id) {
+        Some(v) => {
+            uop_bind_values_upsert(bindings: mut bindings, var_id: v.var_id, value: v.value)
+            return v.var_id
+        }
+        None => {}
+    }
+    local new_src = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let repl = uop_unbind_all_rewrite(cache: mut cache, id: child, bindings: mut bindings)
+        if repl != child { changed = true }
+        List.push<Int>(list: mut new_src, value: read repl)
+        i = i + 1
+    }
+    if changed == false { return id }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+}
+
+fn uop_unbind_all(cache: mut UOpCache, id: Int) -> fresh UOpUnbindAllResult {
+    local bindings = List.new<UOpBindValue>()
+    let root = uop_unbind_all_rewrite(cache: mut cache, id: id, bindings: mut bindings)
+    return UOpUnbindAllResult(root: root, bindings: take bindings)
+}
+
+fn uop_variables_push_sorted(cache: read UOpCache, vars: mut List<Int>, var_id: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vars) {
+        let cur = List.get<Int>(list: read vars, index: i)
+        if cur == var_id { return Unit }
+        i = i + 1
+    }
+    List.push<Int>(list: mut vars, value: read var_id)
+    let n = List.len<Int>(list: read vars)
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            let va = List.get<Int>(list: read vars, index: a)
+            let vb = List.get<Int>(list: read vars, index: b)
+            if uop_var_less(cache: read cache, a: vb, b: va) {
+                List.set<Int>(list: mut vars, index: a, value: read vb)
+                List.set<Int>(list: mut vars, index: b, value: read va)
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return Unit
+}
+
+fn uop_variables(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local vars = List.new<Int>()
+    local order = uop_toposort(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let node = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: node) == DEFINE_VAR {
+            uop_variables_push_sorted(cache: read cache, vars: mut vars, var_id: node)
+        }
+        i = i + 1
+    }
+    return take vars
+}
+
+fn uop_replace_arg(cache: mut UOpCache, id: Int, arg: take Arg) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    local src = uop_copy_src(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
+}
+
+fn uop_replace_dtype(cache: mut UOpCache, id: Int, dt: read DType) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    local src = uop_copy_src(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
+}
+
+fn uop_stack(cache: mut UOpCache, dt: read DType, srcs: read List<Int>) -> Int {
+    local src = copy_int_list(l: read srcs)
+    local arg = ArgNone
+    return intern(cache: mut cache, op: STACK, dt: read dt, src: take src, arg: take arg)
+}
+
+fn uop_broadcast(cache: mut UOpCache, id: Int, count: Int) -> Int {
+    if count == 1 { return id }
+    let base = node_dtype(cache: read cache, id: id)
+    let dt = dtype_vec(base: read base, sz: count)
+    local src = List.new<Int>()
+    let mut i = 0
+    while i < count {
+        List.push<Int>(list: mut src, value: read id)
+        i = i + 1
+    }
+    return uop_stack(cache: mut cache, dt: read dt, srcs: read src)
+}
+
+fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
+    if id == old_id { return new_id }
+    local new_src = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let repl = uop_substitute(cache: mut cache, id: child, old_id: old_id, new_id: new_id)
+        List.push<Int>(list: mut new_src, value: read repl)
+        i = i + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+}
+
+fn uop_visit_toposort_with_enter_calls(cache: read UOpCache, id: Int, seen: mut Set<Int>, order: mut List<Int>, enter_calls: Bool) -> Unit {
+    if Set.contains(set: read seen, value: read id) { return Unit }
+    let op = node_op(cache: read cache, id: id)
+    let mut i = 0
+    if enter_calls == false {
+        if op == CALL || op == FUNCTION { i = 1 }
+    }
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        uop_visit_toposort_with_enter_calls(cache: read cache, id: child, seen: mut seen, order: mut order, enter_calls: enter_calls)
+        i = i + 1
+    }
+    Set.insert(set: mut seen, value: read id)
+    List.push<Int>(list: mut order, value: read id)
+    return Unit
+}
+
+fn uop_toposort_enter_calls(cache: read UOpCache, id: Int, enter_calls: Bool) -> fresh List<Int> {
+    local seen = Set.new<Int>()
+    local order = List.new<Int>()
+    uop_visit_toposort_with_enter_calls(cache: read cache, id: id, seen: mut seen, order: mut order, enter_calls: enter_calls)
+    return take order
+}
+
+fn uop_toposort(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    return uop_toposort_enter_calls(cache: read cache, id: id, enter_calls: true)
+}
+
+fn uop_backward_slice(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local order = uop_toposort(cache: read cache, id: id)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let node = List.get<Int>(list: read order, index: i)
+        if node != id { List.push<Int>(list: mut out, value: read node) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn uop_op_in_backward_slice_with_self(cache: read UOpCache, id: Int, op: Ops) -> Bool {
+    if node_op(cache: read cache, id: id) == op { return true }
+    local nodes = uop_backward_slice(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read nodes) {
+        let node = List.get<Int>(list: read nodes, index: i)
+        if node_op(cache: read cache, id: node) == op { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn uop_sparents_count(cache: read UOpCache, id: Int) -> Int {
+    let order = uop_toposort(cache: read cache, id: id)
+    return List.len<Int>(list: read order)
+}
+
+fn uop_axis(cache: read UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == COPY { return 0 - 1 }
+    if op == MULTI { return node_const_int(cache: read cache, id: id) }
+    if op == GETTUPLE {
+        if node_num_src(cache: read cache, id: id) == 0 { return 0 - 1 }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let in_tuple = uop_tuple_source_for_gettuple(cache: read cache, id: src)
+        if node_op(cache: read cache, id: in_tuple) == TUPLE {
+            let idx = node_const_int(cache: read cache, id: id)
+            if idx >= 0 && idx < node_num_src(cache: read cache, id: in_tuple) {
+                let child = node_src_id(cache: read cache, id: in_tuple, k: idx)
+                return uop_axis(cache: read cache, id: child)
+            }
+        }
+        return 0 - 1
+    }
+    if op == PARAM {
+        if node_param_has_axis(cache: read cache, id: id) { return node_param_axis(cache: read cache, id: id) }
+        return 0 - 1
+    }
+    if group_alu(op: read op) {
+        let mut axis = 0 - 1
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let child_axis = uop_axis(cache: read cache, id: child)
+            if child_axis >= 0 { axis = child_axis }
+            i = i + 1
+        }
+        return axis
+    }
+    if node_num_src(cache: read cache, id: id) == 0 { return 0 - 1 }
+    let src_axis = uop_axis(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    if op == REDUCE {
+        if src_axis < 0 { return 0 - 1 }
+        local axes = node_argints(cache: read cache, id: id)
+        if uop_ints_contains(vals: read axes, v: src_axis) { return 0 - 1 }
+        return src_axis
+    }
+    if op == PERMUTE {
+        if src_axis < 0 { return 0 - 1 }
+        local perm = node_argints(cache: read cache, id: id)
+        let mut i = 0
+        while i < List.len<Int>(list: read perm) {
+            if List.get<Int>(list: read perm, index: i) == src_axis { return i }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+    return src_axis
+}
+
+fn uop_device_key_from_arg(arg: read Arg) -> fresh String {
+    match arg {
+        ArgDevice(dv) => { return device_arg_key(d: read dv) }
+        ArgParam(p) => { return String.copy(value: read p.device) }
+        ArgBufferize(b) => {
+            if b.has_device == false { return String.copy(value: read "") }
+            if b.is_device_int { return Int.to_string(value: read b.device_int) }
+            local dv = DeviceArg(devices: copy_string_list(l: read b.devices))
+            return device_arg_key(d: read dv)
+        }
+        ArgNone => { return String.copy(value: read "") }
+        ArgInt(v) => { return String.copy(value: read "") }
+        ArgFloat(f) => { return String.copy(value: read "") }
+        ArgBool(b) => { return String.copy(value: read "") }
+        ArgStr(t) => { return String.copy(value: read "") }
+        ArgInts(vals) => { return String.copy(value: read "") }
+        ArgReduce(r) => { return String.copy(value: read "") }
+        ArgVar(v) => { return String.copy(value: read "") }
+        ArgRange(r) => { return String.copy(value: read "") }
+        ArgAxisSizes(a) => { return String.copy(value: read "") }
+        ArgOp(o) => { return String.copy(value: read "") }
+        ArgProgram(p) => { return String.copy(value: read "") }
+        ArgCall(c) => { return String.copy(value: read "") }
+    }
+}
+
+fn uop_device_count_from_key(key: read String) -> Int {
+    if String.len(value: read key) == 0 { return 0 }
+    let mut n = 1
+    let mut i = 0
+    while i < String.len(value: read key) {
+        match String.char_at(value: read key, index: i) {
+            Some(ch) => {
+                if Char.to_code(value: read ch) == 124 { n = n + 1 }
+            }
+            None => {}
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn uop_device_name_at(cache: read UOpCache, id: Int, index: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEVICE {
+        return node_device_name(cache: read cache, id: id, index: index)
+    }
+    if op == BUFFER {
+        if node_is_upstream_buffer(cache: read cache, id: id) {
+            return uop_device_name_at(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1), index: index)
+        }
+    }
+    if op == COPY || op == ALLREDUCE {
+        if node_num_src(cache: read cache, id: id) >= 2 {
+            return uop_device_name_at(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1), index: index)
+        }
+    }
+    if op == MSELECT {
+        if index == 0 { return uop_device_key(cache: read cache, id: id) }
+        return String.copy(value: read "")
+    }
+    if op == MSTACK {
+        if index >= 0 && index < node_num_src(cache: read cache, id: id) {
+            return uop_device_key(cache: read cache, id: node_src_id(cache: read cache, id: id, k: index))
+        }
+        return String.copy(value: read "")
+    }
+    if node_num_src(cache: read cache, id: id) > 0 {
+        return uop_device_name_at(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0), index: index)
+    }
+    let key = uop_device_key(cache: read cache, id: id)
+    if index == 0 { return String.copy(value: read key) }
+    return String.copy(value: read "")
+}
+
+fn uop_device_key(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM || op == DEVICE || op == STAGE {
+        local arg = node_arg(cache: read cache, id: id)
+        return uop_device_key_from_arg(arg: read arg)
+    }
+    if op == AFTER {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return uop_device_key(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+        return String.copy(value: read "")
+    }
+    if op == MSELECT {
+        if node_num_src(cache: read cache, id: id) == 0 { return String.copy(value: read "") }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let idx = node_const_int(cache: read cache, id: id)
+        return uop_device_name_at(cache: read cache, id: src, index: idx)
+    }
+    if op == MSTACK {
+        let mut out = String.copy(value: read "")
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let key = uop_device_key(cache: read cache, id: child)
+            if i > 0 { out = String.concat(left: read out, right: read "|") }
+            out = String.concat(left: read out, right: read key)
+            i = i + 1
+        }
+        return String.copy(value: read out)
+    }
+    if op == BUFFER {
+        local arg = node_arg(cache: read cache, id: id)
+        let param_key = uop_device_key_from_arg(arg: read arg)
+        if String.len(value: read param_key) > 0 { return String.copy(value: read param_key) }
+        if node_is_upstream_buffer(cache: read cache, id: id) {
+            return uop_device_key(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        }
+        return String.copy(value: read "")
+    }
+    if op == COPY || op == ALLREDUCE {
+        if node_num_src(cache: read cache, id: id) >= 2 {
+            return uop_device_key(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        }
+        return String.copy(value: read "")
+    }
+    if node_num_src(cache: read cache, id: id) > 0 {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let key = uop_device_key(cache: read cache, id: child)
+            if String.len(value: read key) > 0 { return String.copy(value: read key) }
+            i = i + 1
+        }
+    }
+    return String.copy(value: read "")
+}
+
+fn uop_device_count(cache: read UOpCache, id: Int) -> Int {
+    let key = uop_device_key(cache: read cache, id: id)
+    return uop_device_count_from_key(key: read key)
+}
+
+fn uop_addrspace_key(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM {
+        return addr_space_name(a: read node_param_addrspace(cache: read cache, id: id))
+    }
+    if op == BUFFER {
+        if node_arg_is_param(cache: read cache, id: id) {
+            return addr_space_name(a: read node_param_addrspace(cache: read cache, id: id))
+        }
+        return addr_space_name(a: read ADDR_GLOBAL)
+    }
+    if op == DEFINE_LOCAL { return addr_space_name(a: read ADDR_LOCAL) }
+    if op == DEFINE_REG { return addr_space_name(a: read ADDR_REG) }
+    if op == LOAD { return addr_space_name(a: read ADDR_REG) }
+    if op == INDEX || op == CAST || op == AFTER || op == REDUCE || op == GEP || op == STORE || group_movement(op: read op) {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            return uop_addrspace_key(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        }
+        return String.copy(value: read "")
+    }
+    if op == STACK || op == WMMA || group_elementwise(op: read op) {
+        let mut seen = false
+        let mut first = String.copy(value: read "")
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let key = uop_addrspace_key(cache: read cache, id: child)
+            if String.len(value: read key) > 0 {
+                if seen == false {
+                    first = String.copy(value: read key)
+                    seen = true
+                } else {
+                    if first != key { return String.copy(value: read "") }
+                }
+            }
+            i = i + 1
+        }
+        if seen { return String.copy(value: read first) }
+        return String.copy(value: read "")
+    }
+    return String.copy(value: read "")
+}
+
+fn uop_ints_contains(vals: read List<Int>, v: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        if List.get<Int>(list: read vals, index: i) == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn uop_push_unique(vals: mut List<Int>, v: Int) -> Unit {
+    if uop_ints_contains(vals: read vals, v: v) == false {
+        List.push<Int>(list: mut vals, value: read v)
+    }
+    return Unit
+}
+
+fn uop_remove_value(vals: read List<Int>, v: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        let x = List.get<Int>(list: read vals, index: i)
+        if x != v { List.push<Int>(list: mut out, value: read x) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn uop_range_start_index(op: read Ops) -> Int {
+    if op == STAGE { return 1 }
+    if op == REDUCE { return 1 }
+    if op == WMMA { return 3 }
+    if op == END { return 1 }
+    if op == CALL { return 1 }
+    if op == FUNCTION { return 1 }
+    if op == COPY { return 2 }
+    if op == SLICE { return 2 }
+    if op == LINEAR { return 0 }
+    return 0 - 1
+}
+
+fn uop_contract_axis_ids(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let pairs = node_axis_size_pairs(cache: read cache, id: id)
+    let mut i = 0
+    while i + 1 < List.len<Int>(list: read pairs) {
+        let axis = List.get<Int>(list: read pairs, index: i)
+        uop_push_unique(vals: mut out, v: axis)
+        i = i + 2
+    }
+    return take out
+}
+
+fn uop_ended_ranges(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: id)
+    let start = uop_range_start_index(op: read op)
+    local out = List.new<Int>()
+    if start >= 0 {
+        let mut i = start
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            uop_push_unique(vals: mut out, v: child)
+            i = i + 1
+        }
+        return take out
+    }
+    if op == AFTER {
+        let mut i = 1
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            local cr = uop_ended_ranges(cache: read cache, id: child)
+            let mut j = 0
+            while j < List.len<Int>(list: read cr) {
+                uop_push_unique(vals: mut out, v: List.get<Int>(list: read cr, index: j))
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return take out
+    }
+    if op == CONTRACT {
+        let ids = uop_contract_axis_ids(cache: read cache, id: id)
+        if node_num_src(cache: read cache, id: id) > 0 {
+            let base = node_src_id(cache: read cache, id: id, k: 0)
+            local ranges = uop_ranges(cache: read cache, id: base)
+            let mut i = 0
+            while i < List.len<Int>(list: read ranges) {
+                let r = List.get<Int>(list: read ranges, index: i)
+                if node_op(cache: read cache, id: r) == RANGE {
+                    if uop_ints_contains(vals: read ids, v: node_range_axis_id(cache: read cache, id: r)) {
+                        uop_push_unique(vals: mut out, v: r)
+                    }
+                }
+                i = i + 1
+            }
+        }
+        return take out
+    }
+    return take out
+}
+
+fn uop_ranges_base(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        local child_ranges = uop_ranges(cache: read cache, id: child)
+        let mut j = 0
+        while j < List.len<Int>(list: read child_ranges) {
+            uop_push_unique(vals: mut out, v: List.get<Int>(list: read child_ranges, index: j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    local ended = uop_ended_ranges(cache: read cache, id: id)
+    local removals = List.new<Int>()
+    let mut e = 0
+    while e < List.len<Int>(list: read ended) {
+        let er = List.get<Int>(list: read ended, index: e)
+        if node_op(cache: read cache, id: er) == RANGE {
+            uop_push_unique(vals: mut removals, v: er)
+        } else {
+            local er_ranges = uop_ranges(cache: read cache, id: er)
+            let mut k = 0
+            while k < List.len<Int>(list: read er_ranges) {
+                uop_push_unique(vals: mut removals, v: List.get<Int>(list: read er_ranges, index: k))
+                k = k + 1
+            }
+        }
+        e = e + 1
+    }
+    local filtered = List.new<Int>()
+    let mut f = 0
+    while f < List.len<Int>(list: read out) {
+        let r = List.get<Int>(list: read out, index: f)
+        if uop_ints_contains(vals: read removals, v: r) == false {
+            List.push<Int>(list: mut filtered, value: read r)
+        }
+        f = f + 1
+    }
+    return take filtered
+}
+
+fn uop_ranges(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = uop_ranges_base(cache: read cache, id: id)
+    if node_op(cache: read cache, id: id) == RANGE {
+        local with_self = List.new<Int>()
+        List.push<Int>(list: mut with_self, value: read id)
+        let mut i = 0
+        while i < List.len<Int>(list: read out) {
+            uop_push_unique(vals: mut with_self, v: List.get<Int>(list: read out, index: i))
+            i = i + 1
+        }
+        return take with_self
+    }
+    return take out
+}
+
+fn uop_gettuple(cache: read UOpCache, id: Int, idx: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == STACK {
+        return node_src_id(cache: read cache, id: id, k: idx)
+    }
+    if op == TUPLE {
+        return node_src_id(cache: read cache, id: id, k: idx)
+    }
+    if op == FUNCTION {
+        let in_tuple = node_src_id(cache: read cache, id: id, k: 0)
+        if node_op(cache: read cache, id: in_tuple) == TUPLE {
+            return node_src_id(cache: read cache, id: in_tuple, k: idx)
+        }
+    }
+    return id
+}
+
+fn uop_split_by_op(cache: read UOpCache, id: Int, sep: Ops) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let op = node_op(cache: read cache, id: id)
+    if op == sep {
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            local parts = uop_split_by_op(cache: read cache, id: child, sep: sep.clone())
+            let mut j = 0
+            while j < List.len<Int>(list: read parts) {
+                let part = List.get<Int>(list: read parts, index: j)
+                List.push<Int>(list: mut out, value: read part)
+                j = j + 1
+            }
+            i = i + 1
+        }
+    } else {
+        List.push<Int>(list: mut out, value: read id)
+    }
+    return take out
+}
+
+fn uop_base(cache: read UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if group_movement(op: read op) {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    if op == MULTI {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    if op == DETACH {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    return id
+}
+
+fn uop_multibase(cache: read UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if group_movement(op: read op) {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    if op == DETACH {
+        return uop_base(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    return id
+}
+
+fn uop_buf_uop(cache: mut UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == BUFFER || op == PARAM { return id }
+    if op == MSELECT {
+        if node_num_src(cache: read cache, id: id) == 0 { return id }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let idx = node_const_int(cache: read cache, id: id)
+        let buf = uop_buf_uop(cache: mut cache, id: src)
+        return mk_mselect(cache: mut cache, x: buf, index: idx)
+    }
+    if op == MSTACK {
+        local srcs = List.new<Int>()
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: i)
+            let buf = uop_buf_uop(cache: mut cache, id: child)
+            List.push<Int>(list: mut srcs, value: read buf)
+            i = i + 1
+        }
+        let dt = node_full_dtype(cache: read cache, id: id)
+        return mk_mstack(cache: mut cache, dt: read dt, srcs: read srcs)
+    }
+    let b = uop_base(cache: read cache, id: id)
+    if node_op(cache: read cache, id: b) == AFTER {
+        if node_num_src(cache: read cache, id: b) > 0 {
+            let first = node_src_id(cache: read cache, id: b, k: 0)
+            let buf = uop_buf_uop(cache: mut cache, id: first)
+            return uop_base(cache: read cache, id: buf)
+        }
+    }
+    let mut s = id
+    let mut sop = node_op(cache: read cache, id: s)
+    while node_num_src(cache: read cache, id: s) > 0 && sop != BUFFER && sop != PARAM && sop != STAGE && sop != MSTACK {
+        s = node_src_id(cache: read cache, id: s, k: 0)
+        sop = node_op(cache: read cache, id: s)
+    }
+    return s
+}
+
+fn uop_has_buffer_identity(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if op == RESHAPE || op == MULTI {
+        if node_num_src(cache: read cache, id: id) == 0 { return false }
+        return uop_has_buffer_identity(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+    }
+    if op == GETTUPLE {
+        if node_num_src(cache: read cache, id: id) == 0 { return false }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        if node_op(cache: read cache, id: src) == TUPLE {
+            let idx = node_const_int(cache: read cache, id: id)
+            if idx >= 0 && idx < node_num_src(cache: read cache, id: src) {
+                return uop_has_buffer_identity(cache: read cache, id: node_src_id(cache: read cache, id: src, k: idx))
+            }
+        }
+        return false
+    }
+    if op == BUFFER { return true }
+    if op == SLICE { return true }
+    if op == PARAM { return true }
+    return false
+}
+
+fn uop_contiguous(cache: mut UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == CONTIGUOUS { return id }
+    if String.len(value: read uop_device_key(cache: read cache, id: id)) == 0 { return id }
+    if uop_has_buffer_identity(cache: read cache, id: id) { return id }
+    return mk_contiguous(cache: mut cache, x: id)
+}
+
+fn uop_bufferize(cache: mut UOpCache, id: Int) -> Int {
+    local ranges = List.new<Int>()
+    let opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: false)
+    return mk_stage(cache: mut cache, x: id, ranges: read ranges, opts: read opts)
+}
+
+fn uop_as_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: id)
+    local out = List.new<Int>()
+    if op == CONST {
+        local ints = node_argints(cache: read cache, id: id)
+        if List.len<Int>(list: read ints) > 0 { return take ints }
+        if node_is_const_int(cache: read cache, id: id) {
+            let dt = node_dtype(cache: read cache, id: id)
+            let mut i = 0
+            while i < dt.count {
+                List.push<Int>(list: mut out, value: read node_const_int(cache: read cache, id: id))
+                i = i + 1
+            }
+            return take out
+        }
+    }
+    if op == STACK {
+        let mut j = 0
+        while j < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            if node_is_const_int(cache: read cache, id: child) {
+                List.push<Int>(list: mut out, value: read node_const_int(cache: read cache, id: child))
+            }
+            j = j + 1
+        }
+        return take out
+    }
+    return take out
+}
+
+fn uop_movement_arg(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: id)
+    local out = List.new<Int>()
+    if op == RESHAPE {
+        return node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+    }
+    if op == EXPAND {
+        return node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+    }
+    if op == PERMUTE { return node_argints(cache: read cache, id: id) }
+    if op == FLIP { return node_argints(cache: read cache, id: id) }
+    if op == PAD {
+        local before = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        local after = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+        let mut i = 0
+        while i < List.len<Int>(list: read before) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read before, index: i))
+            i = i + 1
+        }
+        let mut j = 0
+        while j < List.len<Int>(list: read after) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read after, index: j))
+            j = j + 1
+        }
+        return take out
+    }
+    if op == SHRINK {
+        local starts = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        local ends = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+        let mut a = 0
+        while a < List.len<Int>(list: read starts) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read starts, index: a))
+            a = a + 1
+        }
+        let mut b = 0
+        while b < List.len<Int>(list: read ends) {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read ends, index: b))
+            b = b + 1
+        }
+        return take out
+    }
+    return take out
+}
+
+fn uop_key_string(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    let mut s = String.concat(left: read ops_name(op: read op), right: read "{")
+    s = String.concat(left: read s, right: read dt.name)
+    s = String.concat(left: read s, right: read ",")
+    s = String.concat(left: read s, right: read uop_arg_to_string(arg: read arg))
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        s = String.concat(left: read s, right: read ",")
+        s = String.concat(left: read s, right: read uop_key_string(cache: read cache, id: child))
+        i = i + 1
+    }
+    return String.concat(left: read s, right: read "}")
+}
+
+fn uop_render(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == CONST {
+        if node_is_const_int(cache: read cache, id: id) {
+            return Int.to_string(value: read node_const_int(cache: read cache, id: id))
+        }
+        return "CONST"
+    }
+    if op == SPECIAL {
+        return String.concat(left: read "s", right: read Int.to_string(value: read id))
+    }
+    if node_num_src(cache: read cache, id: id) == 0 {
+        return ops_name(op: read op)
+    }
+    if node_num_src(cache: read cache, id: id) == 1 {
+        let c0 = node_src_id(cache: read cache, id: id, k: 0)
+        let inner = uop_render(cache: read cache, id: c0)
+        let mut s = String.concat(left: read ops_name(op: read op), right: read "(")
+        s = String.concat(left: read s, right: read inner)
+        return String.concat(left: read s, right: read ")")
+    }
+    if node_num_src(cache: read cache, id: id) == 2 {
+        let c0 = node_src_id(cache: read cache, id: id, k: 0)
+        let c1 = node_src_id(cache: read cache, id: id, k: 1)
+        let l = uop_render(cache: read cache, id: c0)
+        let r = uop_render(cache: read cache, id: c1)
+        let mut s = String.concat(left: read "(", right: read l)
+        if op == ADD { s = String.concat(left: read s, right: read " + ") }
+        if op == MUL { s = String.concat(left: read s, right: read " * ") }
+        if op == SUB { s = String.concat(left: read s, right: read " - ") }
+        if op == MAX { s = String.concat(left: read s, right: read " max ") }
+        if op == CMPLT { s = String.concat(left: read s, right: read " < ") }
+        if op == ADD { } else {
+            if op == MUL { } else {
+                if op == SUB { } else {
+                    if op == MAX { } else {
+                        if op == CMPLT { } else {
+                            s = String.concat(left: read s, right: read " , ")
+                        }
+                    }
+                }
+            }
+        }
+        s = String.concat(left: read s, right: read r)
+        return String.concat(left: read s, right: read ")")
+    }
+    let mut out = String.concat(left: read ops_name(op: read op), right: read "[")
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        out = String.concat(left: read out, right: read uop_render(cache: read cache, id: child))
+        if i < node_num_src(cache: read cache, id: id) - 1 { out = String.concat(left: read out, right: read ",") }
+        i = i + 1
+    }
+    return String.concat(left: read out, right: read "]")
+}

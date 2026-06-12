@@ -49,6 +49,10 @@ mc_rewrite = PatternMatcher([
   # Lower to a pure helper call (a call IS an expression). Helper emitted by render_kernel.
   (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"select_{ctx.render_dtype(x.dtype)}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
 
+  # Modern-C has a first-class bitcast intrinsic. Do not inherit Clang's
+  # __builtin_bit_cast or C-style cast wrappers for BITCAST nodes.
+  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"bitcast<{ctx.render_dtype(x.dtype)}>({ctx[x.src[0]]})"),
+
   # MC rejects negative float literals and `a + -c`. tinygrad lowers `x - c` to `x + (-c)`,
   # so rewrite ADD-with-negative-float-const back into subtraction by a positive literal.
   (UPat(Ops.ADD, src=(UPat.var("a"), UPat(Ops.CONST, dtype=dtypes.float, name="c"))),

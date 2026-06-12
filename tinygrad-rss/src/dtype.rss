@@ -1,6 +1,10 @@
-// 1:1 port of tinygrad/dtype.py — core DType record, the scalar dtype registry, and
-// the dtypes predicates. Vectorized/Ptr/Image dtypes are added when codegen needs them.
-// fmt None in tinygrad is represented here as the empty string "".
+// 1:1-oriented port of tinygrad/dtype.py.
+//
+// Covers the scalar dtype registry, fp8 variants, vector dtypes, pointer dtypes,
+// dtype predicates, promotion lattice, least_upper_dtype, can_lossless_cast, and
+// sum_acc_dtype. fmt None is represented by the empty string. Vector scalar()
+// identity is represented by scalar_name: "" means scalar self, otherwise the
+// scalar dtype's C name.
 features: local
 
 struct DType derives(Clone, Eq) {
@@ -9,72 +13,386 @@ struct DType derives(Clone, Eq) {
     name: String,
     fmt: String,
     count: Int,
+    scalar_name: String,
 }
 
-// (self.bitsize + 7) // 8
+struct PtrDType derives(Clone) {
+    base: DType,
+    size: Int,
+    local: Bool,
+}
+
+fn mk_dtype(priority: Int, bitsize: Int, name: read String, fmt: read String) -> fresh DType {
+    return DType(priority: priority, bitsize: bitsize, name: String.copy(value: read name),
+                 fmt: String.copy(value: read fmt), count: 1, scalar_name: "")
+}
+
+// DType.itemsize: tinygrad computes bytes from total bitsize. Vectors multiply
+// bitsize when created, so bool.vec(4) has bitsize=4 and itemsize=1.
 fn dtype_itemsize(d: read DType) -> Int {
     return (d.bitsize + 7) / 8
 }
 
-// scalar(): self._scalar if set else self.  For count==1 scalar dtypes this is self.
-fn dtype_scalar(d: read DType) -> fresh DType {
-    return DType(priority: d.priority, bitsize: d.bitsize, name: String.copy(value: read d.name),
-                 fmt: String.copy(value: read d.fmt), count: d.count)
+fn DType.itemsize(self: read DType) -> Int {
+    return dtype_itemsize(d: read self)
 }
 
-// ---- the scalar dtype registry (dtypes.*) ----
-fn dt_void()    -> fresh DType { return DType(priority: -1, bitsize: 0,   name: "void",            fmt: "",  count: 1) }
-fn dt_weakint() -> fresh DType { return DType(priority: 0,  bitsize: 800, name: "weakint",         fmt: "",  count: 1) }
-fn dt_bool()    -> fresh DType { return DType(priority: 0,  bitsize: 1,   name: "bool",            fmt: "?", count: 1) }
-fn dt_int8()    -> fresh DType { return DType(priority: 1,  bitsize: 8,   name: "signed char",     fmt: "b", count: 1) }
-fn dt_uint8()   -> fresh DType { return DType(priority: 2,  bitsize: 8,   name: "unsigned char",   fmt: "B", count: 1) }
-fn dt_int16()   -> fresh DType { return DType(priority: 3,  bitsize: 16,  name: "short",           fmt: "h", count: 1) }
-fn dt_uint16()  -> fresh DType { return DType(priority: 4,  bitsize: 16,  name: "unsigned short",  fmt: "H", count: 1) }
-fn dt_int32()   -> fresh DType { return DType(priority: 5,  bitsize: 32,  name: "int",             fmt: "i", count: 1) }
-fn dt_uint32()  -> fresh DType { return DType(priority: 6,  bitsize: 32,  name: "unsigned int",    fmt: "I", count: 1) }
-fn dt_int64()   -> fresh DType { return DType(priority: 7,  bitsize: 64,  name: "long",            fmt: "q", count: 1) }
-fn dt_uint64()  -> fresh DType { return DType(priority: 8,  bitsize: 64,  name: "unsigned long",   fmt: "Q", count: 1) }
-fn dt_fp8e4m3() -> fresh DType { return DType(priority: 9,  bitsize: 8,   name: "float8_e4m3",     fmt: "",  count: 1) }
-fn dt_fp8e5m2() -> fresh DType { return DType(priority: 10, bitsize: 8,   name: "float8_e5m2",     fmt: "",  count: 1) }
-fn dt_float16() -> fresh DType { return DType(priority: 11, bitsize: 16,  name: "half",            fmt: "e", count: 1) }
-fn dt_bfloat16()-> fresh DType { return DType(priority: 12, bitsize: 16,  name: "__bf16",          fmt: "",  count: 1) }
-fn dt_float32() -> fresh DType { return DType(priority: 13, bitsize: 32,  name: "float",           fmt: "f", count: 1) }
-fn dt_float64() -> fresh DType { return DType(priority: 14, bitsize: 64,  name: "double",          fmt: "d", count: 1) }
+fn ptr_itemsize(p: read PtrDType) -> Int {
+    return 8
+}
+
+fn PtrDType.itemsize(self: read PtrDType) -> Int {
+    return 8
+}
+
+// ---- scalar dtype registry (tinygrad/dtype.py dtypes namespace) ----
+fn dt_void()         -> fresh DType { return mk_dtype(priority: -1, bitsize: 0,   name: read "void",            fmt: read "") }
+fn dt_weakint()      -> fresh DType { return mk_dtype(priority: 0,  bitsize: 800, name: read "weakint",         fmt: read "") }
+fn dt_bool()         -> fresh DType { return mk_dtype(priority: 0,  bitsize: 1,   name: read "bool",            fmt: read "?") }
+fn dt_int8()         -> fresh DType { return mk_dtype(priority: 1,  bitsize: 8,   name: read "signed char",     fmt: read "b") }
+fn dt_uint8()        -> fresh DType { return mk_dtype(priority: 2,  bitsize: 8,   name: read "unsigned char",   fmt: read "B") }
+fn dt_int16()        -> fresh DType { return mk_dtype(priority: 3,  bitsize: 16,  name: read "short",           fmt: read "h") }
+fn dt_uint16()       -> fresh DType { return mk_dtype(priority: 4,  bitsize: 16,  name: read "unsigned short",  fmt: read "H") }
+fn dt_int32()        -> fresh DType { return mk_dtype(priority: 5,  bitsize: 32,  name: read "int",             fmt: read "i") }
+fn dt_uint32()       -> fresh DType { return mk_dtype(priority: 6,  bitsize: 32,  name: read "unsigned int",    fmt: read "I") }
+fn dt_int64()        -> fresh DType { return mk_dtype(priority: 7,  bitsize: 64,  name: read "long",            fmt: read "q") }
+fn dt_uint64()       -> fresh DType { return mk_dtype(priority: 8,  bitsize: 64,  name: read "unsigned long",   fmt: read "Q") }
+fn dt_fp8e4m3()      -> fresh DType { return mk_dtype(priority: 9,  bitsize: 8,   name: read "float8_e4m3",     fmt: read "") }
+fn dt_fp8e5m2()      -> fresh DType { return mk_dtype(priority: 10, bitsize: 8,   name: read "float8_e5m2",     fmt: read "") }
+fn dt_fp8e4m3fnuz()  -> fresh DType { return mk_dtype(priority: 9,  bitsize: 8,   name: read "float8_e4m3fnuz", fmt: read "") }
+fn dt_fp8e5m2fnuz()  -> fresh DType { return mk_dtype(priority: 10, bitsize: 8,   name: read "float8_e5m2fnuz", fmt: read "") }
+fn dt_float16()      -> fresh DType { return mk_dtype(priority: 11, bitsize: 16,  name: read "half",            fmt: read "e") }
+fn dt_bfloat16()     -> fresh DType { return mk_dtype(priority: 12, bitsize: 16,  name: read "__bf16",          fmt: read "") }
+fn dt_float32()      -> fresh DType { return mk_dtype(priority: 13, bitsize: 32,  name: read "float",           fmt: read "f") }
+fn dt_float64()      -> fresh DType { return mk_dtype(priority: 14, bitsize: 64,  name: read "double",          fmt: read "d") }
 
 fn dt_default_float() -> fresh DType { return dt_float32() }
 fn dt_default_int()   -> fresh DType { return dt_int32() }
 
-// ---- dtypes predicates (operate on scalar().name) ----
-fn dtype_is_float(d: read DType) -> Bool {
-    if d.name == "float" { return true }
-    if d.name == "double" { return true }
-    if d.name == "half" { return true }
-    if d.name == "__bf16" { return true }
-    if d.name == "float8_e4m3" { return true }
-    if d.name == "float8_e5m2" { return true }
-    if d.name == "float8_e4m3fnuz" { return true }
-    if d.name == "float8_e5m2fnuz" { return true }
+fn dtype_by_name(n: read String) -> fresh DType {
+    if n == "void" { return dt_void() }
+    if n == "weakint" { return dt_weakint() }
+    if n == "bool" { return dt_bool() }
+    if n == "signed char" { return dt_int8() }
+    if n == "unsigned char" { return dt_uint8() }
+    if n == "short" { return dt_int16() }
+    if n == "unsigned short" { return dt_uint16() }
+    if n == "int" { return dt_int32() }
+    if n == "unsigned int" { return dt_uint32() }
+    if n == "long" { return dt_int64() }
+    if n == "unsigned long" { return dt_uint64() }
+    if n == "float8_e4m3" { return dt_fp8e4m3() }
+    if n == "float8_e5m2" { return dt_fp8e5m2() }
+    if n == "float8_e4m3fnuz" { return dt_fp8e4m3fnuz() }
+    if n == "float8_e5m2fnuz" { return dt_fp8e5m2fnuz() }
+    if n == "half" { return dt_float16() }
+    if n == "__bf16" { return dt_bfloat16() }
+    if n == "float" { return dt_float32() }
+    return dt_float64()
+}
+
+fn dtype_scalar(d: read DType) -> fresh DType {
+    if d.scalar_name == "" {
+        return DType(priority: d.priority, bitsize: d.bitsize, name: String.copy(value: read d.name),
+                     fmt: String.copy(value: read d.fmt), count: d.count,
+                     scalar_name: String.copy(value: read d.scalar_name))
+    }
+    return dtype_by_name(n: read d.scalar_name)
+}
+
+fn dtype_copy(d: read DType) -> fresh DType {
+    return DType(priority: d.priority, bitsize: d.bitsize, name: String.copy(value: read d.name),
+                 fmt: String.copy(value: read d.fmt), count: d.count,
+                 scalar_name: String.copy(value: read d.scalar_name))
+}
+
+fn inverse_dtype_name(n: read String) -> fresh String {
+    if n == "void" { return String.copy(value: read "void") }
+    if n == "weakint" { return String.copy(value: read "weakint") }
+    if n == "bool" { return String.copy(value: read "bool") }
+    if n == "signed char" { return String.copy(value: read "char") }
+    if n == "unsigned char" { return String.copy(value: read "uchar") }
+    if n == "short" { return String.copy(value: read "short") }
+    if n == "unsigned short" { return String.copy(value: read "ushort") }
+    if n == "int" { return String.copy(value: read "int") }
+    if n == "unsigned int" { return String.copy(value: read "uint") }
+    if n == "long" { return String.copy(value: read "long") }
+    if n == "unsigned long" { return String.copy(value: read "ulong") }
+    if n == "float8_e4m3" { return String.copy(value: read "fp8e4m3") }
+    if n == "float8_e5m2" { return String.copy(value: read "fp8e5m2") }
+    if n == "float8_e4m3fnuz" { return String.copy(value: read "fp8e4m3fnuz") }
+    if n == "float8_e5m2fnuz" { return String.copy(value: read "fp8e5m2fnuz") }
+    if n == "half" { return String.copy(value: read "half") }
+    if n == "__bf16" { return String.copy(value: read "bfloat16") }
+    if n == "float" { return String.copy(value: read "float") }
+    return String.copy(value: read "double")
+}
+
+fn dtype_vec(base: read DType, sz: Int) -> fresh DType {
+    if sz == 1 { return dtype_scalar(d: read base) }
+    if base.name == "void" { return dt_void() }
+    let scalar = dtype_scalar(d: read base)
+    let inv = inverse_dtype_name(n: read scalar.name)
+    local nm = String.concat(left: read inv, right: read Int.to_string(value: read sz))
+    return DType(priority: scalar.priority, bitsize: scalar.bitsize * sz, name: take nm,
+                 fmt: "", count: sz, scalar_name: String.copy(value: read scalar.name))
+}
+
+fn dtype_ptr(base: read DType, size: Int, local: Bool) -> fresh PtrDType {
+    return PtrDType(base: dtype_scalar(d: read base), size: size, local: local)
+}
+
+fn d_vec(base: read DType, sz: Int) -> fresh DType {
+    return dtype_vec(base: read base, sz: sz)
+}
+
+fn d_ptr(base: read DType, size: Int, local: Bool) -> fresh PtrDType {
+    return dtype_ptr(base: read base, size: size, local: local)
+}
+
+// ---- predicates (operate on scalar dtype, like tinygrad dtypes.is_*) ----
+fn dtype_is_unsigned(d: read DType) -> Bool {
+    let s = dtype_scalar(d: read d)
+    if s.name == "unsigned char" { return true }
+    if s.name == "unsigned short" { return true }
+    if s.name == "unsigned int" { return true }
+    if s.name == "unsigned long" { return true }
     return false
 }
 
-fn dtype_is_unsigned(d: read DType) -> Bool {
-    if d.name == "unsigned char" { return true }
-    if d.name == "unsigned short" { return true }
-    if d.name == "unsigned int" { return true }
-    if d.name == "unsigned long" { return true }
+fn dtype_is_float(d: read DType) -> Bool {
+    let s = dtype_scalar(d: read d)
+    if s.name == "float" { return true }
+    if s.name == "double" { return true }
+    if s.name == "half" { return true }
+    if s.name == "__bf16" { return true }
+    if s.name == "float8_e4m3" { return true }
+    if s.name == "float8_e5m2" { return true }
+    if s.name == "float8_e4m3fnuz" { return true }
+    if s.name == "float8_e5m2fnuz" { return true }
     return false
 }
 
 fn dtype_is_int(d: read DType) -> Bool {
-    if d.name == "signed char" { return true }
-    if d.name == "short" { return true }
-    if d.name == "int" { return true }
-    if d.name == "long" { return true }
-    if d.name == "weakint" { return true }
-    if dtype_is_unsigned(d: read d) { return true }
+    let s = dtype_scalar(d: read d)
+    if dtype_is_unsigned(d: read s) { return true }
+    if s.name == "signed char" { return true }
+    if s.name == "short" { return true }
+    if s.name == "int" { return true }
+    if s.name == "long" { return true }
+    if s.name == "weakint" { return true }
     return false
 }
 
 fn dtype_is_bool(d: read DType) -> Bool {
-    return d.name == "bool"
+    let s = dtype_scalar(d: read d)
+    return s.name == "bool"
+}
+
+// Compatibility aliases used by port-rss slices and planned integration work.
+fn dtypes_is_float(x: read DType) -> Bool { return dtype_is_float(d: read x) }
+fn dtypes_is_unsigned(x: read DType) -> Bool { return dtype_is_unsigned(d: read x) }
+fn dtypes_is_int(x: read DType) -> Bool { return dtype_is_int(d: read x) }
+fn dtypes_is_bool(x: read DType) -> Bool { return dtype_is_bool(d: read x) }
+
+fn is_fp8_name(n: read String) -> Bool {
+    if n == "float8_e4m3" { return true }
+    if n == "float8_e5m2" { return true }
+    if n == "float8_e4m3fnuz" { return true }
+    if n == "float8_e5m2fnuz" { return true }
+    return false
+}
+
+fn contains_name(l: read List<String>, n: read String) -> Bool {
+    let mut i = 0
+    let m = List.len(list: read l)
+    while i < m {
+        let e = List.get(list: read l, index: i)
+        if e == n { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn imm_parents(n: read String, out: mut List<String>) -> Unit {
+    if n == "bool" { List.push(list: mut out, value: read "weakint") }
+    if n == "weakint" {
+        List.push(list: mut out, value: read "signed char")
+        List.push(list: mut out, value: read "unsigned char")
+    }
+    if n == "signed char" { List.push(list: mut out, value: read "short") }
+    if n == "short" { List.push(list: mut out, value: read "int") }
+    if n == "int" { List.push(list: mut out, value: read "long") }
+    if n == "long" { List.push(list: mut out, value: read "unsigned long") }
+    if n == "unsigned char" {
+        List.push(list: mut out, value: read "short")
+        List.push(list: mut out, value: read "unsigned short")
+    }
+    if n == "unsigned short" {
+        List.push(list: mut out, value: read "int")
+        List.push(list: mut out, value: read "unsigned int")
+    }
+    if n == "unsigned int" {
+        List.push(list: mut out, value: read "long")
+        List.push(list: mut out, value: read "unsigned long")
+    }
+    if n == "unsigned long" {
+        List.push(list: mut out, value: read "float8_e4m3")
+        List.push(list: mut out, value: read "float8_e5m2")
+        List.push(list: mut out, value: read "float8_e4m3fnuz")
+        List.push(list: mut out, value: read "float8_e5m2fnuz")
+    }
+    if n == "float8_e4m3" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e5m2" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e4m3fnuz" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "float8_e5m2fnuz" {
+        List.push(list: mut out, value: read "half")
+        List.push(list: mut out, value: read "__bf16")
+    }
+    if n == "half" { List.push(list: mut out, value: read "float") }
+    if n == "__bf16" { List.push(list: mut out, value: read "float") }
+    if n == "float" { List.push(list: mut out, value: read "double") }
+    return Unit
+}
+
+fn rec_parents(n: read String, out: mut List<String>) -> Unit {
+    if contains_name(l: read out, n: read n) { return Unit }
+    List.push(list: mut out, value: read n)
+    let ps = List.new<String>()
+    imm_parents(n: read n, out: mut ps)
+    let mut i = 0
+    let m = List.len(list: read ps)
+    while i < m {
+        let p = List.get(list: read ps, index: i)
+        rec_parents(n: read p, out: mut out)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn least_upper_dtype(a: read DType, b: read DType) -> fresh DType {
+    let sa = dtype_scalar(d: read a)
+    let sb = dtype_scalar(d: read b)
+    let ra = List.new<String>()
+    rec_parents(n: read sa.name, out: mut ra)
+    let rb = List.new<String>()
+    rec_parents(n: read sb.name, out: mut rb)
+    let mut best = "double"
+    let mut have = false
+    let mut bestp = 0
+    let mut bestb = 0
+    let mut i = 0
+    let m = List.len(list: read ra)
+    while i < m {
+        let cand = List.get(list: read ra, index: i)
+        if contains_name(l: read rb, n: read cand) {
+            let cd = dtype_by_name(n: read cand)
+            let mut better = false
+            if have == false { better = true }
+            if cd.priority < bestp { better = true }
+            if cd.priority == bestp {
+                if cd.bitsize < bestb { better = true }
+            }
+            if better {
+                best = cand
+                bestp = cd.priority
+                bestb = cd.bitsize
+                have = true
+            }
+        }
+        i = i + 1
+    }
+    return dtype_by_name(n: read best)
+}
+
+fn least_upper_float(dt: read DType) -> fresh DType {
+    if dtype_is_float(d: read dt) { return dtype_scalar(d: read dt) }
+    return least_upper_dtype(a: read dt, b: read dt_default_float())
+}
+
+fn can_lossless_cast(dt0: read DType, dt1: read DType) -> Bool {
+    let a = dtype_scalar(d: read dt0)
+    let b = dtype_scalar(d: read dt1)
+    if a.name == b.name { return true }
+    if a.name == "bool" { return true }
+    if b.name == "weakint" { return dtype_is_int(d: read a) }
+    if b.name == "double" {
+        if a.name == "float" { return true }
+        if a.name == "half" { return true }
+        if a.name == "__bf16" { return true }
+        if is_fp8_name(n: read a.name) { return true }
+        if a.name == "unsigned int" { return true }
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        if a.name == "int" { return true }
+        if a.name == "short" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    if b.name == "float" {
+        if a.name == "half" { return true }
+        if a.name == "__bf16" { return true }
+        if is_fp8_name(n: read a.name) { return true }
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        if a.name == "short" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    if b.name == "half" {
+        if is_fp8_name(n: read a.name) { return true }
+        if a.name == "unsigned char" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    if b.name == "unsigned long" {
+        if a.name == "unsigned int" { return true }
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        return false
+    }
+    if b.name == "unsigned int" {
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        return false
+    }
+    if b.name == "unsigned short" { return a.name == "unsigned char" }
+    if b.name == "long" {
+        if a.name == "unsigned int" { return true }
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        if a.name == "int" { return true }
+        if a.name == "short" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    if b.name == "int" {
+        if a.name == "unsigned short" { return true }
+        if a.name == "unsigned char" { return true }
+        if a.name == "short" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    if b.name == "short" {
+        if a.name == "unsigned char" { return true }
+        if a.name == "signed char" { return true }
+        return false
+    }
+    return false
+}
+
+fn sum_acc_dtype(dt: read DType) -> fresh DType {
+    if dtype_is_unsigned(d: read dt) { return least_upper_dtype(a: read dt, b: read dt_uint32()) }
+    if dtype_is_int(d: read dt) { return least_upper_dtype(a: read dt, b: read dt_int32()) }
+    if dtype_is_bool(d: read dt) { return least_upper_dtype(a: read dt, b: read dt_int32()) }
+    return least_upper_dtype(a: read dt, b: read dt_float32())
 }

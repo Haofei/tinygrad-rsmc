@@ -1,0 +1,359 @@
+// First integrated slice of tinygrad/gradient.py over the real interned UOp DAG.
+//
+// This is target-specific reverse-mode autodiff: given a scalar UOp graph and a
+// target node id, build the gradient UOp graph d(root)/d(target). It ports the
+// core VJP rules for ADD/SUB/MUL/FDIV and leaves all other nodes as constants
+// unless they are the target itself.
+features: local
+
+fn grad_const_zero(cache: mut UOpCache, dt: read DType) -> Int {
+    if dtype_is_float(d: read dt) {
+        return mk_const_float(cache: mut cache, dt: read dt, v: 0.0)
+    }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 0)
+}
+
+fn grad_const_one(cache: mut UOpCache, dt: read DType) -> Int {
+    if dtype_is_float(d: read dt) {
+        return mk_const_float(cache: mut cache, dt: read dt, v: 1.0)
+    }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 1)
+}
+
+fn grad_const_float(cache: mut UOpCache, dt: read DType, v: Float) -> Int {
+    if dtype_is_float(d: read dt) {
+        return mk_const_float(cache: mut cache, dt: read dt, v: v)
+    }
+    return mk_const_int(cache: mut cache, dt: read dt, v: Math.floor(value: v))
+}
+
+fn grad_const_float_like(cache: mut UOpCache, like: Int, v: Float) -> Int {
+    let dt = node_dtype(cache: read cache, id: like)
+    let c = grad_const_float(cache: mut cache, dt: read dt, v: v)
+    local sh = uop_shape(cache: read cache, id: like)
+    if List.len<Int>(list: read sh) == 0 { return c }
+    return mk_expand(cache: mut cache, x: c, new_shape: read sh)
+}
+
+fn grad_const_zero_like(cache: mut UOpCache, like: Int) -> Int {
+    return grad_const_float_like(cache: mut cache, like: like, v: 0.0)
+}
+
+fn grad_is_zero_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_is_const(cache: read cache, id: id) == false { return false }
+    if node_is_const_int(cache: read cache, id: id) {
+        return node_const_int(cache: read cache, id: id) == 0
+    }
+    return node_const_float(cache: read cache, id: id) == 0.0
+}
+
+fn grad_neg(cache: mut UOpCache, g: Int) -> Int {
+    if grad_is_zero_const(cache: read cache, id: g) { return g }
+    let dt = node_dtype(cache: read cache, id: g)
+    return mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: g)
+}
+
+fn grad_add(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    if grad_is_zero_const(cache: read cache, id: a) { return b }
+    if grad_is_zero_const(cache: read cache, id: b) { return a }
+    let dt = node_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: a, y: b)
+}
+
+fn grad_sub(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    if grad_is_zero_const(cache: read cache, id: b) { return a }
+    if grad_is_zero_const(cache: read cache, id: a) { return grad_neg(cache: mut cache, g: b) }
+    let dt = node_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a, y: b)
+}
+
+fn grad_mul(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: a, y: b)
+}
+
+fn grad_div(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: FDIV, dt: read dt, x: a, y: b)
+}
+
+fn grad_unary(cache: mut UOpCache, op: Ops, x: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    return mk_alu1(cache: mut cache, op: op, dt: read dt, x: x)
+}
+
+fn grad_binary(cache: mut UOpCache, op: Ops, a: Int, b: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: a)
+    return mk_alu2(cache: mut cache, op: op, dt: read dt, x: a, y: b)
+}
+
+fn grad_compare(cache: mut UOpCache, op: Ops, a: Int, b: Int) -> Int {
+    let dt = dt_bool()
+    return mk_alu2(cache: mut cache, op: op, dt: read dt, x: a, y: b)
+}
+
+fn grad_inverse_perm(perm: read List<Int>) -> fresh List<Int> {
+    local inv = List.new<Int>()
+    let n = List.len<Int>(list: read perm)
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut inv, value: read 0)
+        i = i + 1
+    }
+    let mut j = 0
+    while j < n {
+        let p = List.get<Int>(list: read perm, index: j)
+        List.set<Int>(list: mut inv, index: p, value: read j)
+        j = j + 1
+    }
+    return take inv
+}
+
+fn grad_expand_backward(cache: mut UOpCache, g: Int, x: Int, expanded: Int) -> Int {
+    local xshape = uop_shape(cache: read cache, id: x)
+    local yshape = uop_shape(cache: read cache, id: expanded)
+    local axes = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read xshape) {
+        let xd = List.get<Int>(list: read xshape, index: i)
+        let yd = List.get<Int>(list: read yshape, index: i)
+        if xd == 1 {
+            if yd != 1 { List.push<Int>(list: mut axes, value: read i) }
+        }
+        i = i + 1
+    }
+    let mut adj = g
+    if List.len<Int>(list: read axes) > 0 {
+        adj = mk_sum(cache: mut cache, x: g, axes: read axes)
+    }
+    return mk_reshape(cache: mut cache, x: adj, new_shape: read xshape)
+}
+
+fn grad_sub_lists(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        let av = List.get<Int>(list: read a, index: i)
+        let bv = List.get<Int>(list: read b, index: i)
+        let v = av - bv
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn grad_add_lists(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        let av = List.get<Int>(list: read a, index: i)
+        let bv = List.get<Int>(list: read b, index: i)
+        let v = av + bv
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn grad_wrt_inner(cache: mut UOpCache, node: Int, g: Int, target: Int) -> Int {
+    if node == target { return g }
+    let dt = node_dtype(cache: read cache, id: node)
+    if node_is_const(cache: read cache, id: node) { return grad_const_zero(cache: mut cache, dt: read dt) }
+    let op = node_op(cache: read cache, id: node)
+    if node_num_src(cache: read cache, id: node) == 0 { return grad_const_zero(cache: mut cache, dt: read dt) }
+
+    if op == ADD {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: g, target: target)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: g, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == SUB {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: g, target: target)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: g, target: target)
+        return grad_sub(cache: mut cache, a: ga, b: gb)
+    }
+    if op == MUL {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let gb_adj = grad_mul(cache: mut cache, a: g, b: b)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: gb_adj, target: target)
+        let ga_adj = grad_mul(cache: mut cache, a: g, b: a)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: ga_adj, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == FDIV {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let adj_a = grad_div(cache: mut cache, a: g, b: b)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: adj_a, target: target)
+        let num = grad_mul(cache: mut cache, a: g, b: a)
+        let den = grad_mul(cache: mut cache, a: b, b: b)
+        let frac = grad_div(cache: mut cache, a: num, b: den)
+        let adj_b = grad_neg(cache: mut cache, g: frac)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: adj_b, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == CAST {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let xdt = node_dtype(cache: read cache, id: x)
+        let adj = mk_cast(cache: mut cache, x: g, dt: read xdt)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == MAX {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let dt = node_dtype(cache: read cache, id: node)
+        let half = grad_const_float_like(cache: mut cache, like: g, v: 0.5)
+        let half_g = grad_mul(cache: mut cache, a: g, b: half)
+        let zero = grad_const_zero_like(cache: mut cache, like: g)
+        let eq = grad_compare(cache: mut cache, op: CMPEQ, a: a, b: b)
+        let tie = mk_where(cache: mut cache, dt: read dt, cond: eq, tval: half_g, fval: zero)
+        let a_gt_b = grad_compare(cache: mut cache, op: CMPLT, a: b, b: a)
+        let b_gt_a = grad_compare(cache: mut cache, op: CMPLT, a: a, b: b)
+        let adj_a = mk_where(cache: mut cache, dt: read dt, cond: a_gt_b, tval: g, fval: tie)
+        let adj_b = mk_where(cache: mut cache, dt: read dt, cond: b_gt_a, tval: g, fval: tie)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: adj_a, target: target)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: adj_b, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == NEG {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let adj = grad_neg(cache: mut cache, g: g)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == RECIPROCAL {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let xx = grad_mul(cache: mut cache, a: x, b: x)
+        let frac = grad_div(cache: mut cache, a: g, b: xx)
+        let adj = grad_neg(cache: mut cache, g: frac)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == SQRT {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let two = grad_const_float_like(cache: mut cache, like: node, v: 2.0)
+        let sx = grad_unary(cache: mut cache, op: SQRT, x: x)
+        let den = grad_mul(cache: mut cache, a: two, b: sx)
+        let adj = grad_div(cache: mut cache, a: g, b: den)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == EXP2 {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let ln2 = grad_const_float_like(cache: mut cache, like: node, v: 0.6931471805599453)
+        let gx = grad_mul(cache: mut cache, a: g, b: node)
+        let adj = grad_mul(cache: mut cache, a: gx, b: ln2)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == LOG2 {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let ln2 = grad_const_float_like(cache: mut cache, like: x, v: 0.6931471805599453)
+        let den = grad_mul(cache: mut cache, a: x, b: ln2)
+        let adj = grad_div(cache: mut cache, a: g, b: den)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == SIN {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let half_pi = grad_const_float_like(cache: mut cache, like: x, v: 1.5707963267948966)
+        let xph = grad_binary(cache: mut cache, op: ADD, a: x, b: half_pi)
+        let cosx = grad_unary(cache: mut cache, op: SIN, x: xph)
+        let adj = grad_mul(cache: mut cache, a: g, b: cosx)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == TRUNC {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        return grad_const_zero_like(cache: mut cache, like: x)
+    }
+    if op == POW {
+        let a = node_src_id(cache: read cache, id: node, k: 0)
+        let b = node_src_id(cache: read cache, id: node, k: 1)
+        let one = grad_const_float_like(cache: mut cache, like: b, v: 1.0)
+        let bminus1 = grad_binary(cache: mut cache, op: SUB, a: b, b: one)
+        let apow = grad_binary(cache: mut cache, op: POW, a: a, b: bminus1)
+        let gb_scale = grad_mul(cache: mut cache, a: b, b: apow)
+        let adj_a = grad_mul(cache: mut cache, a: g, b: gb_scale)
+        let ga = grad_wrt_inner(cache: mut cache, node: a, g: adj_a, target: target)
+        let log2a = grad_unary(cache: mut cache, op: LOG2, x: a)
+        let ln2 = grad_const_float_like(cache: mut cache, like: log2a, v: 0.6931471805599453)
+        let loga = grad_mul(cache: mut cache, a: log2a, b: ln2)
+        let pow_log = grad_mul(cache: mut cache, a: node, b: loga)
+        let adj_b = grad_mul(cache: mut cache, a: g, b: pow_log)
+        let gb = grad_wrt_inner(cache: mut cache, node: b, g: adj_b, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == WHERE {
+        let cond = node_src_id(cache: read cache, id: node, k: 0)
+        let tval = node_src_id(cache: read cache, id: node, k: 1)
+        let fval = node_src_id(cache: read cache, id: node, k: 2)
+        let dt = node_dtype(cache: read cache, id: node)
+        let zero = grad_const_zero_like(cache: mut cache, like: g)
+        let gt = mk_where(cache: mut cache, dt: read dt, cond: cond, tval: g, fval: zero)
+        let gf = mk_where(cache: mut cache, dt: read dt, cond: cond, tval: zero, fval: g)
+        let ga = grad_wrt_inner(cache: mut cache, node: tval, g: gt, target: target)
+        let gb = grad_wrt_inner(cache: mut cache, node: fval, g: gf, target: target)
+        return grad_add(cache: mut cache, a: ga, b: gb)
+    }
+    if op == CMPLT { return grad_const_zero_like(cache: mut cache, like: node) }
+    if op == CMPNE { return grad_const_zero_like(cache: mut cache, like: node) }
+    if op == CMPEQ { return grad_const_zero_like(cache: mut cache, like: node) }
+    if op == RESHAPE {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        local xshape = uop_shape(cache: read cache, id: x)
+        let adj = mk_reshape(cache: mut cache, x: g, new_shape: read xshape)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == EXPAND {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let adj = grad_expand_backward(cache: mut cache, g: g, x: x, expanded: node)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == PERMUTE {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        local perm = node_argints(cache: read cache, id: node)
+        local inv = grad_inverse_perm(perm: read perm)
+        let adj = mk_permute(cache: mut cache, x: g, perm: read inv)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == FLIP {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        local axes = node_argints(cache: read cache, id: node)
+        let adj = mk_flip(cache: mut cache, x: g, axes: read axes)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == PAD {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let bid = node_src_id(cache: read cache, id: node, k: 1)
+        local before = node_argints(cache: read cache, id: bid)
+        local xshape = uop_shape(cache: read cache, id: x)
+        local ends = grad_add_lists(a: read before, b: read xshape)
+        let adj = mk_shrink(cache: mut cache, x: g, starts: read before, ends: read ends)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == SHRINK {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        let sid = node_src_id(cache: read cache, id: node, k: 1)
+        let eid = node_src_id(cache: read cache, id: node, k: 2)
+        local starts = node_argints(cache: read cache, id: sid)
+        local ends = node_argints(cache: read cache, id: eid)
+        local xshape = uop_shape(cache: read cache, id: x)
+        local after = grad_sub_lists(a: read xshape, b: read ends)
+        let adj = mk_pad(cache: mut cache, x: g, before: read starts, after: read after)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    if op == REDUCE {
+        let x = node_src_id(cache: read cache, id: node, k: 0)
+        local xshape = uop_shape(cache: read cache, id: x)
+        let adj = mk_expand(cache: mut cache, x: g, new_shape: read xshape)
+        return grad_wrt_inner(cache: mut cache, node: x, g: adj, target: target)
+    }
+    return grad_const_zero(cache: mut cache, dt: read dt)
+}
+
+fn grad_wrt(cache: mut UOpCache, root: Int, target: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: root)
+    let one = grad_const_one(cache: mut cache, dt: read dt)
+    let raw = grad_wrt_inner(cache: mut cache, node: root, g: one, target: target)
+    return graph_rewrite(cache: mut cache, id: raw)
+}

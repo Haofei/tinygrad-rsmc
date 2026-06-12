@@ -1,0 +1,603 @@
+// Integrated core of tinygrad/uop/spec.py validation over interned UOp ids.
+//
+// Upstream tinygrad expresses the full verifier as PatternMatcher specs. This
+// first integrated slice validates the shared graph constructs tinygrad-rss
+// currently builds: CONST/SPECIAL, ALU dtype rules, WHERE, buffers, movement,
+// STACK/SINK, tuple/index/load-store/order nodes, and recursive source validation.
+features: local
+
+fn spec_same_dtype(cache: read UOpCache, a: Int, b: Int) -> Bool {
+    let adt = node_dtype(cache: read cache, id: a)
+    let bdt = node_dtype(cache: read cache, id: b)
+    return adt.name == bdt.name
+}
+
+fn spec_dtype_name(cache: read UOpCache, id: Int, name: read String) -> Bool {
+    let dt = node_dtype(cache: read cache, id: id)
+    return dt.name == name
+}
+
+fn spec_expected_arity(op: read Ops) -> Int {
+    if op == CONST { return 0 }
+    if op == UNIQUE { return 0 }
+    if op == LUNIQUE { return 0 }
+    if op == DEVICE { return 0 }
+    if op == DEFINE_VAR { return 0 }
+    if op == BIND { return 2 }
+    if op == SPECIAL { return 1 }
+    if op == GETADDR { return 1 }
+    if op == GETTUPLE { return 1 }
+    if op == GEP { return 1 }
+    if op == MSELECT { return 1 }
+    if op == MULTI { return 1 }
+    if op == CONTIGUOUS { return 1 }
+    if op == CONTIGUOUS_BACKWARD { return 1 }
+    if op == DETACH { return 1 }
+    if op == SLICE { return 2 }
+    if op == COPY { return 2 }
+    if op == ALLREDUCE { return 2 }
+    if op == IF { return 2 }
+    if op == ENDIF { return 1 }
+    if op == UNROLL { return 1 }
+    if op == CONTRACT { return 1 }
+    if op == CAST { return 1 }
+    if op == BITCAST { return 1 }
+    if op == RESHAPE { return 2 }
+    if op == EXPAND { return 2 }
+    if op == PERMUTE { return 1 }
+    if op == FLIP { return 1 }
+    if op == PAD { return 3 }
+    if op == SHRINK { return 3 }
+    if op == REDUCE { return 1 }
+    if op == WMMA { return 3 }
+    if op == SHAPED_WMMA { return 3 }
+    if op == WHERE { return 3 }
+    if group_binary(op: read op) { return 2 }
+    if group_unary(op: read op) { return 1 }
+    if group_ternary(op: read op) { return 3 }
+    return -1
+}
+
+fn spec_check_arity(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if op == SINK { return true }
+    if op == STACK { return true }
+    if op == MSTACK { return true }
+    if op == GROUP { return true }
+    if op == BARRIER { return true }
+    if op == TUPLE { return true }
+    if op == CUSTOM || op == CUSTOMI {
+        return true
+    }
+    if op == INS {
+        return true
+    }
+    if op == VCAT || op == PTRCAT {
+        return node_num_src(cache: read cache, id: id) > 0
+    }
+    if op == STAGE {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == CALL {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == FUNCTION {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == PROGRAM {
+        let n = node_num_src(cache: read cache, id: id)
+        return n >= 2 && n <= 5
+    }
+    if op == LINEAR {
+        return true
+    }
+    if op == SOURCE {
+        return node_num_src(cache: read cache, id: id) == 0
+    }
+    if op == BINARY {
+        return node_num_src(cache: read cache, id: id) == 0
+    }
+    if op == BUFFER {
+        let n = node_num_src(cache: read cache, id: id)
+        return n == 1 || n == 2
+    }
+    if op == CUSTOM_FUNCTION {
+        return true
+    }
+    if op == PARAM {
+        let n = node_num_src(cache: read cache, id: id)
+        return n == 0 || n == 1
+    }
+    if op == DEFINE_LOCAL {
+        let n = node_num_src(cache: read cache, id: id)
+        return n == 0 || n == 1
+    }
+    if op == DEFINE_REG {
+        let n = node_num_src(cache: read cache, id: id)
+        return n == 0 || n == 1
+    }
+    if op == RANGE {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == INDEX {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == LOAD {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == STORE {
+        let n = node_num_src(cache: read cache, id: id)
+        return n == 2 || n == 3
+    }
+    if op == WAIT {
+        return node_num_src(cache: read cache, id: id) == 2
+    }
+    if op == END {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    if op == AFTER {
+        return node_num_src(cache: read cache, id: id) >= 1
+    }
+    let exp = spec_expected_arity(op: read op)
+    if exp < 0 { return false }
+    return node_num_src(cache: read cache, id: id) == exp
+}
+
+fn spec_validate_alu(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if op == BITCAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let xdt = node_dtype(cache: read cache, id: x)
+        let dt = node_dtype(cache: read cache, id: id)
+        return DType.itemsize(self: read xdt) == DType.itemsize(self: read dt)
+    }
+    if group_unary(op: read op) {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if group_comparison(op: read op) {
+        let a = node_src_id(cache: read cache, id: id, k: 0)
+        let b = node_src_id(cache: read cache, id: id, k: 1)
+        if spec_same_dtype(cache: read cache, a: a, b: b) == false { return false }
+        return spec_dtype_name(cache: read cache, id: id, name: read "bool")
+    }
+    if group_binary(op: read op) {
+        let a = node_src_id(cache: read cache, id: id, k: 0)
+        let b = node_src_id(cache: read cache, id: id, k: 1)
+        if spec_same_dtype(cache: read cache, a: a, b: b) == false { return false }
+        if spec_same_dtype(cache: read cache, a: id, b: a) == false { return false }
+        return true
+    }
+    if op == WHERE {
+        let c = node_src_id(cache: read cache, id: id, k: 0)
+        let t = node_src_id(cache: read cache, id: id, k: 1)
+        let f = node_src_id(cache: read cache, id: id, k: 2)
+        if spec_dtype_name(cache: read cache, id: c, name: read "bool") == false { return false }
+        if spec_same_dtype(cache: read cache, a: t, b: f) == false { return false }
+        return spec_same_dtype(cache: read cache, a: id, b: t)
+    }
+    if op == MULACC {
+        let a = node_src_id(cache: read cache, id: id, k: 0)
+        let b = node_src_id(cache: read cache, id: id, k: 1)
+        let c = node_src_id(cache: read cache, id: id, k: 2)
+        if spec_same_dtype(cache: read cache, a: a, b: b) == false { return false }
+        if spec_same_dtype(cache: read cache, a: a, b: c) == false { return false }
+        return spec_same_dtype(cache: read cache, a: id, b: a)
+    }
+    return true
+}
+
+fn spec_validate_shape_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_is_const(cache: read cache, id: id) == false { return false }
+    let dims = node_argints(cache: read cache, id: id)
+    return List.len<Int>(list: read dims) > 0
+}
+
+fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
+    if spec_check_arity(cache: read cache, id: id) == false { return false }
+
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        if spec_validate_node(cache: read cache, id: child) == false { return false }
+        i = i + 1
+    }
+
+    let op = node_op(cache: read cache, id: id)
+
+    if group_alu(op: read op) {
+        return spec_validate_alu(cache: read cache, id: id)
+    }
+    if op == BITCAST {
+        return spec_validate_alu(cache: read cache, id: id)
+    }
+    if op == WHERE {
+        return spec_validate_alu(cache: read cache, id: id)
+    }
+    if op == SPECIAL {
+        let size = node_src_id(cache: read cache, id: id, k: 0)
+        if node_is_const_int(cache: read cache, id: size) == false { return false }
+        return spec_same_dtype(cache: read cache, a: id, b: size)
+    }
+    if op == UNIQUE {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_int(cache: read cache, id: id) == false { return false }
+        return node_const_int(cache: read cache, id: id) >= 0
+    }
+    if op == LUNIQUE {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_int(cache: read cache, id: id) == false { return false }
+        return node_const_int(cache: read cache, id: id) >= 0
+    }
+    if op == DEVICE {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_device(cache: read cache, id: id) == false { return false }
+        return node_device_count(cache: read cache, id: id) > 0
+    }
+    if op == RANGE {
+        let end = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: end) == false { return false }
+        return node_range_num_axes(cache: read cache, id: id) >= 1
+    }
+    if op == BUFFER {
+        if node_num_src(cache: read cache, id: id) == 2 {
+            if node_is_upstream_buffer(cache: read cache, id: id) == false { return false }
+            return node_const_int(cache: read cache, id: id) >= 0
+        }
+        let shape = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_validate_shape_const(cache: read cache, id: shape)
+    }
+    if op == PARAM {
+        if node_arg_is_param(cache: read cache, id: id) == false { return false }
+        if node_param_slot(cache: read cache, id: id) < 0 { return false }
+        if node_param_has_vmin_vmax(cache: read cache, id: id) {
+            if node_param_vmin(cache: read cache, id: id) > node_param_vmax(cache: read cache, id: id) { return false }
+        }
+        if node_num_src(cache: read cache, id: id) == 1 {
+            let shape = node_src_id(cache: read cache, id: id, k: 0)
+            return spec_validate_shape_const(cache: read cache, id: shape)
+        }
+        return true
+    }
+    if op == DEFINE_LOCAL {
+        if node_arg_is_int(cache: read cache, id: id) == false { return false }
+        if node_const_int(cache: read cache, id: id) < 0 { return false }
+        if node_num_src(cache: read cache, id: id) == 1 {
+            let shape = node_src_id(cache: read cache, id: id, k: 0)
+            return spec_validate_shape_const(cache: read cache, id: shape)
+        }
+        return true
+    }
+    if op == DEFINE_REG {
+        if node_arg_is_int(cache: read cache, id: id) == false { return false }
+        if node_const_int(cache: read cache, id: id) < 0 { return false }
+        if node_num_src(cache: read cache, id: id) == 1 {
+            let shape = node_src_id(cache: read cache, id: id, k: 0)
+            return spec_validate_shape_const(cache: read cache, id: shape)
+        }
+        return true
+    }
+    if op == DEFINE_VAR {
+        return node_var_min(cache: read cache, id: id) <= node_var_max(cache: read cache, id: id)
+    }
+    if op == BIND {
+        let var = node_src_id(cache: read cache, id: id, k: 0)
+        let val = node_src_id(cache: read cache, id: id, k: 1)
+        let vop = node_op(cache: read cache, id: var)
+        if vop != DEFINE_VAR { return false }
+        if node_is_const_int(cache: read cache, id: val) == false { return false }
+        if spec_same_dtype(cache: read cache, a: id, b: var) == false { return false }
+        if spec_same_dtype(cache: read cache, a: var, b: val) == false { return false }
+        let vv = node_const_int(cache: read cache, id: val)
+        if vv < node_var_min(cache: read cache, id: var) { return false }
+        return vv <= node_var_max(cache: read cache, id: var)
+    }
+    if op == TUPLE {
+        return spec_dtype_name(cache: read cache, id: id, name: read "void")
+    }
+    if op == GETTUPLE {
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let srcop = node_op(cache: read cache, id: src)
+        if srcop != TUPLE && srcop != FUNCTION { return false }
+        let in_tuple = uop_tuple_source_for_gettuple(cache: read cache, id: src)
+        if node_op(cache: read cache, id: in_tuple) != TUPLE { return false }
+        let idx = node_const_int(cache: read cache, id: id)
+        if idx < 0 { return false }
+        if idx >= node_num_src(cache: read cache, id: in_tuple) { return false }
+        let child = node_src_id(cache: read cache, id: in_tuple, k: idx)
+        return spec_same_dtype(cache: read cache, a: id, b: child)
+    }
+    if op == GEP {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let idxs = node_argints(cache: read cache, id: id)
+        if List.len<Int>(list: read idxs) == 0 { return false }
+        let xdt = node_dtype(cache: read cache, id: x)
+        let dt = node_dtype(cache: read cache, id: id)
+        let xs = dtype_scalar(d: read xdt)
+        let ds = dtype_scalar(d: read dt)
+        return xs.name == ds.name
+    }
+    if op == INDEX {
+        let base = node_src_id(cache: read cache, id: id, k: 0)
+        let bdt = node_dtype(cache: read cache, id: base)
+        let dt = node_dtype(cache: read cache, id: id)
+        let bs = dtype_scalar(d: read bdt)
+        let ds = dtype_scalar(d: read dt)
+        return bs.name == ds.name
+    }
+    if op == LOAD {
+        return true
+    }
+    if op == STORE {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        let ptr = node_src_id(cache: read cache, id: id, k: 0)
+        let value = node_src_id(cache: read cache, id: id, k: 1)
+        if spec_same_dtype(cache: read cache, a: ptr, b: value) == false { return false }
+        if node_num_src(cache: read cache, id: id) == 3 {
+            let gate = node_src_id(cache: read cache, id: id, k: 2)
+            return spec_dtype_name(cache: read cache, id: gate, name: read "bool")
+        }
+        return true
+    }
+    if op == WAIT {
+        return spec_dtype_name(cache: read cache, id: id, name: read "void")
+    }
+    if op == COPY {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let d = node_src_id(cache: read cache, id: id, k: 1)
+        if node_op(cache: read cache, id: d) != DEVICE { return false }
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == ALLREDUCE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let d = node_src_id(cache: read cache, id: id, k: 1)
+        if node_op(cache: read cache, id: d) != DEVICE { return false }
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        if node_arg_is_op(cache: read cache, id: id) == false { return false }
+        let rop = node_arg_op(cache: read cache, id: id)
+        if rop == ADD { return true }
+        if rop == MUL { return true }
+        return rop == MAX
+    }
+    if op == MULTI {
+        let n = node_num_src(cache: read cache, id: id)
+        if n == 0 { return false }
+        let first = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: first) == false { return false }
+        let axis = node_const_int(cache: read cache, id: id)
+        if axis < 0 { return false }
+        return node_effective_device_count(cache: read cache, id: first) > 1
+    }
+    if op == MSELECT {
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: src) == false { return false }
+        let idx = node_const_int(cache: read cache, id: id)
+        if idx < 0 { return false }
+        let cnt = node_effective_device_count(cache: read cache, id: src)
+        if cnt <= 1 { return false }
+        return idx < cnt
+    }
+    if op == MSTACK {
+        let n = node_num_src(cache: read cache, id: id)
+        if n == 0 { return false }
+        let first = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: first) == false { return false }
+        let mut j = 0
+        while j < n {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            if spec_same_dtype(cache: read cache, a: id, b: child) == false { return false }
+            if node_effective_device_count(cache: read cache, id: child) != 1 { return false }
+            j = j + 1
+        }
+        return true
+    }
+    if op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == CUSTOM_FUNCTION {
+        return node_arg_is_str(cache: read cache, id: id)
+    }
+    if op == CUSTOM || op == CUSTOMI {
+        return node_arg_is_str(cache: read cache, id: id)
+    }
+    if op == INS {
+        return node_arg_is_str(cache: read cache, id: id)
+    }
+    if op == GETADDR {
+        return true
+    }
+    if op == WMMA || op == SHAPED_WMMA {
+        let args = node_argints(cache: read cache, id: id)
+        return List.len<Int>(list: read args) == 8
+    }
+    if op == VCAT || op == PTRCAT {
+        let dt = node_full_dtype(cache: read cache, id: id)
+        let mut count = 0
+        let mut j = 0
+        while j < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            let cdt = node_full_dtype(cache: read cache, id: child)
+            count = count + cdt.count
+            j = j + 1
+        }
+        return dt.count == count
+    }
+    if op == STAGE {
+        if node_arg_is_bufferize(cache: read cache, id: id) == false { return false }
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        let mut j = 1
+        while j < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            if node_op(cache: read cache, id: child) != RANGE { return false }
+            j = j + 1
+        }
+        return true
+    }
+    if op == SLICE {
+        if node_arg_is_int(cache: read cache, id: id) == false { return false }
+        if node_const_int(cache: read cache, id: id) < 0 { return false }
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let xop = node_op(cache: read cache, id: x)
+        if group_movement(op: read xop) == false && xop != BUFFER && xop != PARAM && xop != STAGE && xop != AFTER { return false }
+        let off = node_src_id(cache: read cache, id: id, k: 1)
+        if node_is_const_int(cache: read cache, id: off) == false { return false }
+        if node_const_int(cache: read cache, id: off) < 0 { return false }
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == LINEAR {
+        return spec_dtype_name(cache: read cache, id: id, name: read "void")
+    }
+    if op == SOURCE {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        return node_arg_is_str(cache: read cache, id: id)
+    }
+    if op == BINARY {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        return node_arg_is_str(cache: read cache, id: id)
+    }
+    if op == PROGRAM {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_program(cache: read cache, id: id) == false { return false }
+        let sink = node_src_id(cache: read cache, id: id, k: 0)
+        let dev = node_src_id(cache: read cache, id: id, k: 1)
+        if node_op(cache: read cache, id: sink) != SINK { return false }
+        if node_op(cache: read cache, id: dev) != DEVICE { return false }
+        if node_num_src(cache: read cache, id: id) > 2 {
+            if node_op(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2)) != LINEAR { return false }
+        }
+        if node_num_src(cache: read cache, id: id) > 3 {
+            if node_op(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 3)) != SOURCE { return false }
+        }
+        if node_num_src(cache: read cache, id: id) > 4 {
+            if node_op(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 4)) != BINARY { return false }
+        }
+        return true
+    }
+    if op == CALL {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_call(cache: read cache, id: id) == false { return false }
+        let body = node_src_id(cache: read cache, id: id, k: 0)
+        let bop = node_op(cache: read cache, id: body)
+        if bop == SINK { return true }
+        if bop == LINEAR { return true }
+        if bop == PROGRAM { return true }
+        if bop == COPY { return true }
+        if bop == SLICE { return true }
+        return bop == CUSTOM_FUNCTION
+    }
+    if op == FUNCTION {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        if node_arg_is_call(cache: read cache, id: id) == false { return false }
+        let body = node_src_id(cache: read cache, id: id, k: 0)
+        return node_op(cache: read cache, id: body) == TUPLE
+    }
+    if op == AFTER {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == END {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        let mut j = 1
+        while j < node_num_src(cache: read cache, id: id) {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            let cop = node_op(cache: read cache, id: child)
+            if cop != RANGE { return false }
+            j = j + 1
+        }
+        return true
+    }
+    if op == BARRIER {
+        return spec_dtype_name(cache: read cache, id: id, name: read "void")
+    }
+    if op == IF {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        let gate = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_dtype_name(cache: read cache, id: gate, name: read "bool") == false { return false }
+        let anchor = node_src_id(cache: read cache, id: id, k: 1)
+        let aop = node_op(cache: read cache, id: anchor)
+        if aop == CAST { return true }
+        if aop == INDEX { return true }
+        return aop == SHRINK
+    }
+    if op == ENDIF {
+        if spec_dtype_name(cache: read cache, id: id, name: read "void") == false { return false }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let sop = node_op(cache: read cache, id: src)
+        return sop == IF
+    }
+    if op == UNROLL {
+        if node_axis_size_pairs_valid(cache: read cache, id: id) == false { return false }
+        let src = node_src_id(cache: read cache, id: id, k: 0)
+        let sdt = node_full_dtype(cache: read cache, id: src)
+        return sdt.count == node_axis_size_product(cache: read cache, id: id)
+    }
+    if op == CONTRACT {
+        if node_axis_size_pairs_valid(cache: read cache, id: id) == false { return false }
+        let dt = node_full_dtype(cache: read cache, id: id)
+        return dt.count == node_axis_size_product(cache: read cache, id: id)
+    }
+    if op == RESHAPE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let shape = node_src_id(cache: read cache, id: id, k: 1)
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        return spec_validate_shape_const(cache: read cache, id: shape)
+    }
+    if op == EXPAND {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let shape = node_src_id(cache: read cache, id: id, k: 1)
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        return spec_validate_shape_const(cache: read cache, id: shape)
+    }
+    if op == PERMUTE {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == FLIP {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return spec_same_dtype(cache: read cache, a: id, b: x)
+    }
+    if op == PAD {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let before = node_src_id(cache: read cache, id: id, k: 1)
+        let after = node_src_id(cache: read cache, id: id, k: 2)
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        if spec_validate_shape_const(cache: read cache, id: before) == false { return false }
+        return spec_validate_shape_const(cache: read cache, id: after)
+    }
+    if op == SHRINK {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let starts = node_src_id(cache: read cache, id: id, k: 1)
+        let ends = node_src_id(cache: read cache, id: id, k: 2)
+        if spec_same_dtype(cache: read cache, a: id, b: x) == false { return false }
+        if spec_validate_shape_const(cache: read cache, id: starts) == false { return false }
+        return spec_validate_shape_const(cache: read cache, id: ends)
+    }
+    if op == STACK {
+        let n = node_num_src(cache: read cache, id: id)
+        if n == 0 { return true }
+        let first = node_src_id(cache: read cache, id: id, k: 0)
+        if spec_same_dtype(cache: read cache, a: id, b: first) == false { return false }
+        let mut j = 1
+        while j < n {
+            let child = node_src_id(cache: read cache, id: id, k: j)
+            if spec_same_dtype(cache: read cache, a: first, b: child) == false { return false }
+            j = j + 1
+        }
+    }
+    return true
+}
+
+fn spec_type_verify(cache: read UOpCache, id: Int) -> Bool {
+    return spec_validate_node(cache: read cache, id: id)
+}
+
+fn mk_where(cache: mut UOpCache, dt: read DType, cond: Int, tval: Int, fval: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read cond)
+    List.push<Int>(list: mut src, value: read tval)
+    List.push<Int>(list: mut src, value: read fval)
+    local arg = ArgNone
+    return intern(cache: mut cache, op: WHERE, dt: read dt, src: take src, arg: take arg)
+}

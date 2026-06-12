@@ -53,6 +53,20 @@ fn round_up(num: Int, amt: Int) -> Int {
     return floor_div(a: num + amt - 1, b: amt) * amt
 }
 
+// round_down(num, amt) = -round_up(-num, amt)
+fn round_down(num: Int, amt: Int) -> Int {
+    return 0 - round_up(num: 0 - num, amt: amt)
+}
+
+// next_power2(x) = 1 if x == 0 else 1 << (x-1).bit_length()
+fn next_power2(x: Int) -> Int {
+    let mut p = 1
+    while p < x {
+        p = p * 2
+    }
+    return p
+}
+
 // cdiv(x, y) = abs(x)//abs(y)*sign(x*y) if y != 0 else 0   (C-style trunc division)
 fn cdiv(x: Int, y: Int) -> Int {
     if y == 0 { return 0 }
@@ -90,6 +104,15 @@ fn all_same(items: read List<Int>) -> Bool {
     return true
 }
 
+fn int_contains(items: read List<Int>, v: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // dedup(x) = list(dict.fromkeys(x))  (retains order)
 fn dedup(x: read List<Int>) -> fresh List<Int> {
     local out = List.new<Int>()
@@ -104,6 +127,34 @@ fn dedup(x: read List<Int>) -> fresh List<Int> {
         }
         if seen == false { List.push<Int>(list: mut out, value: read v) }
         i = i + 1
+    }
+    return take out
+}
+
+// argsort(x) = indices that sort x ascending
+fn argsort(x: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let n = List.len<Int>(list: read x)
+    let mut k = 0
+    while k < n {
+        List.push<Int>(list: mut out, value: read k)
+        k = k + 1
+    }
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            let ia = List.get<Int>(list: read out, index: a)
+            let ib = List.get<Int>(list: read out, index: b)
+            let va = List.get<Int>(list: read x, index: ia)
+            let vb = List.get<Int>(list: read x, index: ib)
+            if vb < va {
+                List.set<Int>(list: mut out, index: a, value: read ib)
+                List.set<Int>(list: mut out, index: b, value: read ia)
+            }
+            b = b + 1
+        }
+        a = a + 1
     }
     return take out
 }
@@ -145,4 +196,105 @@ fn strides_for_shape(shape: read List<Int>) -> fresh List<Int> {
         i = i + 1
     }
     return take strides
+}
+
+fn accumulate_mul(shape: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut acc = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        acc = acc * List.get<Int>(list: read shape, index: i)
+        List.push<Int>(list: mut out, value: read acc)
+        i = i + 1
+    }
+    return take out
+}
+
+fn index_plus_one(items: read List<Int>, value: Int) -> Int {
+    if value == 1 { return 0 }
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value { return i + 1 }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+struct Contraction derives(Clone) {
+    groups: List<Int>,
+    group_lens: List<Int>,
+    ok: Bool,
+}
+
+// get_contraction(old_shape, new_shape): groups of old axes that combine into each new axis.
+// None from tinygrad is represented by ok=false and empty groups.
+fn get_contraction(old_shape: read List<Int>, new_shape: read List<Int>) -> fresh Contraction {
+    local groups = List.new<Int>()
+    local group_lens = List.new<Int>()
+    local acc_old = accumulate_mul(shape: read old_shape)
+    local acc_new = accumulate_mul(shape: read new_shape)
+    local split = List.new<Int>()
+    let mut failed = false
+    let mut i = 0
+    while i < List.len<Int>(list: read acc_new) {
+        let acc = List.get<Int>(list: read acc_new, index: i)
+        let idx = index_plus_one(items: read acc_old, value: acc)
+        if idx == (0 - 1) { failed = true }
+        List.push<Int>(list: mut split, value: read idx)
+        i = i + 1
+    }
+    if failed {
+        return Contraction(groups: take groups, group_lens: take group_lens, ok: false)
+    }
+    let old_len = List.len<Int>(list: read old_shape)
+    let nsplit = List.len<Int>(list: read split)
+    let mut k = 0
+    while k < nsplit {
+        let mut start = 0
+        if k > 0 { start = List.get<Int>(list: read split, index: k - 1) }
+        let mut end = old_len
+        if k < nsplit - 1 { end = List.get<Int>(list: read split, index: k) }
+        let mut count = 0
+        let mut a = start
+        while a < end {
+            List.push<Int>(list: mut groups, value: read a)
+            count = count + 1
+            a = a + 1
+        }
+        List.push<Int>(list: mut group_lens, value: read count)
+        k = k + 1
+    }
+    return Contraction(groups: take groups, group_lens: take group_lens, ok: true)
+}
+
+fn make_tuple_int(x: Int, cnt: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < cnt {
+        List.push<Int>(list: mut out, value: read x)
+        i = i + 1
+    }
+    return take out
+}
+
+struct PartitionResult derives(Clone) {
+    yes: List<Int>,
+    no: List<Int>,
+}
+
+fn partition_even(items: read List<Int>) -> fresh PartitionResult {
+    local yes = List.new<Int>()
+    local no = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        let v = List.get<Int>(list: read items, index: i)
+        if (v % 2) == 0 {
+            List.push<Int>(list: mut yes, value: read v)
+        }
+        if (v % 2) != 0 {
+            List.push<Int>(list: mut no, value: read v)
+        }
+        i = i + 1
+    }
+    return PartitionResult(yes: take yes, no: take no)
 }

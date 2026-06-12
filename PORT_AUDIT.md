@@ -387,7 +387,8 @@ Integrated pieces:
   `normal_like`, `scaled_uniform`, `glorot_uniform`, `kaiming_uniform`, and
   `kaiming_normal`), upstream-shaped scalar/wrapper helpers (`_uop`, `_wrap_uop`,
   `const`, `const_like`, `unique_const`, `_broadcasted`, and `_binop`),
-  upstream-shaped higher-op wrappers (`__rmatmul__`, `interpolate`, `_apply_ceil_mode`,
+  upstream-shaped higher-op wrappers (`__rmatmul__`, single-axis and trailing multi-axis
+  `interpolate`, `_apply_ceil_mode`,
   `avg_pool2d`, `max_pool2d`, `max_unpool2d`, `conv2d`, `conv_transpose2d`,
   `batchnorm`, `_do_reduction`, `binary_crossentropy`, `binary_crossentropy_logits`,
   `sparse_categorical_crossentropy`, `cross_entropy`, and `nll_loss`) over the existing
@@ -837,8 +838,10 @@ Current integrated demo:
 - validates bool and int bitwise/logical Tensor ops against real tinygrad: `AND`, `OR`, and `XOR`.
 - validates integer shift and division/modulo Tensor ops against real tinygrad: `SHL`, `SHR`,
   floor division/modulo, and truncating cstyle division/modulo.
-- validates the first Tensor interpolation slice against real tinygrad: one-axis `linear`,
-  `linear` with `align_corners=True`, `nearest`, and `nearest-exact` interpolation over `[1,4]`.
+- validates Tensor interpolation against real tinygrad: one-axis `linear`, `linear` with
+  `align_corners=True`, `nearest`, and `nearest-exact` interpolation over `[1,4]`, plus trailing
+  2D interpolation from `(2,3)` to `(3,2)` for `linear`, aligned `linear`, `nearest`, and
+  `nearest-exact`.
 - validates Tensor gradients through broadcast and sum: gradient wrt a `[2,3]` input is all ones,
   and gradient wrt a broadcasted `[1,3]` input accumulates to `[2,2,2]`.
 - validates Tensor gradients through graph-backed `SHRINK` slicing against real tinygrad:
@@ -920,7 +923,7 @@ Major missing integrated work:
   current direct-conv fallback,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
   on runtime `.item()` shape discovery,
-  broader multi-axis interpolation and composed math coverage,
+  broader composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   Python-facing method breadth,
   and exact tinygrad semantics are still incomplete.

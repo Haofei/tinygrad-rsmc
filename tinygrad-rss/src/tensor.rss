@@ -2273,6 +2273,24 @@ fn tensor_interpolate(cache: mut UOpCache, x: Int, axis: Int, out_size: Int, mod
     return tensor_interpolate_axis_linear(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: align_corners)
 }
 
+fn tensor_interpolate_sizes(cache: mut UOpCache, x: Int, sizes: read List<Int>, mode: Int, align_corners: Bool) -> Int {
+    local xs = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read xs)
+    let n = List.len<Int>(list: read sizes)
+    if n <= 0 { return x }
+    if n > ndim { return x }
+    let mut out = x
+    let mut pos = n - 1
+    while pos >= 0 {
+        let axis = ndim - n + pos
+        let out_size = List.get<Int>(list: read sizes, index: pos)
+        out = tensor_interpolate(cache: mut cache, x: out, axis: axis, out_size: out_size, mode: mode, align_corners: align_corners)
+        pos = pos - 1
+    }
+    let dt = node_dtype(cache: read cache, id: x)
+    return tensor_cast(cache: mut cache, x: out, dt: read dt)
+}
+
 fn tensor_isnan(cache: mut UOpCache, x: Int) -> Int {
     return tensor_ne(cache: mut cache, a: x, b: x)
 }

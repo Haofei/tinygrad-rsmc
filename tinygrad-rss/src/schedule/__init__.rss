@@ -461,3 +461,35 @@ fn schedule_create(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild 
     let ok = List.get<Int>(list: read ok_flags, index: 0) == 1
     return ScheduleBuild(linear: linear, ok: ok)
 }
+
+fn _unwrap_src(cache: read UOpCache, s: Int) -> Int {
+    return schedule_unwrap_src(cache: read cache, id: s)
+}
+
+fn _split_after(cache: read UOpCache, after: Int) -> fresh ScheduleSplit {
+    return schedule_split_after(cache: read cache, after: after)
+}
+
+fn create_schedule(cache: mut UOpCache, sched_sink: Int) -> fresh ScheduleBuild {
+    return schedule_create(cache: mut cache, sched_sink: sched_sink)
+}
+
+fn create_new_buffer(cache: mut UOpCache, b: Int) -> Int {
+    if node_op(cache: read cache, id: b) != BUFFER { return b }
+    let mut device = node_effective_device_name(cache: read cache, id: b, index: 0)
+    if String.len(value: read device) == 0 { device = "CPU" }
+    let size = node_const_int(cache: read cache, id: b)
+    let dt = node_full_dtype(cache: read cache, id: b)
+    return mk_new_buffer(cache: mut cache, device: read device, size: size, dt: read dt, num: 700000 + b)
+}
+
+fn lower_sink_to_linear(cache: mut UOpCache, function: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: function) != SINK { return None }
+    local build = schedule_create(cache: mut cache, sched_sink: function)
+    if build.ok { return Some(build.linear) }
+    return None
+}
+
+fn create_linear_with_vars(cache: mut UOpCache, big_sink: Int) -> fresh ScheduleLinearVars {
+    return schedule_create_linear_with_vars(cache: mut cache, big_sink: big_sink)
+}

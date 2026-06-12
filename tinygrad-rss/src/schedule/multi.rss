@@ -834,3 +834,59 @@ fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let out = mk_multi(cache: mut cache, x: local_alu, axis: axis)
     return MultiRewrite(result: out, changed: true, ok: true)
 }
+
+fn mstack_early_shrink(cache: mut UOpCache, shrink: Int) -> fresh MultiRewrite {
+    return multi_mstack_early_shrink(cache: mut cache, shrink: shrink)
+}
+
+fn alu_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_alu_same_axis(cache: mut cache, root: root)
+}
+
+fn reduce_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_reduce(cache: mut cache, root: root)
+}
+
+fn reshape_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_reshape(cache: mut cache, root: root)
+}
+
+fn expand_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_expand(cache: mut cache, root: root)
+}
+
+fn pad_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_pad(cache: mut cache, root: root)
+}
+
+fn permute_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_permute(cache: mut cache, root: root)
+}
+
+fn shrink_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_shrink(cache: mut cache, root: root)
+}
+
+fn flip_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_flip(cache: mut cache, root: root)
+}
+
+fn copy_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_copy(cache: mut cache, copy: root)
+}
+
+fn store_after_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_store_after(cache: mut cache, root: root)
+}
+
+fn passthrough_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_passthrough_root(cache: mut cache, root: root)
+}
+
+fn rewrite_into_function(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_rewrite_function(cache: mut cache, root: root)
+}
+
+fn param_to_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    return multi_param_to_multi(cache: mut cache, param: root)
+}

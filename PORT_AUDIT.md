@@ -304,11 +304,15 @@ Integrated pieces:
   buffer collection, variable extraction, and the current memory planner. Full upstream
   `pm_schedule` graph rewriting, schedule caching, rangeify graph generation, complete linear-call
   resolution, exact memory planning integration, and JIT capture plumbing remain unported.
+  Source-shaped entry points now cover `_unwrap_src`, `_split_after`, `create_schedule`,
+  `create_new_buffer`, `lower_sink_to_linear`, and `create_linear_with_vars` over this current
+  scheduler model.
 - `schedule/memory.rss`: first integrated source-shaped `tinygrad/schedule/memory.py` slice:
   buffer collection through `BUFFER`/`MSELECT`/`MSTACK`, held-buffer and disk/tinyfs rejection,
   first/last lifetime tracking, copy-vs-compute lane separation, per-device/per-lane int8 arenas,
   and buffer-to-`SLICE` rewrite for planned `LINEAR` calls. Exact TLSF lifetime reuse remains
-  unported; the current integrated planner uses monotonic lane offsets.
+  unported; the current integrated planner uses monotonic lane offsets. Source-shaped `_collect_bufs`
+  and `_can_plan` delegate to the integrated planner checks.
 - `schedule/indexing.rss`: first integrated source-shaped `tinygrad/schedule/indexing.py` slice:
   `ALWAYS_CONTIGUOUS` classification, realize-map generation for `COPY`/`CONTIGUOUS`/`STORE`,
   non-contiguous source realization for `COPY`/`MSELECT`/`MSTACK`, direct `COPY`/`SLICE` store-source
@@ -344,7 +348,9 @@ Integrated pieces:
   `ALLREDUCE(MULTI)` passthrough, plus upstream-shaped unary/binary `ALU(MULTI, ...)` payload
   rewrites including scalar-broadcast operands, non-scalar unsharded operands through symbolic
   `_device_num` shard bounds, and axis-mismatch unshard/reshard through symbolic `PAD`,
-  tuple-device `ALLREDUCE(ADD)`, and symbolic `SHRINK`.
+  tuple-device `ALLREDUCE(ADD)`, and symbolic `SHRINK`. Source-shaped aliases now cover
+  `mstack_early_shrink`, `alu_multi`, `reduce_multi`, movement multi rewrites, `copy_multi`,
+  `store_after_multi`, `passthrough_multi`, `rewrite_into_function`, and `param_to_multi`.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,

@@ -206,3 +206,16 @@ fn memory_plan_rewrite(cache: mut UOpCache, linear: Int, held: read List<Int>) -
     let out = memory_replace_many(cache: mut cache, id: linear, olds: read repl_old, news: read repl_new)
     return MemoryPlanResult(linear: out, planned: List.len<Int>(list: read repl_old), arenas: List.len<Int>(list: read arenas), ok: true)
 }
+
+fn _can_plan(cache: read UOpCache, b: Int, held: read List<Int>) -> Bool {
+    return memory_can_plan(cache: read cache, b: b, held: read held)
+}
+
+fn _collect_bufs(cache: read UOpCache, id: Int, held: read List<Int>) -> fresh List<Int> {
+    local buffers = List.new<Int>()
+    local firsts = List.new<Int>()
+    local lasts = List.new<Int>()
+    local copy_flags = List.new<Int>()
+    memory_collect_bufs(cache: read cache, id: id, held: read held, buffers: mut buffers, firsts: mut firsts, lasts: mut lasts, copy_flags: mut copy_flags, step: 0, is_copy_lane: false)
+    return take buffers
+}

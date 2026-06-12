@@ -1971,6 +1971,33 @@ fn main() -> Unit {
         Some(r) => { showb(label: read "uop.spec valid decomp not ne = ", v: spec_type_verify(cache: read mcache, id: r)) }
         None => { showb(label: read "uop.spec valid decomp not ne = ", v: false) }
     }
+    let dc_shr_alias = shr(cache: mut mcache, x: dc_pos, y: 2)
+    let dc_shl_alias = shl(cache: mut mcache, x: dc_pos, y: 2)
+    let dc_round_alias = rintk(cache: mut mcache, d: dc_fa)
+    let dc_pow2_alias = pow2if(cache: mut mcache, q: dc_round_alias, float_dtype: read dt_float32())
+    let dc_log_alias = ilogb2k(cache: mut mcache, d: dc_fa)
+    let dc_frexp_alias = frexp(cache: mut mcache, v: dc_fa)
+    let dc_magic_alias = magicgu(vmax: 63, d: 3)
+    let dc_floor_alias = floordiv_to_idiv(cache: mut mcache, a: dc_neg, b: dc_den3)
+    let dc_mod_alias = floormod_to_mod(cache: mut mcache, a: dc_neg, b: dc_den3)
+    let dc_fast_alias = fast_idiv(cache: mut mcache, x: dc_up, d: 4, dont_cast: false)
+    let dc_three_alias = threefry2x32(cache: mut mcache, x: dc_rng_x, key: dc_rng_key)
+    let dc_unpack_alias = unpack32(cache: mut mcache, v: dc_rng_x)
+    let dc_l2i_alias = l2i(cache: mut mcache, op: ADD, dt: read i32, a0: dc_pos, a1: dc_den3, b0: dc_den4, b1: dc_den8)
+    let dc_f2f_alias = f2f(cache: mut mcache, v: dc_up, fr: read dt_uint32(), to: read dt_float32(), sat: true)
+    let dc_late_alias = get_late_rewrite_patterns(cache: mut mcache, id: dc_max_raw, disable_fast_idiv: false)
+    showb(label: read "uop.decomp dtype bit helpers = ", v: mantissa_bits(d: read dt_float32()) == 23 && exponent_bias(d: read dt_float32()) == 127 && exponent_mask(d: read dt_float32()) == 255)
+    showb(label: read "uop.decomp source-shaped integer helpers = ", v: node_op(cache: read mcache, id: dc_shr_alias) == FLOORDIV && node_op(cache: read mcache, id: dc_shl_alias) == MUL && node_op(cache: read mcache, id: dc_floor_alias) == SUB && node_op(cache: read mcache, id: dc_mod_alias) == ADD)
+    showb(label: read "uop.decomp source-shaped float helpers = ", v: node_op(cache: read mcache, id: dc_round_alias) == CAST && node_op(cache: read mcache, id: dc_pow2_alias) == BITCAST && node_op(cache: read mcache, id: dc_log_alias) == SUB && dc_frexp_alias.hi == dc_log_alias)
+    match dc_fast_alias {
+        Some(r) => { showb(label: read "uop.decomp source-shaped fast_idiv = ", v: node_op(cache: read mcache, id: r) == SHR) }
+        None => { showb(label: read "uop.decomp source-shaped fast_idiv = ", v: false) }
+    }
+    match dc_late_alias {
+        Some(r) => { showb(label: read "uop.decomp source-shaped late patterns = ", v: node_op(cache: read mcache, id: r) == WHERE) }
+        None => { showb(label: read "uop.decomp source-shaped late patterns = ", v: false) }
+    }
+    showb(label: read "uop.decomp source-shaped misc helpers = ", v: dc_magic_alias.lo > 0 && node_op(cache: read mcache, id: dc_three_alias) == OR && node_op(cache: read mcache, id: dc_unpack_alias.lo) == AND && node_op(cache: read mcache, id: dc_l2i_alias.lo) == ADD && node_op(cache: read mcache, id: dc_f2f_alias) == BITCAST)
     let cs_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: dc_pos, y: dc_den3)
     let cs_expr = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: cs_add, y: dc_den4)
     let cs_cond = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_pos, y: dc_den4)

@@ -182,8 +182,19 @@ Integrated pieces:
   multiply/shift-plus-add to `MULACC`, non-negative `CMOD` to `x-d*CDIV(x,d)`, selected signed
   comparison canonicalizations, tight integer range to `CMPEQ`, and logical-not-of-`CMPNE` to
   `CMPEQ`, plus `THREEFRY(uint64,uint64)` lowering to primitive uint32/uint64 add/xor/shift/cast/or
-  nodes for RNG support. The large transcendental, long-integer, dtype, fast-idiv, broader boolean/comparison
-  normalization, and target-op-availability rewrite machinery remains unported.
+  nodes for RNG support. Source-shaped helper names from upstream are now exposed for the current
+  UOp-id model: dtype bit helpers (`mantissa_bits`, `exponent_bias`, `exponent_mask`), shift/round/
+  exponent helpers (`shr`, `shl`, `rintk`, `pow2if`, `ilogb2k`, `ldexp3k`, `ldexp2k`, `frexp`),
+  first reduction/transcendental scaffolding (`payne_hanek_reduction`, `cody_waite_reduction`,
+  `trig_poly`, `sin_poly`, `_ifand`, `sin_poly_small`, `sin_poly_large`, `xsin`, `xexp2`, `xlog2`,
+  `xpow`), integer division/RNG helpers (`magicgu`, `fast_idiv`, `threefry2x32`), long/float
+  scaffolding (`unpack32`, `reindex`, `l2i`, `rne`, `f2f`, `f2f_clamp`, `f2f_load`, `f2f_store`),
+  and source-shaped rewrite entry points (`get_transcendental_patterns`, `floordiv_to_idiv`,
+  `floormod_to_mod`, `get_late_rewrite_patterns`, `do_dtype_decomps`). The source-shaped entry
+  points delegate to implemented late rewrites where available; the large transcendental
+  approximations, exact long-integer decomposition, exact float-format conversion, broader
+  boolean/comparison normalization, and target-op-availability rewrite machinery remain partial or
+  unported.
 - `renderer/cstyle.rss`: first integrated source-shaped `tinygrad/renderer/cstyle.py` slice over
   interned UOp ids, covering C-style dtype names, constants, casts, `__builtin_bit_cast`, core
   unary/binary/ternary ALU rendering, pointer-style `INDEX`, `LOAD`, `STORE`, simple `RANGE`/`END`

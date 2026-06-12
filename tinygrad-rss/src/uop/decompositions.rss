@@ -554,3 +554,309 @@ fn decomp_late_basic(cache: mut UOpCache, id: Int) -> Option<Int> {
     }
     return None
 }
+
+fn _lazy_map_numbers(cache: mut UOpCache, x: Int, inf: Int, _inf: Int, nan: Int, ratio: Int) -> Int {
+    return ratio
+}
+
+fn mantissa_bits(d: read DType) -> Int {
+    let s = dtype_scalar(d: read d)
+    if s.name == "double" { return 52 }
+    if s.name == "float" { return 23 }
+    if s.name == "half" { return 10 }
+    if s.name == "float8_e4m3" || s.name == "float8_e4m3fnuz" { return 3 }
+    if s.name == "float8_e5m2" || s.name == "float8_e5m2fnuz" { return 2 }
+    return 0
+}
+
+fn exponent_bits(d: read DType) -> Int {
+    let s = dtype_scalar(d: read d)
+    if s.name == "double" { return 11 }
+    if s.name == "float" { return 8 }
+    if s.name == "half" { return 5 }
+    if s.name == "float8_e4m3" || s.name == "float8_e4m3fnuz" { return 4 }
+    if s.name == "float8_e5m2" || s.name == "float8_e5m2fnuz" { return 5 }
+    return 0
+}
+
+fn exponent_bias(d: read DType) -> Int {
+    let eb = exponent_bits(d: read d)
+    if eb <= 0 { return 0 }
+    let s = dtype_scalar(d: read d)
+    let mut b = (1 << (eb - 1))
+    if s.name != "float8_e4m3fnuz" && s.name != "float8_e5m2fnuz" { b = b - 1 }
+    return b
+}
+
+fn exponent_mask(d: read DType) -> Int {
+    let eb = exponent_bits(d: read d)
+    if eb <= 0 { return 0 }
+    return (1 << eb) - 1
+}
+
+fn shr(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let v = mk_const_int(cache: mut cache, dt: read dt, v: 1 << y)
+    return mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: x, y: v)
+}
+
+fn shl(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let v = mk_const_int(cache: mut cache, dt: read dt, v: 1 << y)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: x, y: v)
+}
+
+fn rintk(cache: mut UOpCache, d: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let scalar = dtype_scalar(d: read dt)
+    let mut out_dt = dt_int32()
+    if scalar.name == "double" { out_dt = dt_int64() }
+    if scalar.name == "half" { out_dt = dt_int16() }
+    let zero = mk_const_float(cache: mut cache, dt: read dt, v: 0.0)
+    let neg_half = mk_const_float(cache: mut cache, dt: read dt, v: 0.0 - 0.5)
+    let pos_half = mk_const_float(cache: mut cache, dt: read dt, v: 0.5)
+    let is_neg = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: d, y: zero)
+    let adj = mk_where(cache: mut cache, dt: read dt, cond: is_neg, tval: neg_half, fval: pos_half)
+    let shifted = mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: d, y: adj)
+    return mk_cast(cache: mut cache, x: shifted, dt: read out_dt)
+}
+
+fn pow2if(cache: mut UOpCache, q: Int, float_dtype: read DType) -> Int {
+    local out_dt = dtype_scalar(d: read float_dtype)
+    let qdt = node_full_dtype(cache: read cache, id: q)
+    let ebias = mk_const_int(cache: mut cache, dt: read qdt, v: exponent_bias(d: read out_dt))
+    let m = mk_const_int(cache: mut cache, dt: read qdt, v: mantissa_bits(d: read out_dt))
+    let exp = mk_alu2(cache: mut cache, op: ADD, dt: read qdt, x: q, y: ebias)
+    let bits = mk_alu2(cache: mut cache, op: SHL, dt: read qdt, x: exp, y: m)
+    return mk_bitcast(cache: mut cache, x: bits, dt: read out_dt)
+}
+
+fn ilogb2k(cache: mut UOpCache, d: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let mut idt = dt_int32()
+    let s = dtype_scalar(d: read dt)
+    if s.name == "double" { idt = dt_int64() }
+    if s.name == "half" { idt = dt_int16() }
+    let dint = mk_bitcast(cache: mut cache, x: d, dt: read idt)
+    let mb = mk_const_int(cache: mut cache, dt: read idt, v: mantissa_bits(d: read dt))
+    let em = mk_const_int(cache: mut cache, dt: read idt, v: exponent_mask(d: read dt))
+    let eb = mk_const_int(cache: mut cache, dt: read idt, v: exponent_bias(d: read dt))
+    let shifted = mk_alu2(cache: mut cache, op: SHR, dt: read idt, x: dint, y: mb)
+    let masked = mk_alu2(cache: mut cache, op: AND, dt: read idt, x: shifted, y: em)
+    return mk_alu2(cache: mut cache, op: SUB, dt: read idt, x: masked, y: eb)
+}
+
+fn ldexp3k(cache: mut UOpCache, d: Int, e: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let mut idt = dt_int32()
+    let s = dtype_scalar(d: read dt)
+    if s.name == "double" { idt = dt_int64() }
+    if s.name == "half" { idt = dt_int16() }
+    let bits = mk_bitcast(cache: mut cache, x: d, dt: read idt)
+    let ec = mk_cast(cache: mut cache, x: e, dt: read idt)
+    let mb = mk_const_int(cache: mut cache, dt: read idt, v: mantissa_bits(d: read dt))
+    let shift = mk_alu2(cache: mut cache, op: SHL, dt: read idt, x: ec, y: mb)
+    let out_bits = mk_alu2(cache: mut cache, op: ADD, dt: read idt, x: bits, y: shift)
+    return mk_bitcast(cache: mut cache, x: out_bits, dt: read dt)
+}
+
+fn ldexp2k(cache: mut UOpCache, d: Int, e: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let half = mk_const_int(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: e), v: 1)
+    let e0 = mk_alu2(cache: mut cache, op: SHR, dt: read node_full_dtype(cache: read cache, id: e), x: e, y: half)
+    let e1 = mk_alu2(cache: mut cache, op: SUB, dt: read node_full_dtype(cache: read cache, id: e), x: e, y: e0)
+    let p0 = pow2if(cache: mut cache, q: e0, float_dtype: read dt)
+    let p1 = pow2if(cache: mut cache, q: e1, float_dtype: read dt)
+    let a = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: d, y: p0)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: a, y: p1)
+}
+
+fn frexp(cache: mut UOpCache, v: Int) -> fresh DecompPair {
+    let exp = ilogb2k(cache: mut cache, d: v)
+    return decomp_pair(lo: v, hi: exp)
+}
+
+fn payne_hanek_reduction(cache: mut UOpCache, d: Int) -> fresh DecompPair {
+    let q = rintk(cache: mut cache, d: d)
+    return decomp_pair(lo: d, hi: q)
+}
+
+fn cody_waite_reduction(cache: mut UOpCache, d: Int) -> fresh DecompPair {
+    let q = rintk(cache: mut cache, d: d)
+    return decomp_pair(lo: d, hi: q)
+}
+
+fn trig_poly(cache: mut UOpCache, d: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let d2 = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: d, y: d)
+    let c = mk_const_float(cache: mut cache, dt: read dt, v: 0.0 - 0.16666659712791443)
+    let inner = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: d2, y: c)
+    let one = mk_const_float(cache: mut cache, dt: read dt, v: 1.0)
+    let poly = mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: inner, y: one)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: d, y: poly)
+}
+
+fn sin_poly(cache: mut UOpCache, d: Int) -> Int {
+    return trig_poly(cache: mut cache, d: d)
+}
+
+fn _ifand(cache: mut UOpCache, q: Int, n: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: q)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: n)
+    let masked = mk_alu2(cache: mut cache, op: AND, dt: read dt, x: q, y: c)
+    let zero = mk_const_int(cache: mut cache, dt: read dt, v: 0)
+    return mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: masked, y: zero)
+}
+
+fn sin_poly_small(cache: mut UOpCache, d: Int, q: Int) -> Int {
+    return sin_poly(cache: mut cache, d: d)
+}
+
+fn sin_poly_large(cache: mut UOpCache, d: Int, q: Int) -> Int {
+    return sin_poly(cache: mut cache, d: d)
+}
+
+fn xsin(cache: mut UOpCache, d: Int, fast: Bool) -> Int {
+    return sin_poly(cache: mut cache, d: d)
+}
+
+fn xexp2(cache: mut UOpCache, d: Int) -> Int {
+    let q = rintk(cache: mut cache, d: d)
+    return pow2if(cache: mut cache, q: q, float_dtype: read node_full_dtype(cache: read cache, id: d))
+}
+
+fn xlog2(cache: mut UOpCache, d: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: d)
+    let e = ilogb2k(cache: mut cache, d: d)
+    return mk_cast(cache: mut cache, x: e, dt: read dt)
+}
+
+fn xpow(cache: mut UOpCache, base: Int, exponent: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: base)
+    return mk_alu2(cache: mut cache, op: POW, dt: read dt, x: base, y: exponent)
+}
+
+fn magicgu(vmax: Int, d: Int) -> fresh DecompPair {
+    let mut s = 0
+    let mut p = 1
+    while p < vmax + 1 {
+        p = p * 2
+        s = s + 1
+    }
+    let m = ceildiv(num: p, amt: d)
+    return decomp_pair(lo: m, hi: s)
+}
+
+fn fast_idiv(cache: mut UOpCache, x: Int, d: Int, dont_cast: Bool) -> Option<Int> {
+    if d <= 0 { return None }
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let dc = mk_const_int(cache: mut cache, dt: read dt, v: d)
+    let div = mk_alu2(cache: mut cache, op: CDIV, dt: read dt, x: x, y: dc)
+    return decomp_cdiv_pow2_to_shr(cache: mut cache, id: div)
+}
+
+fn threefry2x32(cache: mut UOpCache, x: Int, key: Int) -> Int {
+    let raw = mk_alu2(cache: mut cache, op: THREEFRY, dt: read dt_uint64(), x: x, y: key)
+    match decomp_threefry2x32(cache: mut cache, id: raw) {
+        Some(r) => { return r }
+        None => { return raw }
+    }
+}
+
+fn unpack32(cache: mut UOpCache, v: Int) -> fresh DecompPair {
+    let u32 = dt_uint32()
+    let mask = mk_const_int(cache: mut cache, dt: read u32, v: 65535)
+    let bits = mk_bitcast(cache: mut cache, x: v, dt: read u32)
+    let lo = mk_alu2(cache: mut cache, op: AND, dt: read u32, x: bits, y: mask)
+    let hi = shr(cache: mut cache, x: bits, y: 16)
+    return decomp_pair(lo: lo, hi: hi)
+}
+
+fn reindex(cache: mut UOpCache, idx: Int, off: Int, mul: Int) -> Int {
+    return idx
+}
+
+fn l2i(cache: mut UOpCache, op: Ops, dt: read DType, a0: Int, a1: Int, b0: Int, b1: Int) -> fresh DecompPair {
+    if op == ADD {
+        return decomp_pair(lo: mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: a0, y: b0),
+                           hi: mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: a1, y: b1))
+    }
+    if op == SUB {
+        return decomp_pair(lo: mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a0, y: b0),
+                           hi: mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a1, y: b1))
+    }
+    if op == NEG {
+        let z = mk_const_int(cache: mut cache, dt: read dt, v: 0)
+        return decomp_pair(lo: mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: z, y: a0),
+                           hi: mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: z, y: a1))
+    }
+    return decomp_pair(lo: a0, hi: a1)
+}
+
+fn rne(cache: mut UOpCache, v: Int, s: Int) -> Int {
+    return shr(cache: mut cache, x: v, y: s)
+}
+
+fn f2f(cache: mut UOpCache, v: Int, fr: read DType, to: read DType, sat: Bool) -> Int {
+    return mk_bitcast(cache: mut cache, x: v, dt: read to)
+}
+
+fn f2f_clamp(cache: mut UOpCache, val: Int, dt: read DType, sat: Bool) -> Int {
+    return val
+}
+
+fn f2f_load(cache: mut UOpCache, x: Int, fr: read DType, to: read DType) -> Int {
+    return f2f(cache: mut cache, v: x, fr: read fr, to: read to, sat: true)
+}
+
+fn f2f_store(cache: mut UOpCache, st: Int, idx: Int, val: Int, fr: read DType, to: read DType) -> Int {
+    return st
+}
+
+fn get_transcendental_patterns(cache: mut UOpCache, id: Int, force_transcendental: Bool) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op == SIN {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return Some(xsin(cache: mut cache, d: x, fast: force_transcendental))
+    }
+    if op == EXP2 {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return Some(xexp2(cache: mut cache, d: x))
+    }
+    if op == LOG2 {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        return Some(xlog2(cache: mut cache, d: x))
+    }
+    if op == SQRT {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let half = mk_const_float(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: x), v: 0.5)
+        return Some(xpow(cache: mut cache, base: x, exponent: half))
+    }
+    return None
+}
+
+fn floordiv_to_idiv(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    let raw = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: a, y: b)
+    match decomp_floordiv_to_cdiv(cache: mut cache, id: raw) {
+        Some(r) => { return r }
+        None => { return raw }
+    }
+}
+
+fn floormod_to_mod(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    let raw = mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: a, y: b)
+    match decomp_floormod_to_cmod(cache: mut cache, id: raw) {
+        Some(r) => { return r }
+        None => { return raw }
+    }
+}
+
+fn get_late_rewrite_patterns(cache: mut UOpCache, id: Int, disable_fast_idiv: Bool) -> Option<Int> {
+    return decomp_late_basic(cache: mut cache, id: id)
+}
+
+fn do_dtype_decomps(cache: mut UOpCache, id: Int) -> Option<Int> {
+    return decomp_late_basic(cache: mut cache, id: id)
+}

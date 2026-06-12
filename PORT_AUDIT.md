@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 19 RSS files, 14,482 LOC.
+  - integrated `tinygrad-rss/src`: 19 RSS files, 14,736 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -113,8 +113,10 @@ Integrated pieces:
 - `renderer/cstyle.rss`: first integrated source-shaped `tinygrad/renderer/cstyle.py` slice over
   interned UOp ids, covering C-style dtype names, constants, casts, `__builtin_bit_cast`, core
   unary/binary/ternary ALU rendering, pointer-style `INDEX`, `LOAD`, `STORE`, simple `RANGE`/`END`
-  statements, and custom text passthrough. This is an expression/statement renderer slice, not the
-  full `render_kernel`/linearizer/schedule backend.
+  statements, custom text passthrough, `_render`-style name assignment over topologically sorted
+  UOps, parameter collection, scoped loop/body emission, and a first `render_kernel`-style C
+  function wrapper. It still lacks upstream's full linearizer ordering, inline heuristics,
+  writable-param analysis, vector typedefs, target subclasses, and schedule integration.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -243,6 +245,9 @@ Current integrated demo:
   casts, bitcasts, pointer-style indexed loads, and stores, producing strings such as
   `((dp+3)*4)`, `((dp<4)?dp:3)`, `__builtin_bit_cast(unsigned int, (int)(dp))`,
   `(*(buf+dp))`, and `*(buf+dp) = fa;`.
+- validates first integrated C-style kernel rendering over a real UOp graph with `PARAM`, `RANGE`,
+  `INDEX`, `LOAD`, ALU, `STORE`, `END`, and `SINK`, rendering a parseable C function for
+  `out[i] = (in[i] + 2.0f) * 3.0f`.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -453,8 +458,8 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad, with clear scope for GPU-only
   optimization passes.
-- `renderer/cstyle.py`: full integrated MC/C-style kernel renderer on top of the expression and
-  statement slice now in `renderer/cstyle.rss`.
+- `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
+  generic kernel wrapper now in `renderer/cstyle.rss`.
 - `device.py`, `runtime/*`, `runtime/support/*`: handwritten device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.

@@ -60,7 +60,9 @@ fn cstyle_render_const(cache: read UOpCache, id: Int) -> fresh String {
     }
     if dt.name == "float" {
         let f = node_const_float(cache: read cache, id: id)
-        return cstyle_cat(a: read Float.to_string(value: read f), b: read "f")
+        let mut fs = Float.to_string(value: read f)
+        if String.contains(value: read fs, needle: read ".") == false { fs = cstyle_cat(a: read fs, b: read ".0") }
+        return cstyle_cat(a: read fs, b: read "f")
     }
     return uop_arg_to_string(arg: read node_arg(cache: read cache, id: id))
 }
@@ -205,4 +207,234 @@ fn cstyle_render_statement(cache: read UOpCache, id: Int) -> fresh String {
     }
     if op == END || op == ENDIF { return "}" }
     return cstyle_render_expr(cache: read cache, id: id)
+}
+
+fn cstyle_indent(depth: Int, line: read String) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < depth {
+        out = cstyle_cat(a: read out, b: read "  ")
+        i = i + 1
+    }
+    return cstyle_cat(a: read out, b: read line)
+}
+
+fn cstyle_param_data_name(cache: read UOpCache, id: Int) -> fresh String {
+    return cstyle_cat(a: read "data", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
+}
+
+fn cstyle_prefix_for_op(op: read Ops) -> fresh String {
+    if op == WMMA { return "wmma" }
+    if op == DEFINE_LOCAL { return "temp" }
+    if op == CONST { return "const" }
+    if op == CAST { return "cast" }
+    if op == BITCAST { return "cast" }
+    if op == GEP { return "gep" }
+    if op == STACK { return "cast" }
+    if op == INDEX { return "bidx" }
+    if op == DEFINE_REG { return "acc" }
+    if op == LOAD { return "val" }
+    return "alu"
+}
+
+fn cstyle_next_name(counts: mut Map<String, Int>, prefix: read String) -> fresh String {
+    let mut n = 0
+    match Map.get<String, Int>(map: read counts, key: read prefix) {
+        Some(v) => { n = v }
+        None => { n = 0 }
+    }
+    let next = n + 1
+    Map.insert<String, Int>(map: mut counts, key: read prefix, value: read next)
+    return cstyle_cat(a: read prefix, b: read Int.to_string(value: read n))
+}
+
+fn cstyle_name_lookup(names: read Map<Int, String>, id: Int) -> fresh Option<String> {
+    match Map.get<Int, String>(map: read names, key: read id) {
+        Some(v) => { return Some(String.copy(value: read v)) }
+        None => { return None }
+    }
+}
+
+fn cstyle_operand(cache: read UOpCache, names: read Map<Int, String>, id: Int) -> fresh String {
+    match cstyle_name_lookup(names: read names, id: id) {
+        Some(v) => { return String.copy(value: read v) }
+        None => { return cstyle_render_node_expr_ctx(cache: read cache, names: read names, id: id) }
+    }
+}
+
+fn cstyle_index_offset_ctx(cache: read UOpCache, names: read Map<Int, String>, id: Int) -> fresh String {
+    let mut off = String.copy(value: read "")
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        let idx_id = node_src_id(cache: read cache, id: id, k: i)
+        let idx = cstyle_operand(cache: read cache, names: read names, id: idx_id)
+        let mut inner = String.copy(value: read idx)
+        if node_op(cache: read cache, id: idx_id) == ADD { inner = render_strip_parens(x: read idx) }
+        if i == 1 {
+            off = String.copy(value: read inner)
+        } else {
+            off = cstyle_cat(a: read off, b: read cstyle_cat(a: read "+", b: read inner))
+        }
+        i = i + 1
+    }
+    return String.copy(value: read off)
+}
+
+fn cstyle_render_node_expr_ctx(cache: read UOpCache, names: read Map<Int, String>, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEFINE_VAR { return uop_expr(cache: read cache, id: id) }
+    if op == PARAM { return cstyle_param_data_name(cache: read cache, id: id) }
+    if op == RANGE { return cstyle_operand(cache: read cache, names: read names, id: id) }
+    if op == CONST { return cstyle_render_const(cache: read cache, id: id) }
+    if op == CAST {
+        let x = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        return cstyle_cast_text(dt: read node_full_dtype(cache: read cache, id: id), val: read x)
+    }
+    if op == BITCAST {
+        let src_id = node_src_id(cache: read cache, id: id, k: 0)
+        let x = cstyle_operand(cache: read cache, names: read names, id: src_id)
+        let dst = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+        let srcdt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: src_id))
+        let p0 = cstyle_cat(a: read "__builtin_bit_cast(", b: read dst)
+        let p1 = cstyle_cat(a: read p0, b: read ", (")
+        let p2 = cstyle_cat(a: read p1, b: read srcdt)
+        let p3 = cstyle_cat(a: read p2, b: read ")(")
+        let p4 = cstyle_cat(a: read p3, b: read x)
+        return cstyle_cat(a: read p4, b: read "))")
+    }
+    if group_alu(op: read op) {
+        let a = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        let mut b = String.copy(value: read "")
+        let mut c = String.copy(value: read "")
+        if node_num_src(cache: read cache, id: id) > 1 { b = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 1)) }
+        if node_num_src(cache: read cache, id: id) > 2 { c = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 2)) }
+        return cstyle_code_for_alu(op: read op, a: read a, b: read b, c: read c)
+    }
+    if op == INDEX || op == STAGE {
+        let base = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        let off = cstyle_index_offset_ctx(cache: read cache, names: read names, id: id)
+        if String.len(value: read off) == 0 { return cstyle_paren(x: read base) }
+        return cstyle_paren(x: read cstyle_cat(a: read base, b: read cstyle_cat(a: read "+", b: read off)))
+    }
+    if op == LOAD {
+        let ptr = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        if node_num_src(cache: read cache, id: id) == 1 {
+            return cstyle_paren(x: read cstyle_cat(a: read "*", b: read ptr))
+        }
+        if node_num_src(cache: read cache, id: id) == 3 {
+            let fallback = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 1))
+            let gate = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 2))
+            return cstyle_paren(x: read cstyle_cat(a: read gate, b: read cstyle_cat(a: read "?*", b: read cstyle_cat(a: read ptr, b: read cstyle_cat(a: read ":", b: read fallback)))))
+        }
+    }
+    if op == CUSTOM || op == CUSTOMI { return uop_arg_to_string(arg: read node_arg(cache: read cache, id: id)) }
+    return ops_name(op: read op)
+}
+
+fn cstyle_render_statement_ctx(cache: read UOpCache, names: read Map<Int, String>, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == STORE {
+        let ptr = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        let val = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 1))
+        let assign = cstyle_cat(a: read "*", b: read cstyle_cat(a: read ptr, b: read cstyle_cat(a: read " = ", b: read cstyle_cat(a: read val, b: read ";"))))
+        if node_num_src(cache: read cache, id: id) == 3 {
+            let gate = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 2))
+            return cstyle_cat(a: read "if (", b: read cstyle_cat(a: read gate, b: read cstyle_cat(a: read ") { ", b: read cstyle_cat(a: read assign, b: read " }"))))
+        }
+        return String.copy(value: read assign)
+    }
+    if op == RANGE {
+        let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+        let name = cstyle_operand(cache: read cache, names: read names, id: id)
+        let end = cstyle_operand(cache: read cache, names: read names, id: node_src_id(cache: read cache, id: id, k: 0))
+        let p0 = cstyle_cat(a: read "for (", b: read dt)
+        let p1 = cstyle_cat(a: read p0, b: read " ")
+        let p2 = cstyle_cat(a: read p1, b: read name)
+        let p3 = cstyle_cat(a: read p2, b: read " = 0; ")
+        let p4 = cstyle_cat(a: read p3, b: read name)
+        let p5 = cstyle_cat(a: read p4, b: read " < ")
+        let p6 = cstyle_cat(a: read p5, b: read end)
+        let p7 = cstyle_cat(a: read p6, b: read "; ")
+        let p8 = cstyle_cat(a: read p7, b: read name)
+        return cstyle_cat(a: read p8, b: read "++) {")
+    }
+    return cstyle_render_node_expr_ctx(cache: read cache, names: read names, id: id)
+}
+
+fn cstyle_param_decl(cache: read UOpCache, id: Int) -> fresh String {
+    let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+    return cstyle_cat(a: read dt, b: read cstyle_cat(a: read "* ", b: read cstyle_param_data_name(cache: read cache, id: id)))
+}
+
+fn cstyle_param_decls(cache: read UOpCache, params: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read params) {
+        if i > 0 { out = cstyle_cat(a: read out, b: read ", ") }
+        let p = List.get<Int>(list: read params, index: i)
+        out = cstyle_cat(a: read out, b: read cstyle_param_decl(cache: read cache, id: p))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read String) -> fresh String {
+    let order = uop_toposort(cache: read cache, id: sink)
+    local names = Map.new<Int, String>()
+    local counts = Map.new<String, Int>()
+    local params = List.new<Int>()
+    local lines = List.new<String>()
+    let mut depth = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        let op = node_op(cache: read cache, id: id)
+        if op == PARAM {
+            let nm = cstyle_param_data_name(cache: read cache, id: id)
+            Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
+            if int_contains(items: read params, v: id) == false { List.push<Int>(list: mut params, value: read id) }
+        } else {
+            if op == RANGE {
+                let nm = cstyle_cat(a: read "r", b: read uop_range_str(cache: read cache, id: id))
+                Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
+                let line = cstyle_render_statement_ctx(cache: read cache, names: read names, id: id)
+                List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read line))
+                depth = depth + 1
+            } else {
+                if op == END || op == ENDIF {
+                    depth = depth - 1
+                    List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read "}"))
+                } else {
+                    if op == STORE {
+                        let line = cstyle_render_statement_ctx(cache: read cache, names: read names, id: id)
+                        List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read line))
+                    } else {
+                        if op == SINK || op == CONST || op == INDEX || op == GEP || op == CUSTOMI || op == NOOP || op == GROUP {
+                        } else {
+                            let prefix = cstyle_prefix_for_op(op: read op)
+                            let nm = cstyle_next_name(counts: mut counts, prefix: read prefix)
+                            let expr = cstyle_render_node_expr_ctx(cache: read cache, names: read names, id: id)
+                            Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
+                            if node_full_dtype(cache: read cache, id: id).name != "void" {
+                                let dt = cstyle_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+                                let line0 = cstyle_cat(a: read dt, b: read cstyle_cat(a: read " ", b: read cstyle_cat(a: read nm, b: read cstyle_cat(a: read " = ", b: read cstyle_cat(a: read expr, b: read ";")))))
+                                List.push<String>(list: mut lines, value: read cstyle_indent(depth: depth, line: read line0))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    local out = List.new<String>()
+    let header = cstyle_cat(a: read "void ", b: read cstyle_cat(a: read function_name, b: read cstyle_cat(a: read "(", b: read cstyle_cat(a: read cstyle_param_decls(cache: read cache, params: read params), b: read ") {"))))
+    List.push<String>(list: mut out, value: read header)
+    let mut j = 0
+    while j < List.len<String>(list: read lines) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read lines, index: j))
+        j = j + 1
+    }
+    List.push<String>(list: mut out, value: read "}")
+    return String.join(parts: read out, separator: read "\n")
 }

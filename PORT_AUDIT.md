@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,244 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,280 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -200,7 +200,7 @@ Integrated pieces:
   simplifying the resulting gradient graph.
 - `uop/vminmax.rss`, `uop/alu.rss`, `uop/symbolic.rss`, `runtime/ops_python.rss`: small
   interpreter/simplifier pieces. The symbolic layer now includes integer vmin/vmax, rewrite
-  identities/folding, constant-exponent `POW` simplification for integer exponents,
+  identities/folding, simple `WHERE` folding, constant-exponent `POW` simplification for integer exponents,
   monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
   multiplicative cancellation. Vmin/vmax covers bounded `PARAM`, plus both `SPECIAL` and `RANGE` as `[0, end_max - 1]`.
@@ -306,6 +306,8 @@ Current integrated demo:
   (`x**3 -> x*x*x`, `x**0 -> 1`, `x**-1 -> 1/x`), constant-factor extraction, exact
   divisibility on `(x*4)+8`, conservative `divide_exact` cancellation for `(x*6)/(x*3)`,
   and symbolic `gcd(x*6, x*9) -> 3*x`.
+- validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
+  constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:
   `(n%8)//4 -> (n//4)%2`, `(n%8)%4 -> n%4`, `(b*6+2)//3 -> b*2`,
   `(b*6+2)%3 -> 2`, `(n*4+8)//6 -> ((n*2+1)//3)+1`,

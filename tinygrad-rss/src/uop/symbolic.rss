@@ -336,6 +336,23 @@ fn rule_simplify_pow_const(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn rule_simplify_where(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != WHERE { return None }
+    if node_num_src(cache: read cache, id: id) != 3 { return None }
+    let cond = node_src_id(cache: read cache, id: id, k: 0)
+    let tval = node_src_id(cache: read cache, id: id, k: 1)
+    let fval = node_src_id(cache: read cache, id: id, k: 2)
+    if tval == fval { return Some(tval) }
+    let cdt = node_dtype(cache: read cache, id: cond)
+    if dtype_is_bool(d: read cdt) {
+        if node_is_const_int(cache: read cache, id: cond) {
+            if node_const_int(cache: read cache, id: cond) == 0 { return Some(fval) }
+            return Some(tval)
+        }
+    }
+    return None
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -417,6 +434,10 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_pow_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_where(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

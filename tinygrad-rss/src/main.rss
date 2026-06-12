@@ -842,6 +842,24 @@ fn main() -> Unit {
     List.push<Int>(list: mut mdev_ptrcat_src, value: read mdev_ptr1)
     let mdev_ptrcat_dt = dtype_vec(base: read i32, sz: 2)
     let mdev_ptrcat = mk_ptrcat(cache: mut mcache, dt: read mdev_ptrcat_dt, srcs: read mdev_ptrcat_src)
+    local mdev_stack_buf_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_stack_buf_src, value: read mbuf_cpu)
+    List.push<Int>(list: mut mdev_stack_buf_src, value: read mbuf_cpu)
+    let mdev_stack_buf = uop_stack(cache: mut mcache, dt: read mdev_ptrcat_dt, srcs: read mdev_stack_buf_src)
+    local mdev_stack_index_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_stack_index_src, value: read mgep2)
+    let mdev_stack_index = mk_index(cache: mut mcache, base: mdev_stack_buf, srcs: read mdev_stack_index_src, ptr: true)
+    let mut mdev_stack_index_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_stack_index) {
+        Some(r) => {
+            let si0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let si1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let stack_index_root_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 2
+            let stack_index_src_ok = node_op(cache: read mcache, id: si0) == INDEX && node_op(cache: read mcache, id: si1) == INDEX
+            mdev_stack_index_ok = stack_index_root_ok && stack_index_src_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     local mdev_rev = List.new<Int>()
     List.push<Int>(list: mut mdev_rev, value: read 1)
     List.push<Int>(list: mut mdev_rev, value: read 0)
@@ -894,6 +912,7 @@ fn main() -> Unit {
         }
         None => {}
     }
+    showb(label: read "codegen.devectorizer expands stack index = ", v: mdev_stack_index_ok)
     showb(label: read "codegen.devectorizer folds gep after load = ", v: mdev_load_gep_ok)
     showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
     showb(label: read "codegen.devectorizer folds ptrcat load = ", v: mdev_load_ptrcat_ok)

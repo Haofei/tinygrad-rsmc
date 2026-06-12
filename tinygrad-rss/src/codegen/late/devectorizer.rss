@@ -4,8 +4,9 @@
 // pm_render normalization rules: vector ALU/CAST/BITCAST nodes become a STACK
 // of scalar lane operations, and vector CONST/GEP/STACK nodes are normalized
 // for rendering. It also ports the context-free load/store folding rules for
-// GEP and PTRCAT. Index expansion/folding, load/store splitting, buffer/index
-// devectorization, REDUCE lowering, and image rewrites remain later slices.
+// STACK-backed INDEX, GEP, and PTRCAT. Folded-index regrouping, load/store
+// splitting, buffer/index devectorization, REDUCE lowering, and image rewrites
+// remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -186,6 +187,31 @@ fn devectorizer_store_with_ptr_value(cache: mut UOpCache, id: Int, ptr: Int, val
     return intern(cache: mut cache, op: STORE, dt: read dt, src: take srcs, arg: take arg)
 }
 
+fn devectorizer_expand_index_stack(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != INDEX { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let base = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: base) != STACK { return None }
+    let vec = node_src_id(cache: read cache, id: id, k: 1)
+    let cnt = node_num_src(cache: read cache, id: base)
+    if cnt <= 1 { return None }
+    local lanes = List.new<Int>()
+    let mut lane = 0
+    while lane < cnt {
+        let buf = node_src_id(cache: read cache, id: base, k: lane)
+        local lane_idx_arg = List.new<Int>()
+        List.push<Int>(list: mut lane_idx_arg, value: read lane)
+        let lane_idx = mk_gep(cache: mut cache, x: vec, idxs: read lane_idx_arg)
+        local idx_srcs = List.new<Int>()
+        List.push<Int>(list: mut idx_srcs, value: read lane_idx)
+        let idx = mk_index(cache: mut cache, base: buf, srcs: read idx_srcs, ptr: true)
+        List.push<Int>(list: mut lanes, value: read idx)
+        lane = lane + 1
+    }
+    let dt = node_full_dtype(cache: read cache, id: base)
+    return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+}
+
 fn devectorizer_gep_after_load(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != LOAD { return None }
     if node_num_src(cache: read cache, id: id) < 1 { return None }
@@ -260,6 +286,10 @@ fn devectorizer_ptrcat_after_store(cache: mut UOpCache, id: Int) -> Option<Int> 
 }
 
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match devectorizer_expand_index_stack(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match devectorizer_gep_after_load(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

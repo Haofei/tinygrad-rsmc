@@ -1618,6 +1618,28 @@ fn node_bufferize_addrspace(cache: read UOpCache, id: Int) -> fresh AddrSpace {
     }
 }
 
+fn node_bufferize_removable(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBufferize(b) => { return b.removable }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
 fn node_program_name(cache: read UOpCache, id: Int) -> fresh String {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
     match n.arg {

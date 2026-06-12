@@ -532,7 +532,17 @@ fn indexing_valid_product(cache: mut UOpCache, ranges: read List<Int>) -> Int {
     return valid
 }
 
-fn indexing_rewrite_child_for_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, parent_rec_i: Int, child_orig: Int, child_rewritten: Int) -> Int {
+fn indexing_stage_opts(cache: read UOpCache, parent_orig: Int, child_orig: Int, out_ranges: read List<Int>, realized_axes: read List<Int>) -> fresh BufferizeArg {
+    let parent_op = node_op(cache: read cache, id: parent_orig)
+    let child_op = node_op(cache: read cache, id: child_orig)
+    let removable = parent_op != COPY && indexing_always_contiguous(op: read child_op) == false
+    if List.len<Int>(list: read out_ranges) == List.len<Int>(list: read realized_axes) {
+        return mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: removable)
+    }
+    return mk_bufferize_arg_none(addrspace: read ADDR_LOCAL, removable: removable)
+}
+
+fn indexing_rewrite_child_for_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, parent_orig: Int, parent_rec_i: Int, child_orig: Int, child_rewritten: Int) -> Int {
     let child_op = node_op(cache: read cache, id: child_orig)
     if parent_rec_i >= 0 && indexing_source_like(op: read child_op) {
         let prec = List.get<IndexingRangeRecord>(list: read analysis.records, index: parent_rec_i)
@@ -545,7 +555,7 @@ fn indexing_rewrite_child_for_ranges(cache: mut UOpCache, analysis: read Indexin
             let child_rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: child_rec_i)
             let arec = List.get<IndexingRealizeAxisRecord>(list: read analysis.realize_axes, index: rai)
             local closed = indexing_select_axes(items: read child_rec.out_ranges, axes: read arec.axes)
-            let opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: true)
+            let opts = indexing_stage_opts(cache: read cache, parent_orig: parent_orig, child_orig: child_orig, out_ranges: read child_rec.out_ranges, realized_axes: read arec.axes)
             let staged = mk_stage(cache: mut cache, x: child_rewritten, ranges: read closed, opts: read opts)
             if parent_rec_i >= 0 {
                 let prec = List.get<IndexingRangeRecord>(list: read analysis.records, index: parent_rec_i)
@@ -570,7 +580,7 @@ fn indexing_rangeify_rewrite_node(cache: mut UOpCache, id: Int, analysis: read I
     while si < node_num_src(cache: read cache, id: id) {
         let child = node_src_id(cache: read cache, id: id, k: si)
         let child_rewritten = indexing_rangeify_rewrite_node(cache: mut cache, id: child, analysis: read analysis, olds: mut olds, news: mut news)
-        let adjusted = indexing_rewrite_child_for_ranges(cache: mut cache, analysis: read analysis, parent_rec_i: rec_i, child_orig: child, child_rewritten: child_rewritten)
+        let adjusted = indexing_rewrite_child_for_ranges(cache: mut cache, analysis: read analysis, parent_orig: id, parent_rec_i: rec_i, child_orig: child, child_rewritten: child_rewritten)
         List.push<Int>(list: mut rewritten_src, value: read adjusted)
         si = si + 1
     }

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 15 RSS files, 12,980 LOC.
+  - integrated `tinygrad-rss/src`: 16 RSS files, 13,232 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -92,6 +92,10 @@ Integrated pieces:
   codegen helper `CUSTOM`/`CUSTOMI`, `INS`, `GETADDR`, `WMMA`/`SHAPED_WMMA`, and `VCAT`/`PTRCAT` nodes,
   `UNROLL`/`CONTRACT` dtype-count/product validation, tuple/gettuple, index/load-store,
   control-flow `IF`/`ENDIF`, order nodes including `END` range validation, and recursive source validation.
+- `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
+  UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, `PARAM`, `RANGE`, `CONST`,
+  `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
+  inference-specific rendering for div/mod and `BITCAST`, plus compact UOp line printing.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -166,6 +170,8 @@ Current integrated demo:
 - validates UOp symbolic variables and binding: expression extraction, declared vmin/vmax,
   in-range `BIND`, `unbind`, `val`, sorted `variables`, `unbind_all` rewrite with collected
   bindings, and out-of-range bind rejection.
+- validates the integrated source-shaped UOp renderer for precedence-aware symbolic expressions,
+  `max`, inference `floordiv`, inference `BITCAST`, compact repeated `STACK`, and UOp line output.
 - validates UOp `ParamArg` metadata and definitions: `PARAM` slot/name/addrspace, bounded param
   vmin/vmax, `DEFINE_LOCAL`/`DEFINE_REG` addrspace, and rejection of invalid param bounds or
   negative local slots.
@@ -408,10 +414,10 @@ Major missing integrated work:
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and selected unary/math VJPs, but full
   Function-style APIs, complete VJP coverage, gradient accumulation APIs, and exact tinygrad
   gradient semantics are still missing.
-- `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/spec.py`, `uop/validate.py`: full
+- `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
-  the full upstream method surface, symbolic/decomposition coverage, full spec/validation, and
-  exact upstream semantics are still incomplete.
+  the full upstream method surface, symbolic/decomposition coverage, complete render/pyrender
+  behavior, full spec/validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad, with clear scope for GPU-only
   optimization passes.

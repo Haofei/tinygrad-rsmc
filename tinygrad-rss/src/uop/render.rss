@@ -1,0 +1,241 @@
+// Integrated port slice of tinygrad/uop/render.py.
+//
+// tinygrad's render.py is written as PatternMatcher rules over UOp objects. In
+// tinygrad-rss the graph is interned in UOpCache and referenced by node id, so
+// these renderers keep the same visible behavior while traversing ids directly.
+features: local
+
+fn render_cat(a: read String, b: read String) -> fresh String {
+    return String.concat(left: read a, right: read b)
+}
+
+fn render_strip_parens(x: read String) -> fresh String {
+    let n = String.len(value: read x)
+    if n >= 2 {
+        if String.starts_with(value: read x, prefix: read "(") && String.ends_with(value: read x, suffix: read ")") {
+            return String.slice(value: read x, start: 1, len: n - 2)
+        }
+    }
+    return String.copy(value: read x)
+}
+
+fn render_dtype_name(dt: read DType) -> fresh String {
+    if dt.count > 1 { return String.copy(value: read dt.name) }
+    return inverse_dtype_name(n: read dt.name)
+}
+
+fn render_dtype_repr(dt: read DType) -> fresh String {
+    return render_cat(a: read "dtypes.", b: read render_dtype_name(dt: read dt))
+}
+
+fn render_sym(op: read Ops) -> fresh String {
+    if op == ADD { return "+" }
+    if op == SUB { return "-" }
+    if op == FLOORDIV { return "//" }
+    if op == FLOORMOD { return "%" }
+    if op == SHL { return "<<" }
+    if op == SHR { return ">>" }
+    if op == MUL { return "*" }
+    if op == CMPLT { return "<" }
+    if op == CMPNE { return "!=" }
+    if op == CMPEQ { return "==" }
+    if op == AND { return "&" }
+    if op == OR { return "|" }
+    if op == XOR { return "^" }
+    return "?"
+}
+
+fn render_has_sym(op: read Ops) -> Bool {
+    if op == ADD { return true }
+    if op == SUB { return true }
+    if op == FLOORDIV { return true }
+    if op == FLOORMOD { return true }
+    if op == SHL { return true }
+    if op == SHR { return true }
+    if op == MUL { return true }
+    if op == CMPLT { return true }
+    if op == CMPNE { return true }
+    if op == CMPEQ { return true }
+    if op == AND { return true }
+    if op == OR { return true }
+    if op == XOR { return true }
+    return false
+}
+
+fn render_precedence(op: read Ops) -> Int {
+    if op == MUL { return 1 }
+    if op == FLOORDIV { return 1 }
+    if op == FLOORMOD { return 1 }
+    if op == ADD { return 2 }
+    if op == SUB { return 2 }
+    if op == SHL { return 3 }
+    if op == SHR { return 3 }
+    if op == AND { return 4 }
+    if op == XOR { return 5 }
+    if op == OR { return 6 }
+    return 99
+}
+
+fn render_binary_parens(cache: read UOpCache, id: Int, left: read String, right: read String) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    let prec = render_precedence(op: read op)
+    let lhs_id = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs_id = node_src_id(cache: read cache, id: id, k: 1)
+    let lhs_op = node_op(cache: read cache, id: lhs_id)
+    let rhs_op = node_op(cache: read cache, id: rhs_id)
+    let mut lhs = String.copy(value: read left)
+    let mut rhs = String.copy(value: read right)
+    if render_precedence(op: read lhs_op) <= prec { lhs = render_strip_parens(x: read lhs) }
+    if render_precedence(op: read rhs_op) < prec { rhs = render_strip_parens(x: read rhs) }
+    let inner = render_cat(a: read lhs, b: read render_cat(a: read render_sym(op: read op), b: read rhs))
+    return render_cat(a: read "(", b: read render_cat(a: read inner, b: read ")"))
+}
+
+fn render_const(cache: read UOpCache, id: Int) -> fresh String {
+    if node_is_const_int(cache: read cache, id: id) {
+        return Int.to_string(value: read node_const_int(cache: read cache, id: id))
+    }
+    return uop_arg_to_string(arg: read node_arg(cache: read cache, id: id))
+}
+
+fn render_src_join(cache: read UOpCache, id: Int, start: Int, sep: read String) -> fresh String {
+    let mut s = String.copy(value: read "")
+    let mut i = start
+    while i < node_num_src(cache: read cache, id: id) {
+        if i > start { s = render_cat(a: read s, b: read sep) }
+        let cid = node_src_id(cache: read cache, id: id, k: i)
+        s = render_cat(a: read s, b: read uop_render_expr(cache: read cache, id: cid))
+        i = i + 1
+    }
+    return String.copy(value: read s)
+}
+
+fn render_stack(cache: read UOpCache, id: Int) -> fresh String {
+    let n = node_num_src(cache: read cache, id: id)
+    if n == 0 { return "{}" }
+    let first = node_src_id(cache: read cache, id: id, k: 0)
+    let mut same = true
+    let mut i = 1
+    while i < n {
+        if node_src_id(cache: read cache, id: id, k: i) != first { same = false }
+        i = i + 1
+    }
+    if same {
+        return render_cat(a: read "{", b: read render_cat(a: read uop_render_expr(cache: read cache, id: first), b: read ", ...}"))
+    }
+    return render_cat(a: read "{", b: read render_cat(a: read render_src_join(cache: read cache, id: id, start: 0, sep: read ","), b: read "}"))
+}
+
+fn render_index_suffixes(cache: read UOpCache, id: Int) -> fresh String {
+    let mut s = String.copy(value: read "")
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        let cid = node_src_id(cache: read cache, id: id, k: i)
+        let inner = render_strip_parens(x: read uop_render_expr(cache: read cache, id: cid))
+        s = render_cat(a: read s, b: read render_cat(a: read "[", b: read render_cat(a: read inner, b: read "]")))
+        i = i + 1
+    }
+    return String.copy(value: read s)
+}
+
+fn uop_render_expr(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEFINE_VAR { return uop_expr(cache: read cache, id: id) }
+    if op == PARAM {
+        let name = node_param_name(cache: read cache, id: id)
+        if String.len(value: read name) > 0 { return String.copy(value: read name) }
+        return render_cat(a: read "p", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
+    }
+    if op == SPECIAL { return "SPECIAL" }
+    if op == RANGE { return render_cat(a: read "r", b: read uop_range_str(cache: read cache, id: id)) }
+    if op == CONST { return render_const(cache: read cache, id: id) }
+    if op == UNROLL {
+        let x = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return render_cat(a: read "UNROLL(", b: read render_cat(a: read x, b: read render_cat(a: read ", ", b: read render_cat(a: read uop_arg_to_string(arg: read node_arg(cache: read cache, id: id)), b: read ")"))))
+    }
+    if op == CAST {
+        let dt = render_dtype_name(dt: read node_full_dtype(cache: read cache, id: id))
+        let x = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        return render_cat(a: read "(", b: read render_cat(a: read dt, b: read render_cat(a: read ")(", b: read render_cat(a: read x, b: read ")"))))
+    }
+    if op == BIND { return uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0)) }
+    if op == NEG {
+        return render_cat(a: read "(-", b: read render_cat(a: read uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0)), b: read ")"))
+    }
+    if op == RECIPROCAL {
+        return render_cat(a: read "(1/", b: read render_cat(a: read uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0)), b: read ")"))
+    }
+    if op == MAX {
+        let a = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let b = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        return render_cat(a: read "max(", b: read render_cat(a: read a, b: read render_cat(a: read ", ", b: read render_cat(a: read b, b: read ")"))))
+    }
+    if op == MULACC {
+        let a = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let b = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        let c = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+        return render_cat(a: read "(", b: read render_cat(a: read a, b: read render_cat(a: read "*", b: read render_cat(a: read b, b: read render_cat(a: read "+", b: read render_cat(a: read c, b: read ")"))))))
+    }
+    if op == WHERE {
+        let c = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let t = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        let f = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+        return render_cat(a: read "(", b: read render_cat(a: read t, b: read render_cat(a: read " if ", b: read render_cat(a: read c, b: read render_cat(a: read " else ", b: read render_cat(a: read f, b: read ")"))))))
+    }
+    if op == CDIV {
+        let a = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let b = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        return render_cat(a: read "cdiv(", b: read render_cat(a: read a, b: read render_cat(a: read ", ", b: read render_cat(a: read b, b: read ")"))))
+    }
+    if op == CMOD {
+        let a = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let b = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        return render_cat(a: read "cmod(", b: read render_cat(a: read a, b: read render_cat(a: read ", ", b: read render_cat(a: read b, b: read ")"))))
+    }
+    if render_has_sym(op: read op) {
+        let left = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let right = uop_render_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        return render_binary_parens(cache: read cache, id: id, left: read left, right: read right)
+    }
+    if op == INDEX || op == STAGE { return render_index_suffixes(cache: read cache, id: id) }
+    if op == STACK { return render_stack(cache: read cache, id: id) }
+    return ops_name(op: read op)
+}
+
+fn uop_render_infer_expr(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == CMOD || op == CDIV || op == FLOORMOD || op == FLOORDIV {
+        let a = uop_render_infer_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 0))
+        let b = uop_render_infer_expr(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+        let mut name = String.copy(value: read "")
+        if op == CMOD { name = "cmod" }
+        if op == CDIV { name = "cdiv" }
+        if op == FLOORMOD { name = "floormod" }
+        if op == FLOORDIV { name = "floordiv" }
+        return render_cat(a: read name, b: read render_cat(a: read "(", b: read render_cat(a: read a, b: read render_cat(a: read ", ", b: read render_cat(a: read b, b: read ")")))))
+    }
+    if op == BITCAST {
+        let x = node_src_id(cache: read cache, id: id, k: 0)
+        let val = uop_render_infer_expr(cache: read cache, id: x)
+        let srcdt = render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: x))
+        let dstdt = render_dtype_repr(dt: read node_full_dtype(cache: read cache, id: id))
+        return render_cat(a: read "bitcast(", b: read render_cat(a: read val, b: read render_cat(a: read ", ", b: read render_cat(a: read srcdt, b: read render_cat(a: read ", ", b: read render_cat(a: read dstdt, b: read ")"))))))
+    }
+    return uop_render_expr(cache: read cache, id: id)
+}
+
+fn uop_pretty_line(cache: read UOpCache, id: Int) -> fresh String {
+    let mut s = String.concat(left: read "UOp(", right: read ops_name(op: read node_op(cache: read cache, id: id)))
+    s = render_cat(a: read s, b: read ", ")
+    s = render_cat(a: read s, b: read render_dtype_name(dt: read node_full_dtype(cache: read cache, id: id)))
+    s = render_cat(a: read s, b: read ", arg=")
+    s = render_cat(a: read s, b: read uop_arg_to_string(arg: read node_arg(cache: read cache, id: id)))
+    s = render_cat(a: read s, b: read ", src=(")
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        if i > 0 { s = render_cat(a: read s, b: read ",") }
+        s = render_cat(a: read s, b: read Int.to_string(value: read node_src_id(cache: read cache, id: id, k: i)))
+        i = i + 1
+    }
+    return render_cat(a: read s, b: read "))")
+}

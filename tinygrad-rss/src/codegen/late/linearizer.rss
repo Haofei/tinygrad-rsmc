@@ -1,8 +1,7 @@
 // Integrated source-shaped slice of tinygrad/codegen/late/linearizer.py.
 //
 // This ports the priority toposort used by linearize(sink) onto the interned
-// UOp cache. CFG edge insertion and register allocation remain separate later
-// codegen work.
+// UOp cache. Register allocation remains separate later codegen work.
 features: local
 
 fn linearizer_priority(op: read Ops) -> Int {
@@ -211,6 +210,260 @@ fn linearizer_collect_ranges(cache: read UOpCache, id: Int, ranges: mut List<Int
     return Unit
 }
 
+fn linearizer_append_unique(dst: mut List<Int>, src: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        uop_push_unique(vals: mut dst, v: List.get<Int>(list: read src, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn linearizer_cfg_has_nesting(ends: read List<Int>, id: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read ends) {
+        if List.get<Int>(list: read ends, index: i) == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn linearizer_cfg_dep_count(cache: read UOpCache, topo: read List<Int>, deps: read List<List<Int>>, siblings: read List<Int>, id: Int) -> Int {
+    let idx = linearizer_index_of(list: read topo, id: id)
+    if idx < 0 { return 0 }
+    let id_deps = List.get<List<Int>>(list: read deps, index: idx)
+    let mut out = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read siblings) {
+        let s = List.get<Int>(list: read siblings, index: i)
+        if uop_ints_contains(vals: read id_deps, v: s) { out = out + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn linearizer_cfg_sort_siblings(cache: read UOpCache, topo: read List<Int>, deps: read List<List<Int>>, siblings: mut List<Int>) -> Unit {
+    let n = List.len<Int>(list: read siblings)
+    let mut i = 0
+    while i < n {
+        let mut best = i
+        let mut j = i + 1
+        while j < n {
+            let sj = List.get<Int>(list: read siblings, index: j)
+            let sb = List.get<Int>(list: read siblings, index: best)
+            let cj = linearizer_cfg_dep_count(cache: read cache, topo: read topo, deps: read deps, siblings: read siblings, id: sj)
+            let cb = linearizer_cfg_dep_count(cache: read cache, topo: read topo, deps: read deps, siblings: read siblings, id: sb)
+            if cj < cb { best = j }
+            if cj == cb && sj < sb { best = j }
+            j = j + 1
+        }
+        let tmp = List.get<Int>(list: read siblings, index: i)
+        let chosen = List.get<Int>(list: read siblings, index: best)
+        List.set<Int>(list: mut siblings, index: i, value: read chosen)
+        List.set<Int>(list: mut siblings, index: best, value: read tmp)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn linearizer_cfg_set_edge(edge_ranges: mut List<Int>, edge_deps: mut List<Int>, range_id: Int, dep_id: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read edge_ranges) {
+        if List.get<Int>(list: read edge_ranges, index: i) == range_id {
+            List.set<Int>(list: mut edge_deps, index: i, value: read dep_id)
+            return Unit
+        }
+        i = i + 1
+    }
+    List.push<Int>(list: mut edge_ranges, value: read range_id)
+    List.push<Int>(list: mut edge_deps, value: read dep_id)
+    return Unit
+}
+
+fn linearizer_cfg_edge_dep(edge_ranges: read List<Int>, edge_deps: read List<Int>, range_id: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read edge_ranges) {
+        if List.get<Int>(list: read edge_ranges, index: i) == range_id {
+            return List.get<Int>(list: read edge_deps, index: i)
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn linearizer_cfg_backward_contains(cache: read UOpCache, id: Int, want: Int) -> Bool {
+    if id == want { return true }
+    local bs = uop_backward_slice(cache: read cache, id: id)
+    return uop_ints_contains(vals: read bs, v: want)
+}
+
+fn linearizer_cfg_add_edge_if_valid(cache: read UOpCache, edge_ranges: mut List<Int>, edge_deps: mut List<Int>, y_end: Int, dep: Int) -> Unit {
+    if node_op(cache: read cache, id: y_end) != END { return Unit }
+    if node_num_src(cache: read cache, id: y_end) < 2 { return Unit }
+    let range_id = node_src_id(cache: read cache, id: y_end, k: 1)
+    if linearizer_cfg_backward_contains(cache: read cache, id: dep, want: range_id) { return Unit }
+    linearizer_cfg_set_edge(edge_ranges: mut edge_ranges, edge_deps: mut edge_deps, range_id: range_id, dep_id: dep)
+    return Unit
+}
+
+fn linearizer_cfg_collect_edges(cache: read UOpCache, sink: Int, edge_ranges: mut List<Int>, edge_deps: mut List<Int>) -> Unit {
+    local topo = uop_toposort(cache: read cache, id: sink)
+    local deps = List.new<List<Int>>()
+    local nesting_ends = List.new<Int>()
+    local nesting_owners = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        let op = node_op(cache: read cache, id: u)
+        local d = List.new<Int>()
+        let mut k = 0
+        while k < node_num_src(cache: read cache, id: u) {
+            let s = node_src_id(cache: read cache, id: u, k: k)
+            let sidx = linearizer_index_of(list: read topo, id: s)
+            if sidx >= 0 {
+                let sd = List.get<List<Int>>(list: read deps, index: sidx)
+                linearizer_append_unique(dst: mut d, src: read sd)
+            }
+            k = k + 1
+        }
+        if op == END || op == SINK {
+            let mut j = 0
+            while j < List.len<Int>(list: read d) {
+                let x = List.get<Int>(list: read d, index: j)
+                if node_op(cache: read cache, id: x) == END && linearizer_cfg_has_nesting(ends: read nesting_ends, id: x) == false {
+                    let mut nested = false
+                    if op == SINK {
+                        nested = true
+                    } else {
+                        if node_num_src(cache: read cache, id: u) > 1 {
+                            let urange = node_src_id(cache: read cache, id: u, k: 1)
+                            let xidx = linearizer_index_of(list: read topo, id: x)
+                            if xidx >= 0 {
+                                let xd = List.get<List<Int>>(list: read deps, index: xidx)
+                                if uop_ints_contains(vals: read xd, v: urange) { nested = true }
+                            }
+                        }
+                    }
+                    if nested {
+                        List.push<Int>(list: mut nesting_ends, value: read x)
+                        List.push<Int>(list: mut nesting_owners, value: read u)
+                    }
+                }
+                j = j + 1
+            }
+        }
+        if op == RANGE || op == END { uop_push_unique(vals: mut d, v: u) }
+        List.push<List<Int>>(list: mut deps, value: read manage d)
+        i = i + 1
+    }
+
+    local owners = List.new<Int>()
+    let mut oi = 0
+    while oi < List.len<Int>(list: read nesting_owners) {
+        uop_push_unique(vals: mut owners, v: List.get<Int>(list: read nesting_owners, index: oi))
+        oi = oi + 1
+    }
+    oi = 0
+    while oi < List.len<Int>(list: read owners) {
+        let owner = List.get<Int>(list: read owners, index: oi)
+        local siblings = List.new<Int>()
+        let mut ni = 0
+        while ni < List.len<Int>(list: read nesting_ends) {
+            if List.get<Int>(list: read nesting_owners, index: ni) == owner {
+                List.push<Int>(list: mut siblings, value: read List.get<Int>(list: read nesting_ends, index: ni))
+            }
+            ni = ni + 1
+        }
+        linearizer_cfg_sort_siblings(cache: read cache, topo: read topo, deps: read deps, siblings: mut siblings)
+        if node_op(cache: read cache, id: owner) == SINK {
+            let mut si = 0
+            while si + 1 < List.len<Int>(list: read siblings) {
+                linearizer_cfg_add_edge_if_valid(cache: read cache, edge_ranges: mut edge_ranges, edge_deps: mut edge_deps,
+                                                 y_end: List.get<Int>(list: read siblings, index: si + 1),
+                                                 dep: List.get<Int>(list: read siblings, index: si))
+                si = si + 1
+            }
+        } else {
+            if node_num_src(cache: read cache, id: owner) > 1 {
+                let mut dep = node_src_id(cache: read cache, id: owner, k: 1)
+                let mut si = 0
+                while si < List.len<Int>(list: read siblings) {
+                    let y = List.get<Int>(list: read siblings, index: si)
+                    linearizer_cfg_add_edge_if_valid(cache: read cache, edge_ranges: mut edge_ranges, edge_deps: mut edge_deps,
+                                                     y_end: y, dep: dep)
+                    dep = y
+                    si = si + 1
+                }
+            }
+        }
+        oi = oi + 1
+    }
+    return Unit
+}
+
+fn linearizer_cfg_rewrite(cache: mut UOpCache, id: Int, edge_ranges: read List<Int>, edge_deps: read List<Int>, memo: mut Map<Int, Int>) -> Int {
+    match Map.get<Int, Int>(map: read memo, key: read id) {
+        Some(v) => { return v }
+        None => {}
+    }
+    local src = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let old = node_src_id(cache: read cache, id: id, k: i)
+        let new_id = linearizer_cfg_rewrite(cache: mut cache, id: old, edge_ranges: read edge_ranges, edge_deps: read edge_deps, memo: mut memo)
+        if new_id != old { changed = true }
+        List.push<Int>(list: mut src, value: read new_id)
+        i = i + 1
+    }
+    if node_op(cache: read cache, id: id) == RANGE {
+        let dep = linearizer_cfg_edge_dep(edge_ranges: read edge_ranges, edge_deps: read edge_deps, range_id: id)
+        if dep >= 0 {
+            let mut edge_dep = dep
+            match Map.get<Int, Int>(map: read memo, key: read dep) {
+                Some(v) => { edge_dep = v }
+                None => {}
+            }
+            if uop_ints_contains(vals: read src, v: edge_dep) == false {
+                List.push<Int>(list: mut src, value: read edge_dep)
+                changed = true
+            }
+        }
+    }
+    if changed == false {
+        Map.insert<Int, Int>(map: mut memo, key: read id, value: read id)
+        return id
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    let out = intern(cache: mut cache, op: op, dt: read dt, src: take src, arg: take arg)
+    Map.insert<Int, Int>(map: mut memo, key: read id, value: read out)
+    return out
+}
+
+fn linearizer_add_control_flow(cache: mut UOpCache, sink: Int) -> Int {
+    if node_op(cache: read cache, id: sink) != SINK { return sink }
+    local edge_ranges = List.new<Int>()
+    local edge_deps = List.new<Int>()
+    linearizer_cfg_collect_edges(cache: read cache, sink: sink, edge_ranges: mut edge_ranges, edge_deps: mut edge_deps)
+    if List.len<Int>(list: read edge_ranges) == 0 { return sink }
+    local memo = Map.new<Int, Int>()
+    return linearizer_cfg_rewrite(cache: mut cache, id: sink, edge_ranges: read edge_ranges, edge_deps: read edge_deps, memo: mut memo)
+}
+
+fn linearizer_count_range_control_edges(cache: read UOpCache, id: Int) -> Int {
+    local topo = uop_toposort(cache: read cache, id: id)
+    let mut out = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == RANGE && node_num_src(cache: read cache, id: u) > 1 { out = out + 1 }
+        i = i + 1
+    }
+    return out
+}
+
 fn linearizer_sort_ranges_desc(cache: read UOpCache, ranges: mut List<Int>) -> Unit {
     let n = List.len<Int>(list: read ranges)
     let mut i = 0
@@ -329,7 +582,8 @@ fn linearizer_has_gated_store(cache: read UOpCache, order: read List<Int>) -> Bo
 }
 
 fn linearizer_cleaned_order(cache: mut UOpCache, sink: Int) -> fresh List<Int> {
-    local order = linearize(cache: read cache, sink: sink)
+    let cfg_sink = linearizer_add_control_flow(cache: mut cache, sink: sink)
+    local order = linearize(cache: read cache, sink: cfg_sink)
     return linearizer_line_rewrite_cleanups(cache: mut cache, order: read order)
 }
 

@@ -130,10 +130,13 @@ Integrated pieces:
   splitting of multi-range `END` nodes into nested single-range `END`s. It also has the first
   `pm_linearize_cleanups`-style line rewrite: gated `STORE(ptr,value,gate)` becomes
   `IF(gate,ptr)`, ungated `STORE`, `ENDIF`, with later line sources remapped to the ungated store.
+  It now also ports the first `CFGContext`/`pm_add_control_flow` equivalent: sibling `END`
+  scopes are grouped by nesting owner and dependent `RANGE` nodes receive an extra ordering
+  source edge before linearization.
   The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`
   and is idempotent when the program already has a `LINEAR` child.
-  CFG edge insertion, pre-existing IF rejection, ISA register allocation, compile/binary,
-  and full schedule/device rewrite orchestration remain unported.
+  Pre-existing IF rejection, ISA register allocation, compile/binary, and full schedule/device
+  rewrite orchestration remain unported.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style

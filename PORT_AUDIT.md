@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,841 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,865 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -213,7 +213,8 @@ Integrated pieces:
   schedule/device rewrite orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `PARAM`/
   `DEFINE_LOCAL`/`DEFINE_REG` shape payloads, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
-  tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
+  tuple-element shape propagation through `TUPLE` and `FUNCTION`, boundary-node shape pass-through
+  for `CONTIGUOUS`/`CONTIGUOUS_BACKWARD`/`DETACH`/`COPY`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
   checks.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
@@ -614,6 +615,9 @@ Current integrated demo:
 - validates Tensor gradients for integrated unary/math ops against real tinygrad on stable inputs:
   `sum(neg(u))`, `sum(reciprocal(u))`, `sum(sqrt(u))`, `sum(sin(0))`, `sum(trunc(t))`, and
   `sum(u**2)`.
+- validates Tensor gradients through boundary UOps with shape-preserving reductions:
+  `CONTIGUOUS`, `CONTIGUOUS_BACKWARD`, and `COPY` route `[1,1,1,1]` back to the source, while
+  `DETACH` and `BITCAST` route `[0,0,0,0]`.
 - builds `relu(x @ W + b)` through the cache and evaluates `[14, 25]`.
 
 This is useful, but it is not yet a 1:1 tinygrad port.

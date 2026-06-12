@@ -22,14 +22,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 28,524 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 28,642 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 98/106 symbols, `mixin/__init__.py` 82/82 symbols,
-    `uop/ops.py` 216/221 symbols; 396/409 total rough symbols covered.
+  - result: `tensor.py` 103/106 symbols, `mixin/__init__.py` 82/82 symbols,
+    `uop/ops.py` 216/221 symbols; 401/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -48,6 +48,9 @@ Toolchain changes made to simplify the next port slices:
   (`Bytes.from_uints`, `Bytes.to_uints`, `Hash.sha3_224_bytes`, `Hash.sha3_256_bytes`, and
   `Hash.shake128_bytes`) across stdlib interfaces, runtime ABI, reg VM, and REIR capability
   classification for tensor hash parity work.
+- RSScript now exposes `HttpResponse.bytes` across stdlib interfaces, runtime ABI, reg VM, and
+  Rust runtime so URL-backed tensor creation can consume response bodies as bytes instead of
+  lossy text.
 
 ## What Is Actually Integrated
 
@@ -456,6 +459,10 @@ Integrated pieces:
   boundary, and list-backed `numpy`/host-data materialization over the current evaluator,
   materialized `keccak` for row-wise `sha3_224`, `sha3_256`, and `shake_128` byte tensors plus
   a materialized `_hash_1mb` SHAKE-128 chunk/reduce helper over the current evaluator byte path,
+  materialized byte/file boundary helpers for current local execution (`fs_load`/`fs_store`
+  through `File.read_bytes`/`File.write_bytes`, `from_blob` as an external-pointer-shaped empty
+  buffer placeholder, `from_url` through `HttpResponse.bytes` when an HTTP runtime provider exists,
+  and `decode_hevc_frame` as an `encdec` `CUSTOM_FUNCTION` call dependency graph wrapper),
   explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
   compaction,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
@@ -892,6 +899,9 @@ Major missing integrated work:
   seed/counter APIs, broader distribution helpers,
   full lazy/batched Householder QR and full-matrices/upstream Jacobi SVD parity,
   exact lazy hash graph semantics and strict `_hash_1mb` size enforcement,
+  exact tinyfs chunk-tree storage semantics for `fs_load`/`fs_store`, real external-pointer buffer
+  ownership/lifetime for `from_blob`, sync HTTP provider and gzip extraction for `from_url`, and
+  actual HEVC decode runtime execution behind the `encdec` custom function,
   real packed image convolution kernels and lazy Winograd convolution integration rather than the
   current direct-conv fallback,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend

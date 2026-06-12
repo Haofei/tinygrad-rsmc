@@ -1,6 +1,6 @@
 // Tensor surface over the interned UOp graph. A "tensor" is a node id in the cache; ops build graph.
 // (tinygrad Tensor wraps a UOp; here the cache is threaded explicitly.) Broadcasting binary op.
-features: local
+features: native, local
 
 struct SortResult derives(Clone) {
     values: Int,
@@ -433,6 +433,107 @@ fn tensor_hash_bytes_to_tensor(cache: mut UOpCache, bytes: read Bytes, out_shape
     local ints = Bytes.to_uints(value: read bytes)
     local data = tensor_uints_to_floats(values: read ints)
     return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read out_shape, data: read data)
+}
+
+fn tensor_bytes_to_1d(cache: mut UOpCache, bytes: read Bytes) -> Int {
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: Bytes.len(value: read bytes))
+    return tensor_hash_bytes_to_tensor(cache: mut cache, bytes: read bytes, out_shape: read shape)
+}
+
+fn tensor_to_bytes(cache: read UOpCache, x: Int) -> fresh Bytes {
+    local data = tensor_data(cache: read cache, x: x)
+    local ints = tensor_data_uints_slice(data: read data, start: 0, len: List.len<Float>(list: read data))
+    return Bytes.from_uints(values: read ints)
+}
+
+fn fs_load(cache: mut UOpCache, hash: Int, path: read String, size: Int) -> Int {
+    let p = Path.from_string(value: read path)
+    match File.read_bytes(path: read p) {
+        Ok(bytes) => {
+            let n = Bytes.len(value: read bytes)
+            let take_len = tensor_min_int(a: size, b: n)
+            let sliced = Bytes.slice(value: read bytes, start: 0, len: take_len)
+            return tensor_bytes_to_1d(cache: mut cache, bytes: read sliced)
+        }
+        Err(error) => {
+            local empty_shape = shp1(a: 0)
+            local empty_data = List.new<Float>()
+            return mk_data_tensor(cache: mut cache, dt: read dt_uint8(), shape: read empty_shape, data: read empty_data)
+        }
+    }
+}
+
+fn fs_store(cache: mut UOpCache, x: Int, path: read String) -> Int {
+    let flat = tensor_flatten(cache: mut cache, x: x, start_dim: 0, end_dim: List.len<Int>(list: read uop_shape(cache: read cache, id: x)) - 1)
+    let bytes = tensor_to_bytes(cache: read cache, x: flat)
+    let p = Path.from_string(value: read path)
+    match File.write_bytes(path: read p, data: read bytes) {
+        Ok(unit) => {}
+        Err(error) => {}
+    }
+    local row_shape = List.new<Int>()
+    push1(l: mut row_shape, a: 1)
+    push1(l: mut row_shape, a: Bytes.len(value: read bytes))
+    let row = tensor_reshape(cache: mut cache, x: flat, new_shape: read row_shape)
+    let digest2d = _hash_1mb(cache: mut cache, x: row)
+    local digest_shape = shp1(a: 16)
+    return tensor_reshape(cache: mut cache, x: digest2d, new_shape: read digest_shape)
+}
+
+fn from_blob(cache: mut UOpCache, ptr: Int, shape: read List<Int>, dt: read DType, device: read String) -> Int {
+    return tensor_empty(cache: mut cache, shape: read shape, dt: read dt, device: read device, num: ptr)
+}
+
+fn from_url(cache: mut UOpCache, url: read String, gunzip: Bool, dt: read DType, device: read String) -> Int {
+    let u = Url.from_string(value: read url)
+    match Http.get(url: read u) {
+        Ok(response) => {
+            let bytes = HttpResponse.bytes(response: read response)
+            let raw = tensor_bytes_to_1d(cache: mut cache, bytes: read bytes)
+            if dt.name == dt_uint8().name { return tensor_to(cache: mut cache, x: raw, device: read device) }
+            let casted = tensor_bitcast(cache: mut cache, x: raw, dt: read dt)
+            return tensor_to(cache: mut cache, x: casted, device: read device)
+        }
+        Err(error) => {
+            local empty_shape = shp1(a: 0)
+            local empty_data = List.new<Float>()
+            return mk_data_tensor(cache: mut cache, dt: read dt, shape: read empty_shape, data: read empty_data)
+        }
+    }
+}
+
+fn decode_hevc_frame(cache: mut UOpCache, x: Int, frame_pos: Int, shape: read List<Int>, state: Int, ref_frames: read List<Int>) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let dev = tensor_device(cache: read cache, x: x)
+    let out = tensor_empty(cache: mut cache, shape: read shape, dt: read dt, device: read dev, num: 0)
+    local fn_srcs = List.new<Int>()
+    if node_num_src(cache: read cache, id: frame_pos) > 0 {
+        push1(l: mut fn_srcs, a: node_src_id(cache: read cache, id: frame_pos, k: 0))
+    } else {
+        push1(l: mut fn_srcs, a: frame_pos)
+    }
+    let mut si = 0
+    while si < List.len<Int>(list: read shape) {
+        push1(l: mut fn_srcs, a: mk_const_int(cache: mut cache, dt: read dt_default_int(), v: List.get<Int>(list: read shape, index: si)))
+        si = si + 1
+    }
+    let custom_fn = mk_custom_function(cache: mut cache, name: read "encdec", dt: read dt_void(), srcs: read fn_srcs)
+    local args = List.new<Int>()
+    push1(l: mut args, a: out)
+    push1(l: mut args, a: tensor_contiguous(cache: mut cache, x: x))
+    push1(l: mut args, a: tensor_contiguous(cache: mut cache, x: state))
+    let mut ri = 0
+    while ri < List.len<Int>(list: read ref_frames) {
+        push1(l: mut args, a: tensor_contiguous(cache: mut cache, x: List.get<Int>(list: read ref_frames, index: ri)))
+        ri = ri + 1
+    }
+    push1(l: mut args, a: frame_pos)
+    let call_arg = mk_call_arg(name: read "encdec", has_name: true, precompile: false, precompile_backward: false)
+    let call = mk_call(cache: mut cache, body: custom_fn, args: read args, call: read call_arg)
+    local deps = List.new<Int>()
+    push1(l: mut deps, a: call)
+    return uop_after(cache: mut cache, id: out, srcs: read deps)
 }
 
 fn keccak(cache: mut UOpCache, x: Int, cfg: read String) -> Int {

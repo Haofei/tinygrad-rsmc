@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 27 RSS files, 21,265 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,314 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -151,6 +151,11 @@ Integrated pieces:
   and is idempotent when the program already has a `LINEAR` child.
   Pre-existing IF rejection, ISA register allocation, compile/binary, and full schedule/device
   rewrite orchestration remain unported.
+- `codegen/late/regalloc.rss`: first source-shaped boundary slice for
+  `tinygrad/codegen/late/regalloc.py`, covering upstream's pseudo-op set
+  (`CONST`, `NOOP`, `AFTER`, `BARRIER`, `GROUP`) and an explicit capability predicate that keeps
+  real linear-scan allocation disabled until the RSS IR carries ISA `Register` tags from a target
+  renderer.
 - `codegen/late/gater.rss`: integrated source-shaped `tinygrad/codegen/late/gater.py`
   slice, covering the `pm_move_gates_from_index` rewrites for 1D and 2D
   `INDEX(WHERE(gate, idx, INVALID))` nodes feeding `LOAD` or `STORE`, including optional

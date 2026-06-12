@@ -1,0 +1,40 @@
+// First source-shaped slice of tinygrad/codegen/late/regalloc.py.
+//
+// Upstream regalloc is a linear-scan allocator over ISA `Register` tags emitted
+// by an ISARenderer. This RSS IR does not yet carry ISA register tags, so this
+// slice ports the source boundary that is safe today: pseudo-op classification
+// and an explicit capability predicate. The actual spill/fill allocator belongs
+// with the future ISA renderer/register-tag port.
+features: local
+
+fn regalloc_is_pseudo_op(op: read Ops) -> Bool {
+    if op == CONST { return true }
+    if op == NOOP { return true }
+    if op == AFTER { return true }
+    if op == BARRIER { return true }
+    if op == GROUP { return true }
+    return false
+}
+
+fn regalloc_eligible_op(op: read Ops) -> Bool {
+    return regalloc_is_pseudo_op(op: read op) == false
+}
+
+fn regalloc_requires_isa_register_tags() -> Bool {
+    return true
+}
+
+fn regalloc_can_allocate_current_ir() -> Bool {
+    return false
+}
+
+fn regalloc_count_non_pseudo(cache: read UOpCache, order: read List<Int>) -> Int {
+    let mut count = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        if regalloc_eligible_op(op: read node_op(cache: read cache, id: id)) { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}

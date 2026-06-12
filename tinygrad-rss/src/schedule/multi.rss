@@ -202,6 +202,33 @@ fn multi_strip_multi_srcs(cache: mut UOpCache, root: Int) -> fresh MultiRewrite 
     return MultiRewrite(result: rebuilt, changed: true, ok: true)
 }
 
+fn multi_store_after(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != AFTER || node_num_src(cache: read cache, id: root) < 2 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let anchor = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: anchor) != MULTI {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let store = node_src_id(cache: read cache, id: root, k: 1)
+    if node_op(cache: read cache, id: store) != STORE || node_num_src(cache: read cache, id: store) < 2 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let dest = node_src_id(cache: read cache, id: store, k: 0)
+    let src = node_src_id(cache: read cache, id: store, k: 1)
+    if node_op(cache: read cache, id: dest) != MULTI || node_op(cache: read cache, id: src) != MULTI || node_num_src(cache: read cache, id: src) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = node_src_id(cache: read cache, id: src, k: 0)
+    let st = mk_store(cache: mut cache, ptr: dest, value: payload, gate: read None)
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read st)
+    let after = mk_after(cache: mut cache, id: dest, srcs: read deps)
+    let out = mk_multi(cache: mut cache, x: after, axis: node_const_int(cache: read cache, id: src))
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
 fn multi_root_payload(cache: read UOpCache, root: Int) -> Int {
     if node_num_src(cache: read cache, id: root) == 0 { return -1 }
     let multi = node_src_id(cache: read cache, id: root, k: 0)

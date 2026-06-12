@@ -306,7 +306,30 @@ fn indexing_floormod_const(cache: mut UOpCache, x: Int, value: Int) -> Int {
     return mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: x, y: c)
 }
 
+fn indexing_shape_equals(a: read List<Int>, b: read List<Int>) -> Bool {
+    if List.len<Int>(list: read a) != List.len<Int>(list: read b) { return false }
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        if List.get<Int>(list: read a, index: i) != List.get<Int>(list: read b, index: i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn indexing_copy_ranges(rngs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read rngs) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rngs, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
 fn indexing_apply_reshape(cache: mut UOpCache, rngs: read List<Int>, in_shape: read List<Int>, out_shape: read List<Int>) -> fresh List<Int> {
+    if indexing_shape_equals(a: read in_shape, b: read out_shape) {
+        return indexing_copy_ranges(rngs: read rngs)
+    }
     let dt = dt_weakint()
     let mut flat = mk_const_int(cache: mut cache, dt: read dt, v: 0)
     let mut stride = 1
@@ -331,7 +354,8 @@ fn indexing_apply_reshape(cache: mut UOpCache, rngs: read List<Int>, in_shape: r
     local out = List.new<Int>()
     let mut ri = List.len<Int>(list: read rev) - 1
     while ri >= 0 {
-        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rev, index: ri))
+        let simplified = graph_rewrite(cache: mut cache, id: List.get<Int>(list: read rev, index: ri))
+        List.push<Int>(list: mut out, value: read simplified)
         ri = ri - 1
     }
     return take out

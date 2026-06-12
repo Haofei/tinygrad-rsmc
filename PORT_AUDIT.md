@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,196 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,224 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -232,7 +232,8 @@ Integrated pieces:
   non-contiguous source realization for `COPY`/`MSELECT`/`MSTACK`, direct `COPY`/`SLICE` store-source
   cleanup, simple store self-dependency hazard detection, range-context allocation with size-1
   folding, first `apply_movement_op` mappings for `SHRINK`, `PERMUTE`, `FLIP`, `EXPAND`,
-  validity-guarded `PAD`, and row-major `RESHAPE` div/mod coordinate splitting, plus the first
+  validity-guarded `PAD`, and row-major `RESHAPE` div/mod coordinate splitting with identity
+  fast-path and per-coordinate symbolic rewriting, plus the first
   `run_rangeify` analysis half for realized output ranges, single/multiple consumer inheritance,
   movement input-range swizzling, and `REDUCE` axis range injection, plus the first graph rewrite
   half for source `INDEX` insertion, realized `STAGE` insertion, movement removal, and `REDUCE`
@@ -361,7 +362,7 @@ Current integrated demo:
   self-store source realization.
 - validates scheduler indexing range/movement helpers: size-1 range folding, sequential range ids,
   `SHRINK`/`PERMUTE`/`FLIP`/`EXPAND` index mapping, validity-guarded `PAD` index mapping,
-  and row-major `RESHAPE` div/mod index mapping.
+  and row-major `RESHAPE` div/mod index mapping plus identity simplification.
 - validates scheduler indexing rangeify analysis records for realized roots, inherited movement
   chains, `PERMUTE` input-range swizzling, and `REDUCE` `AXIS_REDUCE` injection.
 - validates scheduler indexing rangeify graph rewrite for movement removal through `INDEX` and
@@ -714,8 +715,9 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler remains partial. The first dependency-ordering slice in
   `schedule/__init__.rss` and first monotonic-offset memory planner slice in `schedule/memory.rss`
   are integrated, and `schedule/indexing.rss` has realize-map generation, first range/movement
-  helpers including PAD and RESHAPE, first rangeify analysis records, and first rangeify graph
-  rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, RESHAPE symbolic simplification,
+  helpers including PAD and RESHAPE, first RESHAPE identity/per-coordinate symbolic
+  simplification, first rangeify analysis records, and first rangeify graph
+  rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, full upstream sink-level RESHAPE simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,
   and JIT capture plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority

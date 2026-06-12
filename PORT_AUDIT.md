@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 19,439 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 19,475 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -97,8 +97,9 @@ Integrated pieces:
 - `uop/validate.rss`: first integrated source-shaped `tinygrad/uop/validate.py` slice for masked
   index bounds validation over the interval subset already covered by `uop_min_max`: static false
   gates are accepted, active/unknown gates require the index interval to be fully inside
-  `[0, size)`, and the local `validate_index_with_z3` entry point aliases this conservative
-  interval proof. Full Z3-backed boolean/arithmetic solving remains unported.
+  `[0, size)`, `INDEX` nodes can be validated by deriving flat buffer size from the base shape
+  and reading the index/gate sources, and the local `validate_index_with_z3` entry point aliases
+  this conservative interval proof. Full Z3-backed boolean/arithmetic solving remains unported.
 - `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
   UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, named `SPECIAL`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
@@ -271,6 +272,9 @@ Current integrated demo:
 - validates source-aligned masked-index helpers: `valid(idx, cond)` builds a verifier-accepted
   `WHERE`, `get_idx` unwraps the payload, `get_valid` unwraps the mask, and vector-count
   `invalid` preserves weak-index dtype count.
+- validates the integrated interval validator for raw index/gate triples and source-shaped
+  `INDEX` nodes: in-bounds indexes pass, out-of-bounds indexes fail, and statically false gates
+  skip the out-of-bounds proof.
 - validates UOp symbolic variables and binding: expression extraction, declared vmin/vmax,
   in-range `BIND`, `unbind`, `val`, sorted `variables`, `unbind_all` rewrite with collected
   bindings, and out-of-range bind rejection.

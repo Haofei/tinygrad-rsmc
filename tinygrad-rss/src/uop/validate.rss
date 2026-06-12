@@ -11,14 +11,33 @@ fn validate_gate_statically_false(cache: read UOpCache, gate: Int) -> Bool {
     return gr.hi == 0
 }
 
-fn validate_index_with_bounds(cache: read UOpCache, sz: Int, idx: Int, gate: Int) -> Bool {
+fn validate_index_active_with_bounds(cache: read UOpCache, sz: Int, idx: Int) -> Bool {
     if sz <= 0 { return false }
-    if validate_gate_statically_false(cache: read cache, gate: gate) { return true }
     let ir = uop_min_max(cache: read cache, id: idx)
     if ir.lo < 0 { return false }
     return ir.hi < sz
 }
 
+fn validate_index_with_bounds(cache: read UOpCache, sz: Int, idx: Int, gate: Int) -> Bool {
+    if sz <= 0 { return false }
+    if validate_gate_statically_false(cache: read cache, gate: gate) { return true }
+    return validate_index_active_with_bounds(cache: read cache, sz: sz, idx: idx)
+}
+
 fn validate_index_with_z3(cache: read UOpCache, sz: Int, idx: Int, gate: Int) -> Bool {
     return validate_index_with_bounds(cache: read cache, sz: sz, idx: idx, gate: gate)
+}
+
+fn validate_index_node_with_bounds(cache: read UOpCache, index: Int) -> Bool {
+    if node_op(cache: read cache, id: index) != INDEX { return false }
+    if node_num_src(cache: read cache, id: index) < 2 { return false }
+    let base = node_src_id(cache: read cache, id: index, k: 0)
+    local shape = uop_shape(cache: read cache, id: base)
+    let sz = prod(x: read shape)
+    let idx = node_src_id(cache: read cache, id: index, k: 1)
+    if node_num_src(cache: read cache, id: index) > 2 {
+        let gate = node_src_id(cache: read cache, id: index, k: 2)
+        return validate_index_with_bounds(cache: read cache, sz: sz, idx: idx, gate: gate)
+    }
+    return validate_index_active_with_bounds(cache: read cache, sz: sz, idx: idx)
 }

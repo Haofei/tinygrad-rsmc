@@ -191,6 +191,9 @@ fn spec_validate_alu(cache: read UOpCache, id: Int) -> Bool {
 }
 
 fn spec_validate_shape_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) == STACK {
+        return node_num_src(cache: read cache, id: id) > 0
+    }
     if node_is_const(cache: read cache, id: id) == false { return false }
     let dims = node_argints(cache: read cache, id: id)
     return List.len<Int>(list: read dims) > 0
@@ -599,7 +602,11 @@ fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
         let n = node_num_src(cache: read cache, id: id)
         if n == 0 { return true }
         let first = node_src_id(cache: read cache, id: id, k: 0)
-        if spec_same_dtype(cache: read cache, a: id, b: first) == false { return false }
+        let dt = node_full_dtype(cache: read cache, id: id)
+        let scalar = dtype_scalar(d: read dt)
+        let first_dt = node_full_dtype(cache: read cache, id: first)
+        if dt.count != n { return false }
+        if scalar.name != first_dt.name { return false }
         let mut j = 1
         while j < n {
             let child = node_src_id(cache: read cache, id: id, k: j)

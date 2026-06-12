@@ -620,6 +620,47 @@ fn multi_allreduce(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     return MultiRewrite(result: out, changed: true, ok: true)
 }
 
+fn multi_alu_device_count(cache: read UOpCache, root: Int) -> Int {
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        let cnt = node_effective_device_count(cache: read cache, id: child)
+        if cnt > 1 { return cnt }
+        i = i + 1
+    }
+    return 0
+}
+
+fn multi_shard_to_axis(cache: mut UOpCache, id: Int, axis: Int, dcount: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: id)
+    if List.len<Int>(list: read shape) == 0 { return id }
+    if axis < 0 || axis >= List.len<Int>(list: read shape) || dcount <= 0 { return 0 - 1 }
+    let full_dim = List.get<Int>(list: read shape, index: axis)
+    if full_dim % dcount != 0 { return 0 - 1 }
+    let shard_dim = full_dim / dcount
+    let weak = dt_weakint()
+    let dnum = mk_define_var(cache: mut cache, name: read "_device_num", min_val: 0, max_val: dcount - 1, dt: read weak)
+    let shard_const = mk_const_int(cache: mut cache, dt: read weak, v: shard_dim)
+    let axis_start = mk_alu2(cache: mut cache, op: MUL, dt: read weak, x: dnum, y: shard_const)
+    let axis_end = mk_alu2(cache: mut cache, op: ADD, dt: read weak, x: axis_start, y: shard_const)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        if i == axis {
+            List.push<Int>(list: mut starts, value: read axis_start)
+            List.push<Int>(list: mut ends, value: read axis_end)
+        } else {
+            let zero = mk_const_int(cache: mut cache, dt: read weak, v: 0)
+            let dim = mk_const_int(cache: mut cache, dt: read weak, v: List.get<Int>(list: read shape, index: i))
+            List.push<Int>(list: mut starts, value: read zero)
+            List.push<Int>(list: mut ends, value: read dim)
+        }
+        i = i + 1
+    }
+    return mk_shrink_expr(cache: mut cache, x: id, starts: read starts, ends: read ends)
+}
+
 fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let fallback = multi_empty_result(cache: mut cache)
     let op = node_op(cache: read cache, id: root)
@@ -628,6 +669,10 @@ fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     }
     let axis = uop_axis(cache: read cache, id: root)
     if axis < 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let dcount = multi_alu_device_count(cache: read cache, root: root)
+    if dcount <= 1 {
         return MultiRewrite(result: fallback, changed: false, ok: false)
     }
     local srcs = List.new<Int>()
@@ -645,9 +690,14 @@ fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
             }
             local child_shape = uop_shape(cache: read cache, id: child)
             if List.len<Int>(list: read child_shape) != 0 {
-                return MultiRewrite(result: fallback, changed: false, ok: false)
+                let sharded = multi_shard_to_axis(cache: mut cache, id: child, axis: axis, dcount: dcount)
+                if sharded < 0 {
+                    return MultiRewrite(result: fallback, changed: false, ok: false)
+                }
+                List.push<Int>(list: mut srcs, value: read sharded)
+            } else {
+                List.push<Int>(list: mut srcs, value: read child)
             }
-            List.push<Int>(list: mut srcs, value: read child)
         }
         i = i + 1
     }

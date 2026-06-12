@@ -2718,6 +2718,15 @@ fn shape_to_shape_arg(cache: mut UOpCache, dims: read List<Int>) -> Int {
     return intern(cache: mut cache, op: CONST, dt: read dt, src: take e, arg: take a)
 }
 
+// shape_to_shape_arg_expr: upstream shape args may be STACKs of symbolic weakint expressions.
+fn shape_to_shape_arg_expr(cache: mut UOpCache, exprs: read List<Int>) -> Int {
+    let weak = dt_weakint()
+    let dt = dtype_vec(base: read weak, sz: List.len<Int>(list: read exprs))
+    local src = copy_int_list(l: read exprs)
+    local a = ArgNone
+    return intern(cache: mut cache, op: STACK, dt: read dt, src: take src, arg: take a)
+}
+
 // a BUFFER leaf carrying its shape as src[0] (a shape-const)
 fn mk_buffer(cache: mut UOpCache, dt: read DType, shape: read List<Int>) -> Int {
     let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
@@ -2770,6 +2779,18 @@ fn mk_shrink(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read Lis
     let dt = node_full_dtype(cache: read cache, id: x)
     let st = shape_to_shape_arg(cache: mut cache, dims: read starts)
     let en = shape_to_shape_arg(cache: mut cache, dims: read ends)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read st)
+    List.push<Int>(list: mut e, value: read en)
+    local a = ArgNone
+    return intern(cache: mut cache, op: SHRINK, dt: read dt, src: take e, arg: take a)
+}
+
+fn mk_shrink_expr(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read List<Int>) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let st = shape_to_shape_arg_expr(cache: mut cache, exprs: read starts)
+    let en = shape_to_shape_arg_expr(cache: mut cache, exprs: read ends)
     local e = List.new<Int>()
     List.push<Int>(list: mut e, value: read x)
     List.push<Int>(list: mut e, value: read st)

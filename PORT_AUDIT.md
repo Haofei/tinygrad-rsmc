@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,649 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,757 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -92,7 +92,9 @@ Integrated pieces:
   range-carrying and range-ending UOps.
 - `uop/upat.rss`: integrated UPat/PatternMatcher over real interned node ids, with named captures,
   capture consistency, op sets, dtype constraints, variadic `allow_any_len`, rules-as-data, and a
-  generic bottom-up rewrite/fixpoint driver.
+  generic bottom-up rewrite/fixpoint driver, plus grouped source-shaped builder helpers for
+  unary/ternary ops and `cast`/`bitcast`/`gep`/`load`/`store`/`reduce`/`broadcast`/
+  `contiguous`/`after`/`end` patterns.
 - `uop/spec.rss`: first integrated interned-graph verifier for the shared core currently built by
   the package: CONST/SPECIAL/RANGE, `DEFINE_VAR`/`BIND`, `PARAM`, `DEFINE_LOCAL`/`DEFINE_REG`,
   upstream-shaped device/buffer/copy/multi-device graph nodes, ALU dtype rules, same-itemsize `BITCAST`, WHERE/MULACC, buffers, movement
@@ -315,6 +317,9 @@ Current integrated demo:
   `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`,
   `load`/`store`/`wait`/`end`/`after`/`barrier`, concrete shape extraction,
   movement base recovery, and movement argument extraction.
+- validates grouped UPat builder helpers for unary/ternary ops and source-shaped
+  `cast`/`bitcast`/`gep`/`load`/`store`/`reduce`/`broadcast`/`contiguous`/`after`/`end`
+  patterns.
 - validates source-shaped movement method helpers for `reshape`/`expand`/`permute`/`flip`/
   `shrink`/`pad`, scalar empty-argument no-op behavior, full-dtype preservation through
   movement constructors, and upstream-shaped weakint vector `shape_to_shape_arg`.

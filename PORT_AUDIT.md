@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 26,231 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 26,250 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 27/106 symbols, `mixin/__init__.py` 74/82 symbols,
-    `uop/ops.py` 76/221 symbols; 177/409 total rough symbols covered.
+  - result: `tensor.py` 27/106 symbols, `mixin/__init__.py` 76/82 symbols,
+    `uop/ops.py` 76/221 symbols; 179/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -388,7 +388,8 @@ Integrated pieces:
   graph-backed `_one_hot_along_dim`, `one_hot`, generic `gather(dim, index)`, plain `scatter`
   with duplicate last-wins masked merge, `scatter_reduce` for sum/prod/mean/amax/amin,
   scalar `scatter(..., reduce="add"/"multiply")`, upstream-shaped wrappers for `_pre_scatter`,
-  `_masked_merge`, `scatter_reduce`, `_tri`, and constrained materialized `__getitem__`/`_getitem`,
+  `_masked_merge`, `scatter_reduce`, `_tri`, `_ufix_keep_dtype`, constrained materialized
+  `__getitem__`/`_getitem`, and implicit-scalar `gradient` over the integrated `grad_wrt` slice,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
   composition for vector, matrix, and batched cases, upstream-style `relu` as
   `(x > 0).where(x, 0)`, and legacy `linear_forward`.
@@ -811,9 +812,11 @@ Major missing integrated work:
   Python-facing method breadth,
   and exact tinygrad semantics are still incomplete.
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp
-  graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and selected unary/math VJPs, but full
-  Function-style APIs, complete VJP coverage, gradient accumulation APIs, and exact tinygrad
-  gradient semantics are still missing.
+  graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and
+  selected unary/math VJPs. `tensor_gradient` now wraps the supported implicit scalar-gradient
+  path for a list of target UOps, but full Function-style APIs, explicit incoming-gradient
+  handling, complete VJP coverage, gradient accumulation APIs, and exact tinygrad gradient
+  semantics are still missing.
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, complete render/pyrender

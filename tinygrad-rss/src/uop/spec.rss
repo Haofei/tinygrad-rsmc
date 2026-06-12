@@ -621,6 +621,35 @@ fn spec_type_verify(cache: read UOpCache, id: Int) -> Bool {
     return spec_validate_node(cache: read cache, id: id)
 }
 
+fn validate_index(cache: read UOpCache, uidx: Int, gate: read Option<Int>) -> Bool {
+    if node_op(cache: read cache, id: uidx) != INDEX { return true }
+    if node_num_src(cache: read cache, id: uidx) != 2 { return true }
+    let base = node_src_id(cache: read cache, id: uidx, k: 0)
+    local shape = uop_shape(cache: read cache, id: base)
+    let sz = prod(x: read shape)
+    let idx = node_src_id(cache: read cache, id: uidx, k: 1)
+    match gate {
+        Some(g) => {
+            let gv = g + 0
+            return validate_index_with_bounds(cache: read cache, sz: sz, idx: idx, gate: gv)
+        }
+        None => { return validate_index_active_with_bounds(cache: read cache, sz: sz, idx: idx) }
+    }
+}
+
+fn type_verify(cache: read UOpCache, ast: Int) -> Bool {
+    return spec_type_verify(cache: read cache, id: ast)
+}
+
+fn eval_pyrender(cache: read UOpCache, ast: Int) -> fresh String {
+    return pyrender(cache: read cache, ast: ast)
+}
+
+fn test_pyrender(cache: read UOpCache, ast: Int) -> Bool {
+    local rendered = eval_pyrender(cache: read cache, ast: ast)
+    return String.len(value: read rendered) > 0 && spec_type_verify(cache: read cache, id: ast)
+}
+
 fn mk_where(cache: mut UOpCache, dt: read DType, cond: Int, tval: Int, fval: Int) -> Int {
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read cond)

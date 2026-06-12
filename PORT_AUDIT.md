@@ -150,13 +150,16 @@ Integrated pieces:
   `UNROLL`/`CONTRACT` dtype-count/product validation including void `CONTRACT` for store contraction,
   tuple/gettuple, index/load-store, source-shaped `REDUCE`/`STORE` range tails,
   control-flow `IF`/`ENDIF`, order nodes including `END` range validation, symbolic `STACK`
-  movement shape args, and recursive source validation.
+  movement shape args, recursive source validation, and source-shaped verifier/render test entry
+  points `validate_index`, `type_verify`, `eval_pyrender`, and `test_pyrender`.
 - `uop/validate.rss`: first integrated source-shaped `tinygrad/uop/validate.py` slice for masked
   index bounds validation over the interval subset already covered by `uop_min_max`: static false
   gates are accepted, active/unknown gates require the index interval to be fully inside
   `[0, size)`, `INDEX` nodes can be validated by deriving flat buffer size from the base shape
   and reading the index/gate sources, and the local `validate_index_with_z3` entry point aliases
-  this conservative interval proof. Full Z3-backed boolean/arithmetic solving remains unported.
+  this conservative interval proof. It also exposes source-shaped integer-model helpers
+  `z3_cdiv`, `z3_floordiv`, `z3_xor`, `create_bounded`, and `uops_to_z3` for current concrete
+  interval summaries. Full Z3-backed boolean/arithmetic solving remains unported.
 - `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
   UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, named `SPECIAL`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),

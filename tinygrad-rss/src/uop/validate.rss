@@ -6,6 +6,51 @@
 // or when the gate is statically false.
 features: local
 
+struct BoundedZ3Value derives(Clone) {
+    name: String,
+    value: Int,
+    ok: Bool,
+    min_val: Int,
+    max_val: Int,
+}
+
+fn z3_cdiv(a: Int, b: Int) -> Int {
+    return cdiv(x: a, y: b)
+}
+
+fn z3_floordiv(a: Int, b: Int) -> Int {
+    return floordiv(x: a, y: b)
+}
+
+fn z3_xor(a: Int, b: Int) -> Int {
+    return a ^ b
+}
+
+fn create_bounded(name: read String, vmin: Int, vmax: Int) -> fresh BoundedZ3Value {
+    local nm = String.copy(value: read name)
+    let ok = vmin <= vmax
+    return BoundedZ3Value(name: take nm, value: vmin, ok: ok, min_val: vmin, max_val: vmax)
+}
+
+fn uops_to_z3(cache: read UOpCache, uops: read List<Int>) -> fresh List<BoundedZ3Value> {
+    local out = List.new<BoundedZ3Value>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        let id = List.get<Int>(list: read uops, index: i)
+        let r = uop_min_max(cache: read cache, id: id)
+        let idstr = Int.to_string(value: read id)
+        let mut name = String.concat(left: read "u", right: read idstr)
+        if node_op(cache: read cache, id: id) == DEFINE_VAR {
+            name = node_var_name(cache: read cache, id: id)
+        }
+        let ok = r.lo <= r.hi
+        let bounded = BoundedZ3Value(name: read name, value: r.lo, ok: ok, min_val: r.lo, max_val: r.hi)
+        List.push<BoundedZ3Value>(list: mut out, value: read bounded)
+        i = i + 1
+    }
+    return take out
+}
+
 fn validate_gate_statically_false(cache: read UOpCache, gate: Int) -> Bool {
     let gr = uop_min_max(cache: read cache, id: gate)
     return gr.hi == 0

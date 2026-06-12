@@ -12,6 +12,82 @@ struct TensorPair derives(Clone) {
     second: Int,
 }
 
+struct TensorState derives(Clone) {
+    uop: Int,
+    is_param: Bool,
+    has_grad: Bool,
+    grad: Int,
+}
+
+fn tensor_state_new(uop: Int) -> fresh TensorState {
+    return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
+}
+
+fn tensor_state_with_flags(uop: Int, is_param: Bool, has_grad: Bool, grad: Int) -> fresh TensorState {
+    return TensorState(uop: uop, is_param: is_param, has_grad: has_grad, grad: grad)
+}
+
+fn tensor_state_copy(t: read TensorState) -> fresh TensorState {
+    return TensorState(uop: t.uop, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_state_uop(t: read TensorState) -> Int {
+    return t.uop
+}
+
+fn tensor_state_replace(t: read TensorState, other: read TensorState) -> fresh TensorState {
+    return TensorState(uop: other.uop, is_param: other.is_param, has_grad: other.has_grad, grad: other.grad)
+}
+
+fn tensor_replace(t: read TensorState, other: read TensorState) -> fresh TensorState {
+    return tensor_state_replace(t: read t, other: read other)
+}
+
+fn tensor_as_param(t: read TensorState) -> fresh TensorState {
+    return TensorState(uop: t.uop, is_param: true, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_is_param(t: read TensorState) -> Bool {
+    return t.is_param
+}
+
+fn tensor_shape(cache: read UOpCache, x: Int) -> fresh List<Int> {
+    return uop_shape(cache: read cache, id: x)
+}
+
+fn tensor_dtype(cache: read UOpCache, x: Int) -> fresh DType {
+    return node_full_dtype(cache: read cache, id: x)
+}
+
+fn tensor_device(cache: read UOpCache, x: Int) -> fresh String {
+    return uop_device_key(cache: read cache, id: x)
+}
+
+fn tensor_numel(cache: read UOpCache, x: Int) -> Int {
+    local sh = tensor_shape(cache: read cache, x: x)
+    return numel(shape: read sh)
+}
+
+fn tensor_state_shape(cache: read UOpCache, t: read TensorState) -> fresh List<Int> {
+    return tensor_shape(cache: read cache, x: t.uop)
+}
+
+fn tensor_state_dtype(cache: read UOpCache, t: read TensorState) -> fresh DType {
+    return tensor_dtype(cache: read cache, x: t.uop)
+}
+
+fn tensor_state_device(cache: read UOpCache, t: read TensorState) -> fresh String {
+    return tensor_device(cache: read cache, x: t.uop)
+}
+
+fn tensor_state_numel(cache: read UOpCache, t: read TensorState) -> Int {
+    return tensor_numel(cache: read cache, x: t.uop)
+}
+
+fn tensor_state_nbytes(cache: read UOpCache, t: read TensorState) -> Int {
+    return tensor_nbytes(cache: read cache, x: t.uop)
+}
+
 // _broadcast_to: reshape x to align its ndims (left-pad 1s), then EXPAND to the target shape.
 fn broadcast_to(cache: mut UOpCache, x: Int, target: read List<Int>) -> Int {
     local xs = uop_shape(cache: read cache, id: x)
@@ -126,7 +202,69 @@ fn tensor_contiguous(cache: mut UOpCache, x: Int) -> Int {
 }
 
 fn tensor_to(cache: mut UOpCache, x: Int, device: read String) -> Int {
-    return mk_copy_to_device(cache: mut cache, x: x, device: read device)
+    local target = canonicalize_device(device: read device)
+    if String.len(value: read target) == 0 { return x }
+    local cur = uop_device_key(cache: read cache, id: x)
+    if cur == target { return x }
+    return mk_copy_to_device(cache: mut cache, x: x, device: read target)
+}
+
+fn tensor_to_inplace(cache: mut UOpCache, x: Int, device: read String) -> Int {
+    return tensor_to(cache: mut cache, x: x, device: read device)
+}
+
+fn tensor_state_to(cache: mut UOpCache, t: read TensorState, device: read String) -> fresh TensorState {
+    let moved = tensor_to(cache: mut cache, x: t.uop, device: read device)
+    return TensorState(uop: moved, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_state_to_inplace(cache: mut UOpCache, t: read TensorState, device: read String) -> fresh TensorState {
+    return tensor_state_to(cache: mut cache, t: read t, device: read device)
+}
+
+fn tensor_empty(cache: mut UOpCache, shape: read List<Int>, dt: read DType, device: read String, num: Int) -> Int {
+    local dev = canonicalize_device(device: read device)
+    return uop_empty(cache: mut cache, shape: read shape, dt: read dt, device: read dev, num: num)
+}
+
+fn tensor_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {
+    local dev = canonicalize_device(device: read device)
+    return uop_empty_like(cache: mut cache, id: x, dt: read dt, device: read dev, num: num)
+}
+
+fn tensor_state_empty(cache: mut UOpCache, shape: read List<Int>, dt: read DType, device: read String, num: Int) -> fresh TensorState {
+    let u = tensor_empty(cache: mut cache, shape: read shape, dt: read dt, device: read device, num: num)
+    return tensor_state_new(uop: u)
+}
+
+fn tensor_state_empty_like(cache: mut UOpCache, t: read TensorState, dt: read DType, device: read String, num: Int) -> fresh TensorState {
+    let u = tensor_empty_like(cache: mut cache, x: t.uop, dt: read dt, device: read device, num: num)
+    return TensorState(uop: u, is_param: t.is_param, has_grad: false, grad: 0 - 1)
+}
+
+fn tensor_data(cache: read UOpCache, x: Int) -> fresh List<Float> {
+    return eval_tensor(cache: read cache, id: x)
+}
+
+fn tensor_tolist(cache: read UOpCache, x: Int) -> fresh List<Float> {
+    return tensor_data(cache: read cache, x: x)
+}
+
+fn tensor_item(cache: read UOpCache, x: Int) -> Float {
+    local vals = tensor_data(cache: read cache, x: x)
+    if List.len<Float>(list: read vals) == 0 { return 0.0 }
+    return List.get<Float>(list: read vals, index: 0)
+}
+
+fn tensor_realize(cache: mut UOpCache, ctx: mut RealizeExecContext, x: Int) -> fresh RealizeScheduledRun {
+    local ids = List.new<Int>()
+    push1(l: mut ids, a: x)
+    let sink = mk_sink(cache: mut cache, ids: read ids)
+    return realize_run_scheduled(cache: mut cache, ctx: mut ctx, big_sink: sink)
+}
+
+fn tensor_state_realize(cache: mut UOpCache, ctx: mut RealizeExecContext, t: read TensorState) -> fresh RealizeScheduledRun {
+    return tensor_realize(cache: mut cache, ctx: mut ctx, x: t.uop)
 }
 
 fn tensor_gradient(cache: mut UOpCache, root: Int, targets: read List<Int>) -> fresh List<Int> {

@@ -376,6 +376,7 @@ fn main() -> Unit {
     let mmixed_stack = uop_stack(cache: mut mcache, dt: read i32, srcs: read mmixed_stack_srcs)
     local mindex_srcs = List.new<Int>()
     let mlocal_index = mk_index(cache: mut mcache, base: mlocal, srcs: read mindex_srcs, ptr: true)
+    let mlocal_value_index = mk_index(cache: mut mcache, base: mlocal, srcs: read mindex_srcs, ptr: false)
     let mload_local = mk_load(cache: mut mcache, ptr: mlocal_index, srcs: read mindex_srcs, dt: read i32)
     local mreshape_shape = shp(a: 2, b: 3)
     let mparam_reshape = mk_reshape(cache: mut mcache, x: mparam, new_shape: read mreshape_shape)
@@ -384,6 +385,7 @@ fn main() -> Unit {
     showstr(label: read "uop.addrspace(DEFINE_LOCAL) = ", v: read uop_addrspace_key(cache: read mcache, id: mlocal))
     showstr(label: read "uop.addrspace(DEFINE_REG) = ", v: read uop_addrspace_key(cache: read mcache, id: mreg))
     showstr(label: read "uop.addrspace(INDEX local) = ", v: read uop_addrspace_key(cache: read mcache, id: mlocal_index))
+    showb(label: read "uop.index ptr metadata = ", v: node_index_is_ptr(cache: read mcache, id: mlocal_index) && node_index_is_ptr(cache: read mcache, id: mlocal_value_index) == false)
     showstr(label: read "uop.addrspace(LOAD) = ", v: read uop_addrspace_key(cache: read mcache, id: mload_local))
     showstr(label: read "uop.addrspace(RESHAPE param) = ", v: read uop_addrspace_key(cache: read mcache, id: mparam_reshape))
     showstr(label: read "uop.addrspace(ADD same) = ", v: read uop_addrspace_key(cache: read mcache, id: mparam_plus))
@@ -945,11 +947,23 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mdev_value_index_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_value_index_src, value: read m2)
+    let mdev_value_index = mk_index(cache: mut mcache, base: mbuf_cpu, srcs: read mdev_value_index_src, ptr: false)
+    let mut mdev_add_load_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_value_index) {
+        Some(r) => {
+            let load_ptr = node_src_id(cache: read mcache, id: r, k: 0)
+            mdev_add_load_ok = node_op(cache: read mcache, id: r) == LOAD && node_op(cache: read mcache, id: load_ptr) == INDEX && node_index_is_ptr(cache: read mcache, id: load_ptr) && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "codegen.devectorizer expands stack index = ", v: mdev_stack_index_ok)
     showb(label: read "codegen.devectorizer folds gep after load = ", v: mdev_load_gep_ok)
     showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
     showb(label: read "codegen.devectorizer folds ptrcat load = ", v: mdev_load_ptrcat_ok)
     showb(label: read "codegen.devectorizer folds ptrcat store = ", v: mdev_store_ptrcat_ok)
+    showb(label: read "codegen.devectorizer adds load to value index = ", v: mdev_add_load_ok)
     showb(label: read "codegen.devectorizer removes nested load load = ", v: mdev_load_load_ok)
     showb(label: read "codegen.devectorizer removes nested store load = ", v: mdev_store_load_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)

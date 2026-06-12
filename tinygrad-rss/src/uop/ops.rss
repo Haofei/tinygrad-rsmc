@@ -1169,7 +1169,7 @@ fn mk_index(cache: mut UOpCache, base: Int, srcs: read List<Int>, ptr: Bool) -> 
         List.push<Int>(list: mut src, value: read s)
         i = i + 1
     }
-    local a = ArgNone
+    local a = ArgBool(value: ptr)
     return intern(cache: mut cache, op: INDEX, dt: read odt, src: take src, arg: take a)
 }
 
@@ -1765,6 +1765,34 @@ fn node_program_estimates(cache: read UOpCache, id: Int) -> fresh Estimates {
 fn node_arg(cache: read UOpCache, id: Int) -> fresh Arg {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
     return n.arg.clone()
+}
+
+fn node_index_is_ptr(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) != INDEX { return false }
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBool(v) => { return v }
+        ArgNone => {
+            let base = node_src_id(cache: read cache, id: id, k: 0)
+            let bdt = node_full_dtype(cache: read cache, id: base)
+            let dt = node_full_dtype(cache: read cache, id: id)
+            return bdt.count == dt.count
+        }
+        ArgInt(v) => { return false }
+        ArgFloat(v) => { return false }
+        ArgStr(v) => { return false }
+        ArgInts(v) => { return false }
+        ArgReduce(v) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(v) => { return false }
+        ArgParam(v) => { return false }
+        ArgAxisSizes(v) => { return false }
+        ArgDevice(v) => { return false }
+        ArgOp(v) => { return false }
+        ArgBufferize(v) => { return false }
+        ArgProgram(v) => { return false }
+        ArgCall(v) => { return false }
+    }
 }
 
 fn node_device_count(cache: read UOpCache, id: Int) -> Int {

@@ -13,6 +13,16 @@ struct CodegenHostCompileResult derives(Clone) {
     stderr_len: Int,
 }
 
+struct CodegenHostRunResult derives(Clone) {
+    ok: Bool,
+    source_id: Int,
+    source_len: Int,
+    compile_status: Int,
+    run_status: Int,
+    stdout: String,
+    stderr_len: Int,
+}
+
 fn codegen_push_sorted_unique_int(vals: mut List<Int>, v: Int) -> Unit {
     let mut i = 0
     while i < List.len<Int>(list: read vals) {
@@ -421,6 +431,58 @@ fn codegen_host_compile_check_c(cache: read UOpCache, prg: Int, path_text: read 
         Err(error) => {
             return CodegenHostCompileResult(ok: false, source_id: source_id, source_len: source_len,
                                             status: 0 - 3, stderr_len: String.len(value: read error))
+        }
+    }
+}
+
+fn codegen_host_run_c_harness(cache: read UOpCache, prg: Int, c_path_text: read String, exe_path_text: read String,
+                              harness_main: read String) -> fresh CodegenHostRunResult {
+    let source_id = codegen_program_source_id(cache: read cache, prg: prg)
+    if source_id < 0 {
+        return CodegenHostRunResult(ok: false, source_id: source_id, source_len: 0, compile_status: 0 - 1,
+                                    run_status: 0 - 1, stdout: "", stderr_len: 0)
+    }
+    let source = uop_arg_to_string(arg: read node_arg(cache: read cache, id: source_id))
+    let source_len = String.len(value: read source)
+    let combined = ["#include <stdio.h>\n", source, "\n", harness_main].join("")
+    let c_path = Path.from_string(value: read c_path_text)
+    match Path.write_string(path: read c_path, text: read combined) {
+        Ok(unit) => {
+        }
+        Err(error) => {
+            return CodegenHostRunResult(ok: false, source_id: source_id, source_len: source_len,
+                                        compile_status: 0 - 2, run_status: 0 - 1, stdout: "",
+                                        stderr_len: String.len(value: read error.message()))
+        }
+    }
+    let compile_args: List<String> = ["-std=c11", c_path_text, "-lm", "-o", exe_path_text]
+    match Process.run(command: read "clang", args: read compile_args) {
+        Ok(compile_output) => {
+            if compile_output.status != 0 {
+                return CodegenHostRunResult(ok: false, source_id: source_id, source_len: source_len,
+                                            compile_status: compile_output.status, run_status: 0 - 1,
+                                            stdout: String.copy(value: read compile_output.stdout),
+                                            stderr_len: String.len(value: read compile_output.stderr))
+            }
+        }
+        Err(error) => {
+            return CodegenHostRunResult(ok: false, source_id: source_id, source_len: source_len,
+                                        compile_status: 0 - 3, run_status: 0 - 1, stdout: "",
+                                        stderr_len: String.len(value: read error))
+        }
+    }
+    let run_args = List.new<String>()
+    match Process.run(command: read exe_path_text, args: read run_args) {
+        Ok(run_output) => {
+            return CodegenHostRunResult(ok: run_output.status == 0, source_id: source_id, source_len: source_len,
+                                        compile_status: 0, run_status: run_output.status,
+                                        stdout: String.copy(value: read run_output.stdout),
+                                        stderr_len: String.len(value: read run_output.stderr))
+        }
+        Err(error) => {
+            return CodegenHostRunResult(ok: false, source_id: source_id, source_len: source_len,
+                                        compile_status: 0, run_status: 0 - 2, stdout: "",
+                                        stderr_len: String.len(value: read error))
         }
     }
 }

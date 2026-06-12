@@ -1090,6 +1090,9 @@ fn main() -> Unit {
     showb(label: read "codegen.to_program program valid = ", v: spec_type_verify(cache: read mcache, id: ck_to_prog))
     let ck_host_compile = codegen_host_compile_check_c(cache: read mcache, prg: ck_to_prog, path_text: read "/tmp/tinygrad-rss-ck-gated.c")
     showb(label: read "codegen.host clang source = ", v: ck_host_compile.ok && ck_host_compile.source_id == node_src_id(cache: read mcache, id: ck_to_prog, k: 3) && ck_host_compile.source_len > 0 && ck_host_compile.status == 0 && ck_host_compile.stderr_len == 0)
+    let ck_host_main = "int main(void) { float in[4] = {1.0f, 2.0f, 3.0f, 4.0f}; float out[4] = {0.0f, 0.0f, 0.0f, 0.0f}; ck_gated(out, in, 4); printf(\"%.1f %.1f %.1f %.1f\\n\", out[0], out[1], out[2], out[3]); return 0; }\n"
+    let ck_host_run = codegen_host_run_c_harness(cache: read mcache, prg: ck_to_prog, c_path_text: read "/tmp/tinygrad-rss-ck-gated-run.c", exe_path_text: read "/tmp/tinygrad-rss-ck-gated-run", harness_main: read ck_host_main)
+    showb(label: read "codegen.host run source = ", v: ck_host_run.ok && ck_host_run.source_id == ck_host_compile.source_id && ck_host_run.source_len == ck_host_compile.source_len && ck_host_run.compile_status == 0 && ck_host_run.run_status == 0 && ck_host_run.stdout == "9.0 12.0 15.0 18.0\n" && ck_host_run.stderr_len == 0)
     local ck_call_args = List.new<Int>()
     List.push<Int>(list: mut ck_call_args, value: read ck_out)
     List.push<Int>(list: mut ck_call_args, value: read ck_in)

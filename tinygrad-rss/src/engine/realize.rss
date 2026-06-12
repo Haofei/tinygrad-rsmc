@@ -11,6 +11,30 @@ struct RealizeCallIO derives(Clone) {
     ins: List<Int>,
 }
 
+struct RealizeExecContext {
+    store: DeviceMemoryStore,
+    buffers: List<TGBuffer>,
+}
+
+fn realize_exec_context_new(store: take DeviceMemoryStore, buffers: take List<TGBuffer>) -> fresh RealizeExecContext {
+    return RealizeExecContext(store: take store, buffers: take buffers)
+}
+
+fn realize_exec_context_buffer_count(ctx: read RealizeExecContext) -> Int {
+    return List.len<TGBuffer>(list: read ctx.buffers)
+}
+
+fn realize_exec_context_get_buffer(ctx: read RealizeExecContext, index: Int) -> fresh TGBuffer {
+    let b = List.get<TGBuffer>(list: read ctx.buffers, index: index)
+    return buffer_copy(buf: read b)
+}
+
+fn realize_exec_context_set_buffer(ctx: mut RealizeExecContext, index: Int, buf: read TGBuffer) -> Unit {
+    local b = buffer_copy(buf: read buf)
+    List.set<TGBuffer>(list: mut ctx.buffers, index: index, value: read (manage b))
+    return Unit
+}
+
 fn realize_get_call_arg_uops(cache: read UOpCache, call: Int) -> fresh List<Int> {
     local out = List.new<Int>()
     if node_op(cache: read cache, id: call) != CALL { return take out }
@@ -80,4 +104,71 @@ fn realize_estimate_uop(cache: read UOpCache, call: Int) -> fresh Estimates {
         }
     }
     return Estimates(ops: 0, lds: 0, mem: 0)
+}
+
+fn realize_resolve_param_id(cache: read UOpCache, id: Int, inputs: read List<Int>) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == PARAM {
+        let slot = node_param_slot(cache: read cache, id: id)
+        if slot >= 0 && slot < List.len<Int>(list: read inputs) {
+            return List.get<Int>(list: read inputs, index: slot)
+        }
+    }
+    if (op == SLICE || op == MSELECT) && node_num_src(cache: read cache, id: id) > 0 {
+        let base = node_src_id(cache: read cache, id: id, k: 0)
+        if node_op(cache: read cache, id: base) == PARAM {
+            let slot = node_param_slot(cache: read cache, id: base)
+            if slot >= 0 && slot < List.len<Int>(list: read inputs) {
+                return List.get<Int>(list: read inputs, index: slot)
+            }
+        }
+    }
+    return id
+}
+
+fn realize_resolve_params(cache: read UOpCache, call: Int, inputs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local args = realize_get_call_arg_uops(cache: read cache, call: call)
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        let arg = List.get<Int>(list: read args, index: i)
+        List.push<Int>(list: mut out, value: read realize_resolve_param_id(cache: read cache, id: arg, inputs: read inputs))
+        i = i + 1
+    }
+    return take out
+}
+
+fn realize_exec_copy(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Unit {
+    if node_op(cache: read cache, id: call) != CALL { return Unit }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    if node_op(cache: read cache, id: ast) != COPY { return Unit }
+    if realize_exec_context_buffer_count(ctx: read ctx) < 2 { return Unit }
+
+    let dest0 = realize_exec_context_get_buffer(ctx: read ctx, index: 0)
+    let src0 = realize_exec_context_get_buffer(ctx: read ctx, index: 1)
+    local src = buffer_ensure_allocated(store: mut ctx.store, buf: read src0)
+    let mut dest = buffer_ensure_allocated(store: mut ctx.store, buf: read dest0)
+    local bytes = buffer_copyout(store: read ctx.store, buf: read src)
+    dest = buffer_copyin(store: mut ctx.store, buf: read dest, src: read bytes)
+    realize_exec_context_set_buffer(ctx: mut ctx, index: 0, buf: read dest)
+    realize_exec_context_set_buffer(ctx: mut ctx, index: 1, buf: read src)
+    return Unit
+}
+
+fn realize_exec_view(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Unit {
+    if node_op(cache: read cache, id: call) != CALL { return Unit }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    if node_op(cache: read cache, id: ast) != SLICE { return Unit }
+    if realize_exec_context_buffer_count(ctx: read ctx) < 2 { return Unit }
+
+    let out_desc = realize_exec_context_get_buffer(ctx: read ctx, index: 0)
+    let src0 = realize_exec_context_get_buffer(ctx: read ctx, index: 1)
+    local src = buffer_ensure_allocated(store: mut ctx.store, buf: read src0)
+    let off_node = node_src_id(cache: read cache, id: ast, k: 1)
+    let itemsize = DType.itemsize(self: read dtype_scalar(d: read src.dtype))
+    let offset = node_const_int(cache: read cache, id: off_node) * itemsize
+    local view = buffer_view(buf: read src, size: out_desc.size, dtype: read node_full_dtype(cache: read cache, id: ast), offset: offset)
+    realize_exec_context_set_buffer(ctx: mut ctx, index: 0, buf: read view)
+    realize_exec_context_set_buffer(ctx: mut ctx, index: 1, buf: read src)
+    return Unit
 }

@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 20 RSS files, 15,030 LOC.
+  - integrated `tinygrad-rss/src`: 20 RSS files, 15,102 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -124,9 +124,9 @@ Integrated pieces:
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
   scoring from active ranges, upstream op priorities for `PARAM`/`DEFINE_VAR`/`DEFINE_REG`/
   `DEFINE_LOCAL`/`LOAD`/`STORE`/`RANGE`/`END`, ideal-key ranking, out-degree scheduling from the
-  sink, dependency-order verification, and compact op-order rendering. CFG edge insertion,
-  split-ends, gated-store cleanup, ISA register allocation, and `to_program` integration remain
-  unported.
+  sink, dependency-order verification, compact op-order rendering, and `pm_split_ends`-style
+  splitting of multi-range `END` nodes into nested single-range `END`s. CFG edge insertion,
+  gated-store cleanup, ISA register allocation, and `to_program` integration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -264,6 +264,8 @@ Current integrated demo:
 - validates first integrated codegen linearizer priority ordering over the same real kernel graph,
   producing a dependency-valid linear op stream from `CONST`/`PARAM`/`DEFINE_*` through
   `RANGE`/`INDEX`/`LOAD`/ALU/`STORE`/`END`/`IF`/`ENDIF`/`SINK`.
+- validates `pm_split_ends`-style cleanup by rewriting a synthetic two-range `END` into nested
+  single-range `END` nodes.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -473,7 +475,7 @@ Major missing integrated work:
   behavior, full spec/validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
-  toposort is integrated, but CFG/control-flow insertion, split-ends, late expansion/devectorization,
+  toposort and split-end cleanup are integrated, but CFG/control-flow insertion, late expansion/devectorization,
   range simplification, GPU dims, ISA/regalloc, program assembly/render/compile, and clear scope for
   GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first

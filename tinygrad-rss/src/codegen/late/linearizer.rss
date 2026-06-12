@@ -1,8 +1,8 @@
 // Integrated source-shaped slice of tinygrad/codegen/late/linearizer.py.
 //
 // This ports the priority toposort used by linearize(sink) onto the interned
-// UOp cache. CFG edge insertion, split-ends, and register allocation remain
-// separate later codegen work.
+// UOp cache. CFG edge insertion and register allocation remain separate later
+// codegen work.
 features: local
 
 fn linearizer_priority(op: read Ops) -> Int {
@@ -187,4 +187,68 @@ fn linearizer_order_names(cache: read UOpCache, order: read List<Int>) -> fresh 
         i = i + 1
     }
     return String.join(parts: read parts, separator: read ",")
+}
+
+fn linearizer_range_less(cache: read UOpCache, a: Int, b: Int) -> Bool {
+    let aa = node_range_axis_id(cache: read cache, id: a)
+    let ba = node_range_axis_id(cache: read cache, id: b)
+    if aa < ba { return true }
+    if aa > ba { return false }
+    let at = axis_type_ord(t: read node_range_type(cache: read cache, id: a))
+    let bt = axis_type_ord(t: read node_range_type(cache: read cache, id: b))
+    if at < bt { return true }
+    if at > bt { return false }
+    return a < b
+}
+
+fn linearizer_collect_ranges(cache: read UOpCache, id: Int, ranges: mut List<Int>) -> Unit {
+    local rs = uop_ranges(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        uop_push_unique(vals: mut ranges, v: List.get<Int>(list: read rs, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn linearizer_sort_ranges_desc(cache: read UOpCache, ranges: mut List<Int>) -> Unit {
+    let n = List.len<Int>(list: read ranges)
+    let mut i = 0
+    while i < n {
+        let mut best = i
+        let mut j = i + 1
+        while j < n {
+            let rj = List.get<Int>(list: read ranges, index: j)
+            let rb = List.get<Int>(list: read ranges, index: best)
+            if linearizer_range_less(cache: read cache, a: rb, b: rj) { best = j }
+            j = j + 1
+        }
+        let tmp = List.get<Int>(list: read ranges, index: i)
+        let chosen = List.get<Int>(list: read ranges, index: best)
+        List.set<Int>(list: mut ranges, index: i, value: read chosen)
+        List.set<Int>(list: mut ranges, index: best, value: read tmp)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn linearizer_split_end(cache: mut UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) != END { return id }
+    if node_num_src(cache: read cache, id: id) <= 2 { return id }
+    local ranges = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        linearizer_collect_ranges(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), ranges: mut ranges)
+        i = i + 1
+    }
+    linearizer_sort_ranges_desc(cache: read cache, ranges: mut ranges)
+    let mut ret = node_src_id(cache: read cache, id: id, k: 0)
+    let mut j = 0
+    while j < List.len<Int>(list: read ranges) {
+        local one = List.new<Int>()
+        List.push<Int>(list: mut one, value: read List.get<Int>(list: read ranges, index: j))
+        ret = mk_end(cache: mut cache, id: ret, srcs: read one)
+        j = j + 1
+    }
+    return ret
 }

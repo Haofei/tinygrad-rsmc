@@ -46,6 +46,12 @@ struct UOpConstSplit derives(Clone) {
     value: Int,
 }
 
+struct UOpTermConst derives(Clone) {
+    term: Int,
+    value: Int,
+    ok: Bool,
+}
+
 fn uop_identity_element(op: read Ops) -> Int {
     if op == ADD { return 0 }
     if op == MUL { return 1 }
@@ -103,6 +109,51 @@ fn uop_pop_const(cache: read UOpCache, id: Int, op: Ops) -> fresh UOpConstSplit 
         }
     }
     return UOpConstSplit(factor: id, value: uop_identity_element(op: read op))
+}
+
+fn uop_add_term_const(cache: read UOpCache, id: Int) -> fresh UOpTermConst {
+    if node_op(cache: read cache, id: id) != ADD { return UOpTermConst(term: id, value: 0, ok: false) }
+    if node_num_src(cache: read cache, id: id) != 2 { return UOpTermConst(term: id, value: 0, ok: false) }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    if node_is_const_int(cache: read cache, id: b) {
+        return UOpTermConst(term: a, value: node_const_int(cache: read cache, id: b), ok: true)
+    }
+    if node_is_const_int(cache: read cache, id: a) {
+        return UOpTermConst(term: b, value: node_const_int(cache: read cache, id: a), ok: true)
+    }
+    return UOpTermConst(term: id, value: 0, ok: false)
+}
+
+fn symbolic_mul_const(cache: mut UOpCache, dt: read DType, x: Int, coeff: Int) -> Int {
+    if coeff == 1 { return x }
+    if coeff == 0 { return mk_const_int(cache: mut cache, dt: read dt, v: 0) }
+    if coeff == 0 - 1 { return mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: x) }
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: coeff)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: x, y: c)
+}
+
+fn symbolic_try_combine_add_pair(cache: mut UOpCache, dt: read DType, a: Int, b: Int) -> Option<Int> {
+    let pa = uop_pop_const(cache: read cache, id: a, op: MUL)
+    let pb = uop_pop_const(cache: read cache, id: b, op: MUL)
+    if pa.factor != pb.factor { return None }
+    return Some(symbolic_mul_const(cache: mut cache, dt: read dt, x: pa.factor, coeff: pa.value + pb.value))
+}
+
+fn symbolic_try_combine_add_nested(cache: mut UOpCache, dt: read DType, parent: Int, other: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: parent) != ADD { return None }
+    if node_num_src(cache: read cache, id: parent) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: parent, k: 0)
+    let b = node_src_id(cache: read cache, id: parent, k: 1)
+    match symbolic_try_combine_add_pair(cache: mut cache, dt: read dt, a: a, b: other) {
+        Some(combined) => { return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: b, y: combined)) }
+        None => {}
+    }
+    match symbolic_try_combine_add_pair(cache: mut cache, dt: read dt, a: b, b: other) {
+        Some(combined) => { return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: a, y: combined)) }
+        None => {}
+    }
+    return None
 }
 
 fn uop_is_increasing(cache: read UOpCache, id: Int) -> Bool {
@@ -434,6 +485,106 @@ fn rule_simplify_trunc_int(cache: mut UOpCache, id: Int) -> Option<Int> {
     return None
 }
 
+fn rule_simplify_bool_alu_to_logic(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != MUL && op != ADD && op != MAX { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let adt = node_dtype(cache: read cache, id: a)
+    let bdt = node_dtype(cache: read cache, id: b)
+    if dtype_is_bool(d: read adt) == false { return None }
+    if dtype_is_bool(d: read bdt) == false { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    if op == MUL { return Some(mk_alu2(cache: mut cache, op: AND, dt: read dt, x: a, y: b)) }
+    return Some(mk_alu2(cache: mut cache, op: OR, dt: read dt, x: a, y: b))
+}
+
+fn rule_simplify_bool_or_not(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != OR { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    if symbolic_is_logical_not_of(cache: read cache, not_id: a, x: b) {
+        return Some(symbolic_bool_true(cache: mut cache))
+    }
+    if symbolic_is_logical_not_of(cache: read cache, not_id: b, x: a) {
+        return Some(symbolic_bool_true(cache: mut cache))
+    }
+    return None
+}
+
+fn symbolic_is_logical_not_of(cache: read UOpCache, not_id: Int, x: Int) -> Bool {
+    if node_op(cache: read cache, id: not_id) != CMPNE { return false }
+    if node_num_src(cache: read cache, id: not_id) != 2 { return false }
+    let a = node_src_id(cache: read cache, id: not_id, k: 0)
+    let b = node_src_id(cache: read cache, id: not_id, k: 1)
+    if a == x && const_bool_eq(cache: read cache, id: b, k: 1) { return true }
+    if b == x && const_bool_eq(cache: read cache, id: a, k: 1) { return true }
+    return false
+}
+
+fn rule_simplify_combine_add_terms(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != ADD { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    match symbolic_try_combine_add_pair(cache: mut cache, dt: read dt, a: a, b: b) {
+        Some(combined) => { return Some(combined) }
+        None => {}
+    }
+    match symbolic_try_combine_add_nested(cache: mut cache, dt: read dt, parent: a, other: b) {
+        Some(combined) => { return Some(combined) }
+        None => {}
+    }
+    match symbolic_try_combine_add_nested(cache: mut cache, dt: read dt, parent: b, other: a) {
+        Some(combined) => { return Some(combined) }
+        None => {}
+    }
+    return None
+}
+
+fn rule_simplify_const_mul_add(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != MUL { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let mut cnode = a
+    let mut addnode = b
+    if node_is_const_int(cache: read cache, id: cnode) == false {
+        cnode = b
+        addnode = a
+    }
+    if node_is_const_int(cache: read cache, id: cnode) == false { return None }
+    let add = uop_add_term_const(cache: read cache, id: addnode)
+    if add.ok == false { return None }
+    let c = node_const_int(cache: read cache, id: cnode)
+    let dt = node_dtype(cache: read cache, id: id)
+    let left = symbolic_mul_const(cache: mut cache, dt: read dt, x: add.term, coeff: c)
+    let right = mk_const_int(cache: mut cache, dt: read dt, v: c * add.value)
+    return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: left, y: right))
+}
+
+fn rule_simplify_where_not_condition(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != WHERE { return None }
+    if node_num_src(cache: read cache, id: id) != 3 { return None }
+    let cond = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: cond) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: cond) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: cond, k: 0)
+    let b = node_src_id(cache: read cache, id: cond, k: 1)
+    let mut inner = a
+    if const_bool_eq(cache: read cache, id: b, k: 1) == false {
+        if const_bool_eq(cache: read cache, id: a, k: 1) == false { return None }
+        inner = b
+    }
+    let tval = node_src_id(cache: read cache, id: id, k: 1)
+    let fval = node_src_id(cache: read cache, id: id, k: 2)
+    let dt = node_dtype(cache: read cache, id: id)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: inner, tval: fval, fval: tval))
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -571,6 +722,26 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_trunc_int(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_bool_alu_to_logic(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_bool_or_not(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_combine_add_terms(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_const_mul_add(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_where_not_condition(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

@@ -156,6 +156,27 @@ fn symbolic_try_combine_add_nested(cache: mut UOpCache, dt: read DType, parent: 
     return None
 }
 
+fn symbolic_binop_const(cache: mut UOpCache, op: Ops, dt: read DType, a: Int, b: Int) -> Int {
+    local vals = List.new<Int>()
+    List.push<Int>(list: mut vals, value: read a)
+    List.push<Int>(list: mut vals, value: read b)
+    let out = exec_alu_int(op: read op, operands: read vals)
+    return mk_const_int(cache: mut cache, dt: read dt, v: out)
+}
+
+fn symbolic_const_rhs(cache: read UOpCache, id: Int) -> fresh UOpTermConst {
+    if node_num_src(cache: read cache, id: id) != 2 { return UOpTermConst(term: id, value: 0, ok: false) }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    if node_is_const_int(cache: read cache, id: b) {
+        return UOpTermConst(term: a, value: node_const_int(cache: read cache, id: b), ok: true)
+    }
+    if node_is_const_int(cache: read cache, id: a) {
+        return UOpTermConst(term: b, value: node_const_int(cache: read cache, id: a), ok: true)
+    }
+    return UOpTermConst(term: id, value: 0, ok: false)
+}
+
 fn uop_is_increasing(cache: read UOpCache, id: Int) -> Bool {
     let op = node_op(cache: read cache, id: id)
     if group_irreducible(op: read op) { return true }
@@ -585,6 +606,131 @@ fn rule_simplify_where_not_condition(cache: mut UOpCache, id: Int) -> Option<Int
     return Some(mk_where(cache: mut cache, dt: read dt, cond: inner, tval: fval, fval: tval))
 }
 
+fn rule_fold_exact_minmax(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    let mut eligible = false
+    if op == CMPLT || op == CMPNE || op == FLOORDIV || op == FLOORMOD { eligible = true }
+    if op == DEFINE_VAR || op == BIND || op == SPECIAL || op == RANGE { eligible = true }
+    if eligible == false { return None }
+    let r = uop_min_max(cache: read cache, id: id)
+    if r.lo != r.hi { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    return Some(mk_const_int(cache: mut cache, dt: read dt, v: r.lo))
+}
+
+fn rule_simplify_max_by_bounds(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != MAX { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let ra = uop_min_max(cache: read cache, id: a)
+    let rb = uop_min_max(cache: read cache, id: b)
+    if ra.lo >= rb.hi { return Some(a) }
+    if ra.hi <= rb.lo { return Some(b) }
+    return None
+}
+
+fn rule_simplify_assoc_const_chain(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if group_associative(op: read op) == false { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let outer = symbolic_const_rhs(cache: read cache, id: id)
+    if outer.ok == false { return None }
+    if node_op(cache: read cache, id: outer.term) != op { return None }
+    let inner = symbolic_const_rhs(cache: read cache, id: outer.term)
+    if inner.ok == false { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    let c = symbolic_binop_const(cache: mut cache, op: op.clone(), dt: read dt, a: inner.value, b: outer.value)
+    return Some(mk_alu2(cache: mut cache, op: op.clone(), dt: read dt, x: inner.term, y: c))
+}
+
+fn rule_simplify_add_lt_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPLT { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if node_is_const_int(cache: read cache, id: rhs) == false { return None }
+    if node_op(cache: read cache, id: lhs) != ADD { return None }
+    let add = symbolic_const_rhs(cache: read cache, id: lhs)
+    if add.ok == false { return None }
+    let c1 = node_const_int(cache: read cache, id: rhs)
+    let ndt = node_dtype(cache: read cache, id: add.term)
+    let new_rhs = mk_const_int(cache: mut cache, dt: read ndt, v: c1 - add.value)
+    let dt = node_dtype(cache: read cache, id: id)
+    return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt, x: add.term, y: new_rhs))
+}
+
+fn rule_simplify_chained_floordiv_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != FLOORDIV { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if node_is_const_int(cache: read cache, id: rhs) == false { return None }
+    let c2 = node_const_int(cache: read cache, id: rhs)
+    if c2 <= 0 { return None }
+    if node_op(cache: read cache, id: lhs) != FLOORDIV { return None }
+    if node_num_src(cache: read cache, id: lhs) != 2 { return None }
+    let x = node_src_id(cache: read cache, id: lhs, k: 0)
+    let c1n = node_src_id(cache: read cache, id: lhs, k: 1)
+    if node_is_const_int(cache: read cache, id: c1n) == false { return None }
+    let c1 = node_const_int(cache: read cache, id: c1n)
+    let dt = node_dtype(cache: read cache, id: id)
+    let c = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: c1n), v: c1 * c2)
+    return Some(mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: x, y: c))
+}
+
+fn rule_simplify_linear_lt_const(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPLT { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if node_is_const_int(cache: read cache, id: rhs) == false { return None }
+    let c = node_const_int(cache: read cache, id: rhs)
+    if node_op(cache: read cache, id: lhs) == MUL {
+        let mul = symbolic_const_rhs(cache: read cache, id: lhs)
+        if mul.ok {
+            if mul.value > 0 && c > 0 {
+                let ndt = node_dtype(cache: read cache, id: mul.term)
+                let bound = (c + mul.value - 1) / mul.value
+                let nrhs = mk_const_int(cache: mut cache, dt: read ndt, v: bound)
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt, x: mul.term, y: nrhs))
+            }
+        }
+    }
+    if node_op(cache: read cache, id: lhs) == FLOORDIV {
+        if node_num_src(cache: read cache, id: lhs) != 2 { return None }
+        let x = node_src_id(cache: read cache, id: lhs, k: 0)
+        let d = node_src_id(cache: read cache, id: lhs, k: 1)
+        if node_is_const_int(cache: read cache, id: d) {
+            let dv = node_const_int(cache: read cache, id: d)
+            if dv > 0 {
+                let ndt = node_dtype(cache: read cache, id: x)
+                let nrhs = mk_const_int(cache: mut cache, dt: read ndt, v: c * dv)
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt, x: x, y: nrhs))
+            }
+        }
+    }
+    return None
+}
+
+fn rule_simplify_move_const_to_end(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != ADD && op != MUL { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if node_op(cache: read cache, id: lhs) != op { return None }
+    let inner = symbolic_const_rhs(cache: read cache, id: lhs)
+    if inner.ok == false { return None }
+    if node_is_const_int(cache: read cache, id: rhs) { return None }
+    let dt = node_dtype(cache: read cache, id: id)
+    let mid = mk_alu2(cache: mut cache, op: op.clone(), dt: read dt, x: inner.term, y: rhs)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: inner.value)
+    return Some(mk_alu2(cache: mut cache, op: op.clone(), dt: read dt, x: mid, y: c))
+}
+
 // algebraic identities: x+0->x, x*1->x, x*0->0, x^0->x, x//1->x, x-0->x. Returning a child id reuses
 // the (shared) node directly.
 fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -742,6 +888,34 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match rule_simplify_where_not_condition(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_fold_exact_minmax(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_max_by_bounds(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_assoc_const_chain(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_add_lt_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_chained_floordiv_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_linear_lt_const(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rule_simplify_move_const_to_end(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

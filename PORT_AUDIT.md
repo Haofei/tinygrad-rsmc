@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,691 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,910 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -203,7 +203,9 @@ Integrated pieces:
   identities/folding, a grouped `symbolic_simple` slice for idempotent ops, boolean constants,
   same-self comparisons, `x//-1`, `(x^y)^y`, boolean not/cast/trunc folding,
   bool-ALU-to-logic folding, boolean contradiction folding, additive coefficient combining,
-  constant-times-sum distribution, inverted-condition `WHERE` folding, simple `WHERE` folding,
+  constant-times-sum distribution, exact min/max constantization, bound-proven `MAX` folding,
+  associative constant-chain folding, comparison threshold normalization, chained floor-div
+  folding, constant-last reordering, inverted-condition `WHERE` folding, simple `WHERE` folding,
   constant-exponent `POW` simplification for integer exponents,
   monotonicity checks, known constant-factor extraction, `pop_const`,
   symbolic `gcd`, and proven exact division for constants, stacks, adds, multiplies, and simple
@@ -320,6 +322,11 @@ Current integrated demo:
   `ADD/MAX -> OR`, `b|!b -> true`, `x*2+x*3 -> x*5`, `x+x -> x*2`,
   nested additive coefficient combining, `-1*(x+3) -> -x + -3`, and
   `!b.where(2,3) -> b.where(3,2)`.
+- validates a grouped upstream symbolic bounds/constant-chain batch: exact `DEFINE_VAR`,
+  `SPECIAL(size=1)`, and `RANGE(size=1)` constantization, `MAX` folding by disjoint
+  ranges, `(x+2)+3 -> x+5`, `(x*2)*3 -> x*6`, `2+x<7 -> x<5`,
+  `(x//2)//3 -> x//6`, `3*x<10 -> x<4`, `x//2<5 -> x<10`, and
+  `(x+2)+y -> (x+y)+2`.
 - validates simple symbolic `WHERE` folding for true, false, same-branch, and bottom-up
   constant-comparison conditions.
 - validates integrated div/mod symbolic rewrites against upstream-shaped samples:

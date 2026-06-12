@@ -252,3 +252,43 @@ fn multi_flip(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let out = mk_multi(cache: mut cache, x: flipped, axis: axis)
     return MultiRewrite(result: out, changed: true, ok: true)
 }
+
+fn multi_gettuple_tuple(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != GETTUPLE || node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let src = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: src) != TUPLE {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let idx = node_const_int(cache: read cache, id: root)
+    if idx < 0 || idx >= node_num_src(cache: read cache, id: src) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    return MultiRewrite(result: node_src_id(cache: read cache, id: src, k: idx), changed: true, ok: true)
+}
+
+fn multi_gettuple_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != GETTUPLE || node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = node_src_id(cache: read cache, id: multi, k: 0)
+    let pop = node_op(cache: read cache, id: payload)
+    if pop != TUPLE && pop != FUNCTION {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let tuple_src = uop_tuple_source_for_gettuple(cache: read cache, id: payload)
+    let idx = node_const_int(cache: read cache, id: root)
+    if node_op(cache: read cache, id: tuple_src) != TUPLE || idx < 0 || idx >= node_num_src(cache: read cache, id: tuple_src) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let got = mk_gettuple(cache: mut cache, tuple_id: payload, idx: idx)
+    let out = mk_multi(cache: mut cache, x: got, axis: node_const_int(cache: read cache, id: multi))
+    return MultiRewrite(result: out, changed: true, ok: true)
+}

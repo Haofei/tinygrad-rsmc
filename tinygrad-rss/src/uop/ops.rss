@@ -90,6 +90,18 @@ struct ProgramArg derives(Clone) {
     estimate_mem: Int,
 }
 
+struct ProgramLaunchDims derives(Clone) {
+    global_size: List<Int>,
+    has_local_size: Bool,
+    local_size: List<Int>,
+}
+
+struct ProgramVals derives(Clone) {
+    values: List<Int>,
+    has_value: List<Bool>,
+    is_runtime: List<Bool>,
+}
+
 struct CallArg derives(Clone) {
     has_name: Bool,
     name: String,
@@ -843,6 +855,55 @@ fn program_arg_with_estimates(arg: read ProgramArg, estimates: read Estimates) -
                       outs: copy_int_list(l: read arg.outs), ins: copy_int_list(l: read arg.ins),
                       has_estimates: true, estimate_ops: estimates.ops,
                       estimate_lds: estimates.lds, estimate_mem: estimates.mem)
+}
+
+fn program_arg_launch_dims(arg: read ProgramArg) -> fresh ProgramLaunchDims {
+    return ProgramLaunchDims(global_size: copy_int_list(l: read arg.global_size), has_local_size: arg.has_local_size,
+                             local_size: copy_int_list(l: read arg.local_size))
+}
+
+fn program_arg_runtimevar_indices(cache: read UOpCache, arg: read ProgramArg) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read arg.vars) {
+        let v = List.get<Int>(list: read arg.vars, index: i)
+        if node_var_name(cache: read cache, id: v) == "core_id" {
+            List.push<Int>(list: mut out, value: read i)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn program_arg_vals(cache: read UOpCache, arg: read ProgramArg, var_vals: read Map<String, Int>) -> fresh ProgramVals {
+    local values = List.new<Int>()
+    local has_value = List.new<Bool>()
+    local is_runtime = List.new<Bool>()
+    let mut i = 0
+    while i < List.len<Int>(list: read arg.vars) {
+        let v = List.get<Int>(list: read arg.vars, index: i)
+        let name = node_var_name(cache: read cache, id: v)
+        if name == "core_id" {
+            List.push<Int>(list: mut values, value: read 0)
+            List.push<Bool>(list: mut has_value, value: read false)
+            List.push<Bool>(list: mut is_runtime, value: read true)
+        } else {
+            match Map.get<String, Int>(map: read var_vals, key: read name) {
+                Some(value) => {
+                    List.push<Int>(list: mut values, value: read value)
+                    List.push<Bool>(list: mut has_value, value: read true)
+                    List.push<Bool>(list: mut is_runtime, value: read false)
+                }
+                None => {
+                    List.push<Int>(list: mut values, value: read 0)
+                    List.push<Bool>(list: mut has_value, value: read false)
+                    List.push<Bool>(list: mut is_runtime, value: read false)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return ProgramVals(values: take values, has_value: take has_value, is_runtime: take is_runtime)
 }
 
 fn mk_program(cache: mut UOpCache, sink: Int, device: Int, extra: read List<Int>, arg: read ProgramArg) -> Int {
@@ -1644,6 +1705,21 @@ fn node_program_arg(cache: read UOpCache, id: Int) -> fresh ProgramArg {
                                   outs: read empty, ins: read empty)
         }
     }
+}
+
+fn node_program_launch_dims(cache: read UOpCache, id: Int) -> fresh ProgramLaunchDims {
+    local arg = node_program_arg(cache: read cache, id: id)
+    return program_arg_launch_dims(arg: read arg)
+}
+
+fn node_program_runtimevar_indices(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local arg = node_program_arg(cache: read cache, id: id)
+    return program_arg_runtimevar_indices(cache: read cache, arg: read arg)
+}
+
+fn node_program_vals(cache: read UOpCache, id: Int, var_vals: read Map<String, Int>) -> fresh ProgramVals {
+    local arg = node_program_arg(cache: read cache, id: id)
+    return program_arg_vals(cache: read cache, arg: read arg, var_vals: read var_vals)
 }
 
 fn node_program_has_estimates(cache: read UOpCache, id: Int) -> Bool {

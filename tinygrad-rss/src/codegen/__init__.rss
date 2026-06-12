@@ -5,6 +5,92 @@
 // remain later slices.
 features: local
 
+fn codegen_push_sorted_unique_int(vals: mut List<Int>, v: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        let cur = List.get<Int>(list: read vals, index: i)
+        if cur == v { return Unit }
+        i = i + 1
+    }
+    List.push<Int>(list: mut vals, value: read v)
+    let n = List.len<Int>(list: read vals)
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            let va = List.get<Int>(list: read vals, index: a)
+            let vb = List.get<Int>(list: read vals, index: b)
+            if vb < va {
+                List.set<Int>(list: mut vals, index: a, value: read vb)
+                List.set<Int>(list: mut vals, index: b, value: read va)
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return Unit
+}
+
+fn codegen_index_param_slot(cache: read UOpCache, ptr: Int) -> Int {
+    let op = node_op(cache: read cache, id: ptr)
+    let mut idx = ptr
+    if op == CAST && node_num_src(cache: read cache, id: ptr) > 0 {
+        idx = node_src_id(cache: read cache, id: ptr, k: 0)
+    }
+    let idx_op = node_op(cache: read cache, id: idx)
+    if idx_op != INDEX && idx_op != SHRINK { return 0 - 1 }
+    if node_num_src(cache: read cache, id: idx) == 0 { return 0 - 1 }
+    let base = node_src_id(cache: read cache, id: idx, k: 0)
+    if node_op(cache: read cache, id: base) != PARAM { return 0 - 1 }
+    return node_param_slot(cache: read cache, id: base)
+}
+
+fn codegen_program_arg_from_sink(cache: read UOpCache, sink: Int, name: read String) -> fresh ProgramArg {
+    local global_size = List.new<Int>()
+    List.push<Int>(list: mut global_size, value: read 1)
+    List.push<Int>(list: mut global_size, value: read 1)
+    List.push<Int>(list: mut global_size, value: read 1)
+    local local_size = List.new<Int>()
+    List.push<Int>(list: mut local_size, value: read 1)
+    List.push<Int>(list: mut local_size, value: read 1)
+    List.push<Int>(list: mut local_size, value: read 1)
+    local vars = List.new<Int>()
+    local globals = List.new<Int>()
+    local outs = List.new<Int>()
+    local ins = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: sink)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        let op = node_op(cache: read cache, id: u)
+        if op == DEFINE_VAR {
+            uop_variables_push_sorted(cache: read cache, vars: mut vars, var_id: u)
+            if node_var_name(cache: read cache, id: u) == "core_id" {
+                List.set<Int>(list: mut global_size, index: 0, value: read (node_var_max(cache: read cache, id: u) + 1))
+            }
+        }
+        if op == PARAM {
+            codegen_push_sorted_unique_int(vals: mut globals, v: node_param_slot(cache: read cache, id: u))
+        }
+        if op == LOAD || op == STORE {
+            if node_num_src(cache: read cache, id: u) > 0 {
+                let slot = codegen_index_param_slot(cache: read cache, ptr: node_src_id(cache: read cache, id: u, k: 0))
+                if slot >= 0 {
+                    if op == STORE {
+                        codegen_push_sorted_unique_int(vals: mut outs, v: slot)
+                    } else {
+                        codegen_push_sorted_unique_int(vals: mut ins, v: slot)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return mk_program_arg(name: read name, global_size: read global_size, has_local_size: true,
+                          local_size: read local_size, vars: read vars, globals: read globals,
+                          outs: read outs, ins: read ins)
+}
+
 fn codegen_estimate_numel(cache: read UOpCache, id: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: id)
     let n = prod(x: read sh)

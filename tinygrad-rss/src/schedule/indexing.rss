@@ -441,6 +441,26 @@ fn indexing_is_rangeify_skip(cache: read UOpCache, id: Int) -> Bool {
 fn indexing_movement_arg_for_node(cache: read UOpCache, id: Int) -> fresh List<Int> {
     let op = node_op(cache: read cache, id: id)
     if op == RESHAPE || op == EXPAND { return uop_shape(cache: read cache, id: id) }
+    if op == SHRINK || op == PAD {
+        local out = List.new<Int>()
+        if node_num_src(cache: read cache, id: id) > 1 {
+            local a = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 1))
+            let mut i = 0
+            while i < List.len<Int>(list: read a) {
+                List.push<Int>(list: mut out, value: read List.get<Int>(list: read a, index: i))
+                i = i + 1
+            }
+        }
+        if node_num_src(cache: read cache, id: id) > 2 {
+            local b = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: id, k: 2))
+            let mut j = 0
+            while j < List.len<Int>(list: read b) {
+                List.push<Int>(list: mut out, value: read List.get<Int>(list: read b, index: j))
+                j = j + 1
+            }
+        }
+        return take out
+    }
     return node_argints(cache: read cache, id: id)
 }
 
@@ -495,6 +515,23 @@ fn indexing_reduce_with_ranges(cache: mut UOpCache, id: Int, src0: Int, ranges: 
     return intern(cache: mut cache, op: REDUCE, dt: read node_full_dtype(cache: read cache, id: id), src: take src, arg: take a)
 }
 
+fn indexing_zero_like(cache: mut UOpCache, like: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: like)
+    if dtype_is_float(d: read dt) { return mk_const_float(cache: mut cache, dt: read dt, v: 0.0) }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 0)
+}
+
+fn indexing_valid_product(cache: mut UOpCache, ranges: read List<Int>) -> Int {
+    let mut valid = mk_const_int(cache: mut cache, dt: read dt_bool(), v: 1)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        let v = uop_get_valid(cache: mut cache, id: List.get<Int>(list: read ranges, index: i))
+        valid = mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: valid, y: v)
+        i = i + 1
+    }
+    return valid
+}
+
 fn indexing_rewrite_child_for_ranges(cache: mut UOpCache, analysis: read IndexingRangeifyResult, parent_rec_i: Int, child_orig: Int, child_rewritten: Int) -> Int {
     let child_op = node_op(cache: read cache, id: child_orig)
     if parent_rec_i >= 0 && indexing_source_like(op: read child_op) {
@@ -544,12 +581,20 @@ fn indexing_rangeify_rewrite_node(cache: mut UOpCache, id: Int, analysis: read I
         local reduce_ranges = indexing_select_axes(items: read rec.in_ranges, axes: read axes)
         out = indexing_reduce_with_ranges(cache: mut cache, id: id, src0: List.get<Int>(list: read rewritten_src, index: 0), ranges: read reduce_ranges)
     } else {
-        if group_movement(op: read op) && rec_i >= 0 {
-            out = List.get<Int>(list: read rewritten_src, index: 0)
+        if op == PAD && rec_i >= 0 {
+            let rec = List.get<IndexingRangeRecord>(list: read analysis.records, index: rec_i)
+            let tval = List.get<Int>(list: read rewritten_src, index: 0)
+            let valid = indexing_valid_product(cache: mut cache, ranges: read rec.in_ranges)
+            let zero = indexing_zero_like(cache: mut cache, like: tval)
+            out = mk_where(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: tval), cond: valid, tval: tval, fval: zero)
         } else {
-            if node_num_src(cache: read cache, id: id) > 0 {
-                local arg = node_arg(cache: read cache, id: id)
-                out = intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: id), src: take rewritten_src, arg: take arg)
+            if group_movement(op: read op) && rec_i >= 0 {
+                out = List.get<Int>(list: read rewritten_src, index: 0)
+            } else {
+                if node_num_src(cache: read cache, id: id) > 0 {
+                    local arg = node_arg(cache: read cache, id: id)
+                    out = intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: id), src: take rewritten_src, arg: take arg)
+                }
             }
         }
     }

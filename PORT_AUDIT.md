@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,090 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,147 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -236,7 +236,8 @@ Integrated pieces:
   `run_rangeify` analysis half for realized output ranges, single/multiple consumer inheritance,
   movement input-range swizzling, and `REDUCE` axis range injection, plus the first graph rewrite
   half for source `INDEX` insertion, realized `STAGE` insertion, movement removal, and `REDUCE`
-  range-source conversion.
+  range-source conversion. Graph-backed `PAD`/`SHRINK` movement args are recovered from shape
+  sources, and `PAD` rewrites now emit the upstream local `WHERE(valid, value, 0)` form.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -363,7 +364,7 @@ Current integrated demo:
 - validates scheduler indexing rangeify analysis records for realized roots, inherited movement
   chains, `PERMUTE` input-range swizzling, and `REDUCE` `AXIS_REDUCE` injection.
 - validates scheduler indexing rangeify graph rewrite for movement removal through `INDEX` and
-  `REDUCE` metadata-to-range-source conversion.
+  `REDUCE` metadata-to-range-source conversion, plus PAD-to-`WHERE` locality wrapping.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.
@@ -712,7 +713,7 @@ Major missing integrated work:
   are integrated, and `schedule/indexing.rss` has realize-map generation, first range/movement
   helpers including PAD and RESHAPE, first rangeify analysis records, and first rangeify graph
   rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, exact upstream local/removable staging behavior,
-  PAD-to-`WHERE` locality conversion, RESHAPE symbolic simplification,
+  RESHAPE symbolic simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,
   and JIT capture plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority

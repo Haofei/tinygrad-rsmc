@@ -172,3 +172,32 @@ fn realize_exec_view(cache: read UOpCache, ctx: mut RealizeExecContext, call: In
     realize_exec_context_set_buffer(ctx: mut ctx, index: 1, buf: read src)
     return Unit
 }
+
+fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
+    if node_op(cache: read cache, id: call) != CALL { return false }
+    let ast = node_src_id(cache: read cache, id: call, k: 0)
+    let op = node_op(cache: read cache, id: ast)
+    if op == COPY {
+        realize_exec_copy(cache: read cache, ctx: mut ctx, call: call)
+        return true
+    }
+    if op == SLICE {
+        realize_exec_view(cache: read cache, ctx: mut ctx, call: call)
+        return true
+    }
+    return false
+}
+
+fn realize_run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int) -> Int {
+    if node_op(cache: read cache, id: linear) != LINEAR { return 0 }
+    let mut executed = 0
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        let call = node_src_id(cache: read cache, id: linear, k: i)
+        if realize_exec_call(cache: read cache, ctx: mut ctx, call: call) {
+            executed = executed + 1
+        }
+        i = i + 1
+    }
+    return executed
+}

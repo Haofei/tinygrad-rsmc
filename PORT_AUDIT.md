@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,787 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,845 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 82/106 symbols, `mixin/__init__.py` 80/82 symbols,
-    `uop/ops.py` 215/221 symbols; 377/409 total rough symbols covered.
+  - result: `tensor.py` 89/106 symbols, `mixin/__init__.py` 80/82 symbols,
+    `uop/ops.py` 216/221 symbols; 385/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -425,6 +425,11 @@ Integrated pieces:
   UOps, plus boundary wrappers for `alu`, scalar `ufix`, `contiguous`, and `to` over existing UOp
   graph primitives. The RSS `backward` wrapper returns gradients for explicit target UOps; it does
   not yet mutate Python Tensor `.grad` fields or discover targets through a weakref registry,
+  constrained object-state helpers for `__hash__`, `get`/`set`-style state access,
+  whole-tensor and indexed `__setitem__` graph assignment over the existing `assign`/`getitem`
+  helpers, `__delitem__` rejection as a false/unsupported result, and a metadata-state wrapper
+  record. These are graph/state compatibility helpers, not full Python object identity,
+  exception, weakref, or context-frame metadata semantics,
   a first graph-level `TensorState` lifecycle spine with `uop`/param/grad flags, state
   `replace`/`as_param` helpers, graph-backed `shape`/`dtype`/`device`/`numel`/`nbytes`,
   `empty`/`empty_like` over UOp buffer construction, no-op-aware same-device `to`, single-tensor
@@ -859,9 +864,9 @@ Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random, initializer helpers, and a first graph-level lifecycle/state spine are
   partially integrated now, but exact upstream class-global RNG mutation/counter identity,
-  Python exception behavior for `__bool__`/`__len__`, true ndarray/buffer object parity,
+  Python exception behavior for `__bool__`/`__len__`/`__delitem__`, true ndarray/buffer object parity,
   full Python `Tensor.__init__`/object identity behavior,
-  weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution, exact global
+  weakref/all-tensor registry updates, Python-object `backward` grad mutation, full view-assign substitution and realized-buffer mutation safety checks, exact global
   seed/counter APIs, broader distribution helpers,
   full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
   on runtime `.item()` shape discovery, graph-backed NaN/Inf predicate lowering,

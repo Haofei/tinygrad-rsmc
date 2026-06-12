@@ -32,6 +32,11 @@ struct TensorRngCounter derives(Clone) {
     counter_high: Int,
 }
 
+struct TensorMetadataState derives(Clone) {
+    has_value: Bool,
+    value: String,
+}
+
 fn tensor_state_new(uop: Int) -> fresh TensorState {
     return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
 }
@@ -46,6 +51,14 @@ fn tensor_state_copy(t: read TensorState) -> fresh TensorState {
 
 fn tensor_state_uop(t: read TensorState) -> Int {
     return t.uop
+}
+
+fn tensor_get(t: read TensorState) -> fresh TensorState {
+    return tensor_state_copy(t: read t)
+}
+
+fn tensor_set(t: read TensorState, x: read TensorState) -> fresh TensorState {
+    return tensor_state_copy(t: read x)
 }
 
 fn tensor_state_replace(t: read TensorState, other: read TensorState) -> fresh TensorState {
@@ -316,6 +329,14 @@ fn tensor_bool(cache: read UOpCache, x: Int) -> Bool {
     return false
 }
 
+fn __hash__(cache: read UOpCache, x: Int) -> Int {
+    return x
+}
+
+fn tensor_hash(cache: read UOpCache, x: Int) -> Int {
+    return __hash__(cache: read cache, x: x)
+}
+
 fn tensor_buffer(cache: mut UOpCache, x: Int) -> Int {
     return tensor_contiguous(cache: mut cache, x: x)
 }
@@ -430,6 +451,43 @@ fn tensor_assign(cache: mut UOpCache, target: Int, value: Int) -> Int {
 fn tensor_state_assign(cache: mut UOpCache, t: read TensorState, value: Int) -> fresh TensorState {
     let u = tensor_assign(cache: mut cache, target: t.uop, value: value)
     return TensorState(uop: u, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn __setitem__(cache: mut UOpCache, t: read TensorState, indices: read List<Int>, value: Int) -> fresh TensorState {
+    if List.len<Int>(list: read indices) == 0 {
+        return tensor_state_assign(cache: mut cache, t: read t, value: value)
+    }
+    let view = tensor_getitem(cache: mut cache, x: t.uop, indices: read indices)
+    let assigned = tensor_assign(cache: mut cache, target: view, value: value)
+    return TensorState(uop: assigned, is_param: t.is_param, has_grad: t.has_grad, grad: t.grad)
+}
+
+fn tensor_setitem(cache: mut UOpCache, t: read TensorState, indices: read List<Int>, value: Int) -> fresh TensorState {
+    return __setitem__(cache: mut cache, t: read t, indices: read indices, value: value)
+}
+
+fn __delitem__(t: read TensorState, indices: read List<Int>) -> Bool {
+    return false
+}
+
+fn tensor_delitem(t: read TensorState, indices: read List<Int>) -> Bool {
+    return __delitem__(t: read t, indices: read indices)
+}
+
+fn tensor_metadata_state_default() -> fresh TensorMetadataState {
+    return TensorMetadataState(has_value: false, value: String.copy(value: read ""))
+}
+
+fn tensor_metadata_get(state: read TensorMetadataState) -> fresh TensorMetadataState {
+    return TensorMetadataState(has_value: state.has_value, value: String.copy(value: read state.value))
+}
+
+fn tensor_metadata_set(state: read TensorMetadataState, value: read String) -> fresh TensorMetadataState {
+    return TensorMetadataState(has_value: true, value: String.copy(value: read value))
+}
+
+fn _metadata_wrapper(state: read TensorMetadataState) -> fresh TensorMetadataState {
+    return tensor_metadata_get(state: read state)
 }
 
 fn tensor_clone(cache: mut UOpCache, x: Int, device: read String, num: Int) -> Int {

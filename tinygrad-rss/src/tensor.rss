@@ -1685,6 +1685,12 @@ fn tensor_scatter_pre_mask(cache: mut UOpCache, base: Int, dim: Int, index: Int)
     return tensor_pad_to_prefix(cache: mut cache, x: moved, prefix_shape: read base_shape)
 }
 
+fn tensor_pre_scatter(cache: mut UOpCache, base: Int, dim: Int, index: Int, src: Int) -> TensorPair {
+    let srcp = tensor_scatter_pre_src(cache: mut cache, base: base, dim: dim, index: index, src: src)
+    let mask = tensor_scatter_pre_mask(cache: mut cache, base: base, dim: dim, index: index)
+    return TensorPair(first: srcp, second: mask)
+}
+
 fn tensor_logical_not(cache: mut UOpCache, x: Int) -> Int {
     local xs = uop_shape(cache: read cache, id: x)
     let f = tensor_full(cache: mut cache, dt: read dt_bool(), shape: read xs, value: 0.0)
@@ -1846,10 +1852,30 @@ fn tensor_masked_merge_last(cache: mut UOpCache, base: Int, values: Int, mask: I
     return tensor_where(cache: mut cache, cond: acc_mask, x: acc_values, y: base)
 }
 
+fn tensor_masked_merge(cache: mut UOpCache, base: Int, values: Int, mask: Int) -> Int {
+    return tensor_masked_merge_last(cache: mut cache, base: base, values: values, mask: mask)
+}
+
 fn tensor_scatter(cache: mut UOpCache, base: Int, dim: Int, index: Int, src: Int) -> Int {
     let srcp = tensor_scatter_pre_src(cache: mut cache, base: base, dim: dim, index: index, src: src)
     let mask = tensor_scatter_pre_mask(cache: mut cache, base: base, dim: dim, index: index)
     return tensor_masked_merge_last(cache: mut cache, base: base, values: srcp, mask: mask)
+}
+
+fn tensor_scatter_reduce(cache: mut UOpCache, base: Int, dim: Int, index: Int, src: Int, reduce: Int, include_self: Bool) -> Int {
+    if reduce == 1 {
+        return tensor_scatter_reduce_prod(cache: mut cache, base: base, dim: dim, index: index, src: src, include_self: include_self)
+    }
+    if reduce == 2 {
+        return tensor_scatter_reduce_mean(cache: mut cache, base: base, dim: dim, index: index, src: src, include_self: include_self)
+    }
+    if reduce == 3 {
+        return tensor_scatter_reduce_amax(cache: mut cache, base: base, dim: dim, index: index, src: src, include_self: include_self)
+    }
+    if reduce == 4 {
+        return tensor_scatter_reduce_amin(cache: mut cache, base: base, dim: dim, index: index, src: src, include_self: include_self)
+    }
+    return tensor_scatter_reduce_sum(cache: mut cache, base: base, dim: dim, index: index, src: src, include_self: include_self)
 }
 
 // Materialized gather along axis 0. This mirrors the user-facing Tensor indexing case
@@ -1882,6 +1908,10 @@ fn tensor_gather_axis0(cache: mut UOpCache, x: Int, indices: read List<Int>) -> 
     }
     let dt = node_dtype(cache: read cache, id: x)
     return mk_data_tensor(cache: mut cache, dt: read dt, shape: read out_shape, data: read out)
+}
+
+fn tensor_getitem(cache: mut UOpCache, x: Int, indices: read List<Int>) -> Int {
+    return tensor_gather_axis0(cache: mut cache, x: x, indices: read indices)
 }
 
 fn tensor_norm_slice_bound(v: Int, dim: Int) -> Int {
@@ -2079,6 +2109,10 @@ fn tensor_tri_mask(cache: mut UOpCache, rows: Int, cols: Int, diagonal: Int) -> 
     let rowd = tensor_add(cache: mut cache, a: rowu, b: diag)
     let col = tensor_arange(cache: mut cache, dt: read dt_int32(), n: cols)
     return tensor_le(cache: mut cache, a: rowd, b: col)
+}
+
+fn tensor_tri(cache: mut UOpCache, rows: Int, cols: Int, diagonal: Int) -> Int {
+    return tensor_tri_mask(cache: mut cache, rows: rows, cols: cols, diagonal: diagonal)
 }
 
 fn tensor_triu(cache: mut UOpCache, x: Int, diagonal: Int) -> Int {

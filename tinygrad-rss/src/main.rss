@@ -747,6 +747,44 @@ fn main() -> Unit {
     let mcast_vec_scalar = mk_cast(cache: mut mcache, x: mbc, dt: read i32)
     showop(label: read "uop.cast(vector->scalar) op = ", op: read node_op(cache: read mcache, id: mcast_vec_scalar))
     showi(label: read "uop.cast(vector->scalar) dtype count = ", v: node_full_dtype(cache: read mcache, id: mcast_vec_scalar).count)
+    let mdev_add_vec = mk_alu2(cache: mut mcache, op: ADD, dt: read mstack4dt, x: mstack4, y: mstack4)
+    let mut mdev_add_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_add_vec) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let dev_add_root_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4
+            let dev_add_lane_ok = node_op(cache: read mcache, id: lane0) == ADD && node_full_dtype(cache: read mcache, id: lane0).count == 1
+            mdev_add_ok = dev_add_root_ok && dev_add_lane_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_i64dt = dtype_vec(base: read dt_int64(), sz: 4)
+    let mdev_cast_vec = mk_cast(cache: mut mcache, x: mstack4, dt: read mdev_i64dt)
+    let mut mdev_cast_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_cast_vec) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let dev_cast_root_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4
+            let dev_cast_lane_ok = node_op(cache: read mcache, id: lane0) == CAST && node_full_dtype(cache: read mcache, id: lane0).count == 1
+            mdev_cast_ok = dev_cast_root_ok && dev_cast_lane_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_u32dt = dtype_vec(base: read dt_uint32(), sz: 4)
+    let mdev_bitcast_vec = mk_bitcast(cache: mut mcache, x: mstack4, dt: read mdev_u32dt)
+    let mut mdev_bitcast_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_bitcast_vec) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let dev_bitcast_root_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4
+            let dev_bitcast_lane_ok = node_op(cache: read mcache, id: lane0) == BITCAST && node_full_dtype(cache: read mcache, id: lane0).count == 1
+            mdev_bitcast_ok = dev_bitcast_root_ok && dev_bitcast_lane_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    showb(label: read "codegen.devectorizer scalarizes vector add = ", v: mdev_add_ok)
+    showb(label: read "codegen.devectorizer scalarizes vector cast = ", v: mdev_cast_ok)
+    showb(label: read "codegen.devectorizer scalarizes vector bitcast = ", v: mdev_bitcast_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)
     let maxis_param2 = mk_param_axis(cache: mut mcache, slot: 7, dt: read i32, shape: read mparam_shape, name: read "sharded2", axis: 1)
     let maxis_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: maxis_param, y: maxis_param2)

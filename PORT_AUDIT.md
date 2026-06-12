@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 26 RSS files, 20,550 LOC.
+  - integrated `tinygrad-rss/src`: 27 RSS files, 20,640 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -167,6 +167,12 @@ Integrated pieces:
   contracted before later expansion. WMMA,
   register-pointer special-casing, group-for-reduce, and BufferizeOpts-local
   rewrites remain later expander slices.
+- `codegen/late/devectorizer.rss`: first integrated source-shaped
+  `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
+  rule for vector ALU, `CAST`, and `BITCAST`: vector operations are rebuilt as scalar lane
+  operations over `GEP` sources and wrapped in a `STACK`. Load/store grouping and splitting,
+  buffer/index devectorization, WMMA scalarization, REDUCE-to-acc lowering, image rewrites, and
+  add-load cleanup remain later devectorizer slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
@@ -404,6 +410,9 @@ Current integrated demo:
   expanded, mixed-axis `UNROLL` sources are swizzled through `GEP`, scalar non-unroll sources
   are broadcast, and `GEP` args expand across lanes. It also validates the first
   `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction.
+- validates the first devectorizer slice: vector `ADD`, vector `CAST`, and vector `BITCAST`
+  scalarize into `STACK` nodes of scalar lane operations and pass the integrated UOp spec
+  verifier.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample
@@ -625,7 +634,7 @@ Major missing integrated work:
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
-  IF rejection, late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
+  IF rejection, remaining late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.

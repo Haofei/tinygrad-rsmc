@@ -1,0 +1,52 @@
+// Integrated source-shaped slice of tinygrad/codegen/late/devectorizer.py.
+//
+// This first slice ports the devectorize_alu scalarization rule: vector
+// ALU/CAST/BITCAST nodes become a STACK of scalar lane operations. Load/store
+// grouping, buffer/index devectorization, REDUCE lowering, and image rewrites
+// remain later slices.
+features: local
+
+fn devectorizer_supported_alu(op: read Ops) -> Bool {
+    if group_alu(op: read op) { return true }
+    if op == CAST || op == BITCAST { return true }
+    return false
+}
+
+fn devectorizer_lane_src(cache: mut UOpCache, id: Int, lane: Int) -> Int {
+    local idxs = List.new<Int>()
+    List.push<Int>(list: mut idxs, value: read lane)
+    return mk_gep(cache: mut cache, x: id, idxs: read idxs)
+}
+
+fn devectorizer_no_vectorized_alu(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if devectorizer_supported_alu(op: read op) == false { return None }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dt.count == 1 { return None }
+    let sdt = dtype_scalar(d: read dt)
+    local lanes = List.new<Int>()
+    let mut lane = 0
+    while lane < dt.count {
+        local srcs = List.new<Int>()
+        let mut i = 0
+        while i < node_num_src(cache: read cache, id: id) {
+            let src = node_src_id(cache: read cache, id: id, k: i)
+            let lane_src = devectorizer_lane_src(cache: mut cache, id: src, lane: lane)
+            List.push<Int>(list: mut srcs, value: read lane_src)
+            i = i + 1
+        }
+        local arg = node_arg(cache: read cache, id: id)
+        let scalar = intern(cache: mut cache, op: op.clone(), dt: read sdt, src: take srcs, arg: take arg)
+        List.push<Int>(list: mut lanes, value: read scalar)
+        lane = lane + 1
+    }
+    return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+}
+
+fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match devectorizer_no_vectorized_alu(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return None
+}

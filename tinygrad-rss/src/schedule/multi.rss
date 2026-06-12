@@ -631,8 +631,7 @@ fn multi_alu_device_count(cache: read UOpCache, root: Int) -> Int {
     return 0
 }
 
-fn multi_shard_to_axis(cache: mut UOpCache, id: Int, axis: Int, dcount: Int) -> Int {
-    local shape = uop_shape(cache: read cache, id: id)
+fn multi_shard_shape_to_axis(cache: mut UOpCache, id: Int, shape: read List<Int>, axis: Int, dcount: Int) -> Int {
     if List.len<Int>(list: read shape) == 0 { return id }
     if axis < 0 || axis >= List.len<Int>(list: read shape) || dcount <= 0 { return 0 - 1 }
     let full_dim = List.get<Int>(list: read shape, index: axis)
@@ -661,6 +660,63 @@ fn multi_shard_to_axis(cache: mut UOpCache, id: Int, axis: Int, dcount: Int) -> 
     return mk_shrink_expr(cache: mut cache, x: id, starts: read starts, ends: read ends)
 }
 
+fn multi_shard_to_axis(cache: mut UOpCache, id: Int, axis: Int, dcount: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: id)
+    return multi_shard_shape_to_axis(cache: mut cache, id: id, shape: read shape, axis: axis, dcount: dcount)
+}
+
+fn multi_unshard_to_tuple(cache: mut UOpCache, multi: Int, dcount: Int) -> Int {
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return 0 - 1
+    }
+    let old_axis = node_const_int(cache: read cache, id: multi)
+    let payload = node_src_id(cache: read cache, id: multi, k: 0)
+    local payload_shape = uop_shape(cache: read cache, id: payload)
+    if old_axis < 0 || old_axis >= List.len<Int>(list: read payload_shape) || dcount <= 1 {
+        return 0 - 1
+    }
+    let shard_dim = List.get<Int>(list: read payload_shape, index: old_axis)
+    let weak = dt_weakint()
+    let dnum = mk_define_var(cache: mut cache, name: read "_device_num", min_val: 0, max_val: dcount - 1, dt: read weak)
+    let shard_const = mk_const_int(cache: mut cache, dt: read weak, v: shard_dim)
+    let before_axis = mk_alu2(cache: mut cache, op: MUL, dt: read weak, x: dnum, y: shard_const)
+    let full_tail = mk_const_int(cache: mut cache, dt: read weak, v: shard_dim * (dcount - 1))
+    let after_axis = mk_alu2(cache: mut cache, op: SUB, dt: read weak, x: full_tail, y: before_axis)
+    local before = List.new<Int>()
+    local after = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read payload_shape) {
+        if i == old_axis {
+            List.push<Int>(list: mut before, value: read before_axis)
+            List.push<Int>(list: mut after, value: read after_axis)
+        } else {
+            let zero = mk_const_int(cache: mut cache, dt: read weak, v: 0)
+            List.push<Int>(list: mut before, value: read zero)
+            List.push<Int>(list: mut after, value: read zero)
+        }
+        i = i + 1
+    }
+    let padded = mk_pad_expr(cache: mut cache, x: payload, before: read before, after: read after)
+    let dev = multi_effective_device_node(cache: mut cache, id: multi)
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read padded)
+    List.push<Int>(list: mut srcs, value: read dev)
+    local dt = node_full_dtype(cache: read cache, id: payload)
+    local arg = ArgOp(value: ADD)
+    return intern(cache: mut cache, op: ALLREDUCE, dt: read dt, src: take srcs, arg: take arg)
+}
+
+fn multi_unsharded_shape(cache: read UOpCache, multi: Int, dcount: Int) -> fresh List<Int> {
+    let payload = node_src_id(cache: read cache, id: multi, k: 0)
+    local shape = uop_shape(cache: read cache, id: payload)
+    let axis = node_const_int(cache: read cache, id: multi)
+    if axis >= 0 && axis < List.len<Int>(list: read shape) {
+        let shard_dim = List.get<Int>(list: read shape, index: axis)
+        List.set<Int>(list: mut shape, index: axis, value: read (shard_dim * dcount))
+    }
+    return shape
+}
+
 fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let fallback = multi_empty_result(cache: mut cache)
     let op = node_op(cache: read cache, id: root)
@@ -681,9 +737,19 @@ fn multi_alu_same_axis(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
         let child = node_src_id(cache: read cache, id: root, k: i)
         if node_op(cache: read cache, id: child) == MULTI && node_num_src(cache: read cache, id: child) > 0 {
             if node_const_int(cache: read cache, id: child) != axis {
-                return MultiRewrite(result: fallback, changed: false, ok: false)
+                let unsharded = multi_unshard_to_tuple(cache: mut cache, multi: child, dcount: dcount)
+                if unsharded < 0 {
+                    return MultiRewrite(result: fallback, changed: false, ok: false)
+                }
+                local full_shape = multi_unsharded_shape(cache: read cache, multi: child, dcount: dcount)
+                let resharded = multi_shard_shape_to_axis(cache: mut cache, id: unsharded, shape: read full_shape, axis: axis, dcount: dcount)
+                if resharded < 0 {
+                    return MultiRewrite(result: fallback, changed: false, ok: false)
+                }
+                List.push<Int>(list: mut srcs, value: read resharded)
+            } else {
+                List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
             }
-            List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: child, k: 0))
         } else {
             if uop_axis(cache: read cache, id: child) >= 0 {
                 return MultiRewrite(result: fallback, changed: false, ok: false)

@@ -2811,6 +2811,18 @@ fn mk_pad(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<
     return intern(cache: mut cache, op: PAD, dt: read dt, src: take e, arg: take a)
 }
 
+fn mk_pad_expr(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    let bf = shape_to_shape_arg_expr(cache: mut cache, exprs: read before)
+    let af = shape_to_shape_arg_expr(cache: mut cache, exprs: read after)
+    local e = List.new<Int>()
+    List.push<Int>(list: mut e, value: read x)
+    List.push<Int>(list: mut e, value: read bf)
+    List.push<Int>(list: mut e, value: read af)
+    local a = ArgNone
+    return intern(cache: mut cache, op: PAD, dt: read dt, src: take e, arg: take a)
+}
+
 // REDUCE metadata is explicit: kind 0=sum/ADD, 1=prod/MUL, 2=max/MAX.
 fn mk_sum(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
     let dt = node_dtype(cache: read cache, id: x)

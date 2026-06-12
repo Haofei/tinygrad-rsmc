@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 18,095 LOC.
+  - integrated `tinygrad-rss/src`: 24 RSS files, 18,102 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -100,7 +100,7 @@ Integrated pieces:
   `[0, size)`, and the local `validate_index_with_z3` entry point aliases this conservative
   interval proof. Full Z3-backed boolean/arithmetic solving remains unported.
 - `uop/render.rss`: first integrated source-shaped `tinygrad/uop/render.py` slice over interned
-  UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, `PARAM`, `RANGE`, `CONST`,
+  UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, named `SPECIAL`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
   inference-specific rendering for div/mod and `BITCAST`, plus compact UOp line printing.
 - `uop/divandmod.rss`: first integrated source-shaped `tinygrad/uop/divandmod.py` slice over

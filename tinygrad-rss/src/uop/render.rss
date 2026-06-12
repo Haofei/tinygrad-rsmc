@@ -146,7 +146,11 @@ fn uop_render_expr(cache: read UOpCache, id: Int) -> fresh String {
         if String.len(value: read name) > 0 { return String.copy(value: read name) }
         return render_cat(a: read "p", b: read Int.to_string(value: read node_param_slot(cache: read cache, id: id)))
     }
-    if op == SPECIAL { return "SPECIAL" }
+    if op == SPECIAL {
+        let name = node_special_name(cache: read cache, id: id)
+        if String.len(value: read name) > 0 { return String.copy(value: read name) }
+        return "SPECIAL"
+    }
     if op == RANGE { return render_cat(a: read "r", b: read uop_range_str(cache: read cache, id: id)) }
     if op == CONST { return render_const(cache: read cache, id: id) }
     if op == UNROLL {

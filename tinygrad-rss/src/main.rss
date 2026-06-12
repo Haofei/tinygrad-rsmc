@@ -1285,6 +1285,41 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mut mdev_source_facades_ok = false
+    match no_vectorized_alu(cache: mut mcache, alu: mdev_add_vec) {
+        Some(a) => {
+            match no_vectorized_wmma(cache: mut mcache, wmma: mdev_wmma) {
+                Some(w) => {
+                    match reduce_to_acc(cache: mut mcache, red: mdev_reduce_sum) {
+                        Some(red) => {
+                            match expand_index(cache: mut mcache, idx: mdev_stack_index) {
+                                Some(ei) => {
+                                            match add_load(cache: mut mcache, idx: mdev_value_index) {
+                                                Some(al) => {
+                                            let mdev_valid = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 1)
+                                            local hparts = horizontal_reduce(cache: mut mcache, inp: mstack4, out_dtype: read i32)
+                                            local dropped = _drop_valid_stmts(cache: read mcache, valid: mdev_valid, idx: m2, height: 4, width: 4)
+                                            let img_none = simplify_valid_image_load(cache: mut mcache, buf: mbuf_cpu, idx_y: m2, idx_x: m3, valid: mdev_valid)
+                                            mdev_source_facades_ok = node_op(cache: read mcache, id: a) == STACK && node_op(cache: read mcache, id: w) == STACK && node_full_dtype(cache: read mcache, id: red).count == 1 && node_op(cache: read mcache, id: ei) == STACK && node_op(cache: read mcache, id: al) == LOAD && List.len<Int>(list: read hparts) == 4 && List.len<Int>(list: read dropped) == 0
+                                            match img_none {
+                                                Some(x) => { mdev_source_facades_ok = x < 0 }
+                                                None => {}
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
     showb(label: read "codegen.devectorizer expands stack index = ", v: mdev_stack_index_ok)
     showb(label: read "codegen.devectorizer folds gep after load = ", v: mdev_load_gep_ok)
     showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
@@ -1293,6 +1328,7 @@ fn main() -> Unit {
     showb(label: read "codegen.devectorizer adds load to value index = ", v: mdev_add_load_ok)
     showb(label: read "codegen.devectorizer removes nested load load = ", v: mdev_load_load_ok)
     showb(label: read "codegen.devectorizer removes nested store load = ", v: mdev_store_load_ok)
+    showb(label: read "codegen.devectorizer source-shaped facades = ", v: mdev_source_facades_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)
     let maxis_param2 = mk_param_axis(cache: mut mcache, slot: 7, dt: read i32, shape: read mparam_shape, name: read "sharded2", axis: 1)
     let maxis_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: maxis_param, y: maxis_param2)

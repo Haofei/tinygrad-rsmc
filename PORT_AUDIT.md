@@ -252,8 +252,14 @@ Integrated pieces:
   contracted before later expansion. WMMA, register-pointer special-casing, and the
   BufferizeOpts-local `GROUP_REDUCE` rewrite behind `fix_group_for_reduce` remain later
   expander slices.
-- `codegen/late/devectorizer.rss`: first integrated source-shaped
-  `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
+- `codegen/late/devectorizer.rss`: integrated source-shaped
+  `tinygrad/codegen/late/devectorizer.py` slice, exposing the upstream names
+  `_drop_valid_stmts`, `simplify_valid_load`, `simplify_valid_image_load`, `expand_index`,
+  `fold_expanded_index`, `cat_after_store`, `gep_on_store`, `split_load_store`,
+  `get_image_idx`, `image_fixup`, `no_vectorized_wmma`, `no_vectorized_alu`,
+  `no_vectorized_buf`, `no_vectorized_index`, `horizontal_reduce`, `reduce_to_acc`,
+  `merge_reduce_ends`, `add_load`, and `make_image` over the cache-backed RSS IR. It covers the
+  `devectorize_alu` scalarization
   rule for vector ALU, `CAST`, `BITCAST`, and the local flat-metadata `WMMA` shape: vector operations are rebuilt as scalar lane
   operations over `GEP` sources and wrapped in a `STACK`, plus the upstream
   no-range horizontal `REDUCE` lowering for `ADD`, `MUL`, and `MAX`. It also has the upstream
@@ -264,9 +270,11 @@ Integrated pieces:
   `GEP` after `LOAD`, `GEP` on `STORE`, `PTRCAT` after `LOAD`, and `PTRCAT` after `STORE`
   are also integrated, along with the `pm_add_loads` rules that insert `LOAD` for
   non-pointer `INDEX` nodes and clean nested `LOAD(LOAD(ptr))` and `STORE(LOAD(ptr), value)`.
-  Folded-index regrouping, load/store splitting,
-  buffer/index devectorization, range-backed REDUCE-to-acc lowering, image rewrites, and
-  deeper image add-load rewrites remain later devectorizer slices.
+  Source-shaped facades also include conservative folded-index/image entry points, scalar
+  DEFINE_LOCAL/DEFINE_REG buffer devectorization, simple CAST-backed index lane expansion,
+  naive vector load/store splitting, and no-range `reduce_to_acc` delegation. Full ImageDType
+  handling, exact folded-index regrouping, and range-backed DEFINE_ACC lowering remain later
+  devectorizer slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
@@ -738,7 +746,7 @@ Current integrated demo:
   expanded, mixed-axis `UNROLL` sources are swizzled through `GEP`, scalar non-unroll sources
   are broadcast, and `GEP` args expand across lanes. It also validates the first
   `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction.
-- validates the first devectorizer slice: vector `ADD`, vector `CAST`, and vector `BITCAST`
+- validates the devectorizer slice: upstream facade names are callable, vector `ADD`, vector `CAST`, and vector `BITCAST`
   scalarize into `STACK` nodes of scalar lane operations and pass the integrated UOp spec
   verifier. It also validates the first `pm_render` normalizations for vector `CONST`,
   multi-lane `GEP`, scalar `GEP(0)`, and single-source `STACK`, plus the first context-free

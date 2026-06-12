@@ -140,3 +140,115 @@ fn multi_strip_multi_srcs(cache: mut UOpCache, root: Int) -> fresh MultiRewrite 
     let rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take srcs, arg: take arg)
     return MultiRewrite(result: rebuilt, changed: true, ok: true)
 }
+
+fn multi_root_payload(cache: read UOpCache, root: Int) -> Int {
+    if node_num_src(cache: read cache, id: root) == 0 { return -1 }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 { return -1 }
+    return node_src_id(cache: read cache, id: multi, k: 0)
+}
+
+fn multi_root_axis(cache: read UOpCache, root: Int) -> Int {
+    if node_num_src(cache: read cache, id: root) == 0 { return -1 }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI { return -1 }
+    return node_const_int(cache: read cache, id: multi)
+}
+
+fn multi_reshape(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != RESHAPE || node_num_src(cache: read cache, id: root) < 2 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = multi_root_payload(cache: read cache, root: root)
+    if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
+    local payload_shape = uop_shape(cache: read cache, id: payload)
+    local new_shape = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 1))
+    if prod(x: read payload_shape) != prod(x: read new_shape) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let new_axis = uop_axis(cache: read cache, id: root)
+    if new_axis >= 0 && new_axis < List.len<Int>(list: read new_shape) {
+        let multi = node_src_id(cache: read cache, id: root, k: 0)
+        let dcount = node_effective_device_count(cache: read cache, id: multi)
+        if dcount > 1 {
+            let dim = List.get<Int>(list: read new_shape, index: new_axis)
+            List.set<Int>(list: mut new_shape, index: new_axis, value: read (dim / dcount))
+        }
+    }
+    let reshaped = mk_reshape(cache: mut cache, x: payload, new_shape: read new_shape)
+    let out = mk_multi(cache: mut cache, x: reshaped, axis: new_axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_expand(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != EXPAND || node_num_src(cache: read cache, id: root) < 2 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = multi_root_payload(cache: read cache, root: root)
+    if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
+    let axis = multi_root_axis(cache: read cache, root: root)
+    local new_shape = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 1))
+    if axis >= 0 && axis < List.len<Int>(list: read new_shape) {
+        local payload_shape = uop_shape(cache: read cache, id: payload)
+        if axis < List.len<Int>(list: read payload_shape) {
+            let shard_dim = List.get<Int>(list: read payload_shape, index: axis)
+            List.set<Int>(list: mut new_shape, index: axis, value: read shard_dim)
+        }
+    }
+    let expanded = mk_expand(cache: mut cache, x: payload, new_shape: read new_shape)
+    let out = mk_multi(cache: mut cache, x: expanded, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_pad(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != PAD || node_num_src(cache: read cache, id: root) < 3 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = multi_root_payload(cache: read cache, root: root)
+    if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
+    let axis = multi_root_axis(cache: read cache, root: root)
+    local before = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 1))
+    local after = node_argints(cache: read cache, id: node_src_id(cache: read cache, id: root, k: 2))
+    if axis >= 0 && axis < List.len<Int>(list: read before) && axis < List.len<Int>(list: read after) {
+        if List.get<Int>(list: read before, index: axis) != 0 || List.get<Int>(list: read after, index: axis) != 0 {
+            return MultiRewrite(result: fallback, changed: false, ok: false)
+        }
+    }
+    let padded = mk_pad(cache: mut cache, x: payload, before: read before, after: read after)
+    let out = mk_multi(cache: mut cache, x: padded, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_permute(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != PERMUTE {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = multi_root_payload(cache: read cache, root: root)
+    if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
+    local perm = node_argints(cache: read cache, id: root)
+    let new_axis = uop_axis(cache: read cache, id: root)
+    let permuted = mk_permute(cache: mut cache, x: payload, perm: read perm)
+    let out = mk_multi(cache: mut cache, x: permuted, axis: new_axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_flip(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != FLIP {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = multi_root_payload(cache: read cache, root: root)
+    if payload < 0 { return MultiRewrite(result: fallback, changed: false, ok: false) }
+    let axis = multi_root_axis(cache: read cache, root: root)
+    local axes = node_argints(cache: read cache, id: root)
+    if axis >= 0 && uop_ints_contains(vals: read axes, v: axis) {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let flipped = mk_flip(cache: mut cache, x: payload, axes: read axes)
+    let out = mk_multi(cache: mut cache, x: flipped, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}

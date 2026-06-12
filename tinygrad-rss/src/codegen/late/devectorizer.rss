@@ -7,7 +7,7 @@
 // It also ports the context-free load/store folding rules for STACK-backed
 // INDEX, GEP, PTRCAT, add-load insertion, and nested-load cleanup.
 // Folded-index regrouping, load/store splitting, buffer/index devectorization,
-// REDUCE lowering, and image rewrites remain later slices.
+// range-backed REDUCE-to-acc lowering, and image rewrites remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -95,6 +95,44 @@ fn devectorizer_no_vectorized_wmma(cache: mut UOpCache, id: Int) -> Option<Int> 
         g = g + 1
     }
     return Some(uop_stack(cache: mut cache, dt: read dt, srcs: read lanes))
+}
+
+fn devectorizer_reduce_op(kind: Int) -> Ops {
+    if kind == 1 { return MUL }
+    if kind == 2 { return MAX }
+    return ADD
+}
+
+fn devectorizer_horizontal_reduce(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != REDUCE { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let inp = node_src_id(cache: read cache, id: id, k: 0)
+    let in_dt = node_full_dtype(cache: read cache, id: inp)
+    let out_dt = node_full_dtype(cache: read cache, id: id)
+    if in_dt.count == out_dt.count { return Some(inp) }
+    if out_dt.count <= 0 || in_dt.count < out_dt.count { return None }
+    let amount = in_dt.count / out_dt.count
+    if amount * out_dt.count != in_dt.count { return None }
+    let rop = devectorizer_reduce_op(kind: node_reduce_kind(cache: read cache, id: id))
+    local parts = List.new<Int>()
+    let mut g = 0
+    while g < amount {
+        local idxs = List.new<Int>()
+        let mut lane = g
+        while lane < in_dt.count {
+            List.push<Int>(list: mut idxs, value: read lane)
+            lane = lane + amount
+        }
+        List.push<Int>(list: mut parts, value: read mk_gep(cache: mut cache, x: inp, idxs: read idxs))
+        g = g + 1
+    }
+    let mut ret = List.get<Int>(list: read parts, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read parts) {
+        ret = mk_alu2(cache: mut cache, op: rop.clone(), dt: read out_dt, x: ret, y: List.get<Int>(list: read parts, index: i))
+        i = i + 1
+    }
+    return Some(ret)
 }
 
 fn devectorizer_scalar_const(cache: mut UOpCache, id: Int, lane: Int) -> Int {
@@ -431,6 +469,10 @@ fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match devectorizer_no_vectorized_wmma(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_horizontal_reduce(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

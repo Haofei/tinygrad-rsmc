@@ -821,11 +821,33 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mdev_reduce_axes = List.new<Int>()
+    let mdev_reduce_sum = mk_sum(cache: mut mcache, x: mstack4, axes: read mdev_reduce_axes)
+    let mdev_reduce_prod = mk_prod_reduce(cache: mut mcache, x: mstack4, axes: read mdev_reduce_axes)
+    let mdev_reduce_max = mk_max_reduce(cache: mut mcache, x: mstack4, axes: read mdev_reduce_axes)
+    let mut mdev_reduce_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_reduce_sum) {
+        Some(rs) => {
+            match devectorizer_rewrite(cache: mut mcache, id: mdev_reduce_prod) {
+                Some(rp) => {
+                    match devectorizer_rewrite(cache: mut mcache, id: mdev_reduce_max) {
+                        Some(rm) => {
+                            mdev_reduce_ok = node_op(cache: read mcache, id: rs) == ADD && node_op(cache: read mcache, id: rp) == MUL && node_op(cache: read mcache, id: rm) == MAX && node_full_dtype(cache: read mcache, id: rs).count == 1 && spec_type_verify(cache: read mcache, id: rs) && spec_type_verify(cache: read mcache, id: rp) && spec_type_verify(cache: read mcache, id: rm)
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
     showb(label: read "codegen.devectorizer scalarizes vector add = ", v: mdev_add_ok)
     showb(label: read "codegen.devectorizer pushes cast through after = ", v: mdev_cast_after_ok)
     showb(label: read "codegen.devectorizer scalarizes vector cast = ", v: mdev_cast_ok)
     showb(label: read "codegen.devectorizer scalarizes vector bitcast = ", v: mdev_bitcast_ok)
     showb(label: read "codegen.devectorizer scalarizes vector wmma = ", v: mdev_wmma_ok)
+    showb(label: read "codegen.devectorizer lowers horizontal reduce = ", v: mdev_reduce_ok)
     local mdev_const_vals = List.new<Int>()
     List.push<Int>(list: mut mdev_const_vals, value: read 2)
     List.push<Int>(list: mut mdev_const_vals, value: read 3)

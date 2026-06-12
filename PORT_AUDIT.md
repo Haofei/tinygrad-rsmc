@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,314 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,378 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -177,6 +177,7 @@ Integrated pieces:
   `tinygrad/codegen/late/devectorizer.py` slice, covering the `devectorize_alu` scalarization
   rule for vector ALU, `CAST`, `BITCAST`, and the local flat-metadata `WMMA` shape: vector operations are rebuilt as scalar lane
   operations over `GEP` sources and wrapped in a `STACK`, plus the upstream
+  no-range horizontal `REDUCE` lowering for `ADD`, `MUL`, and `MAX`. It also has the upstream
   `CAST(AFTER(x, deps...)) -> AFTER(CAST(x), deps...)` ordering rewrite. It also has the first `pm_render`
   normalization rules: vector `CONST` nodes become scalar-constant `STACK`s, multi-lane `GEP`
   becomes a `STACK` of lane `GEP`s, `GEP(x, 0)` on scalar `x` unwraps, and one-element `STACK`
@@ -185,7 +186,7 @@ Integrated pieces:
   are also integrated, along with the `pm_add_loads` rules that insert `LOAD` for
   non-pointer `INDEX` nodes and clean nested `LOAD(LOAD(ptr))` and `STORE(LOAD(ptr), value)`.
   Folded-index regrouping, load/store splitting,
-  buffer/index devectorization, REDUCE-to-acc lowering, image rewrites, and
+  buffer/index devectorization, range-backed REDUCE-to-acc lowering, image rewrites, and
   deeper image add-load rewrites remain later devectorizer slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle

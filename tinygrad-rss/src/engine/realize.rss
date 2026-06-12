@@ -355,10 +355,18 @@ fn realize_host_c_scalar_type(dt: read DType) -> fresh String {
 
 fn realize_host_dtype_supported(dt: read DType) -> Bool {
     let s = dtype_scalar(d: read dt)
-    if DType.itemsize(self: read s) != 4 { return false }
+    let itemsize = DType.itemsize(self: read s)
+    if itemsize != 1 && itemsize != 2 && itemsize != 4 && itemsize != 8 { return false }
+    if s.name == "signed char" { return true }
+    if s.name == "unsigned char" { return true }
+    if s.name == "short" { return true }
+    if s.name == "unsigned short" { return true }
     if s.name == "float" { return true }
     if s.name == "int" { return true }
     if s.name == "unsigned int" { return true }
+    if s.name == "double" { return true }
+    if s.name == "long" { return true }
+    if s.name == "unsigned long" { return true }
     return false
 }
 
@@ -479,8 +487,8 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                               runtime_cache_hit: cache_hit, runtime_handle: runtime_handle)
 }
 
-fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
-                                          c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
+fn realize_exec_program_host_oneout_scalar(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
+                                           c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
     local staged = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
     if staged.ok == false { return realize_empty_host_exec(staged: read staged, compile_status: 0 - 1, run_status: 0 - 1, stderr_len: 0) }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
@@ -505,9 +513,10 @@ fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut Realize
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
     }
     let output_type = realize_host_c_scalar_type(dt: read out0.dtype)
+    let out_itemsize = DType.itemsize(self: read dtype_scalar(d: read out0.dtype))
     let mut out_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read out0)
     let out_nbytes = buffer_nbytes(buf: read out_buf)
-    if out_nbytes <= 0 || out_nbytes % 4 != 0 {
+    if out_nbytes <= 0 || out_nbytes % out_itemsize != 0 {
         realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
         return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
     }
@@ -522,6 +531,10 @@ fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut Realize
             realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
             return realize_empty_host_exec(staged: read staged, compile_status: 0 - 4, run_status: 0 - 1, stderr_len: 0)
         }
+        if DType.itemsize(self: read dtype_scalar(d: read in0.dtype)) != out_itemsize {
+            realize_exec_context_set_buffer(ctx: mut ctx, index: out_idx, buf: read out_buf)
+            return realize_empty_host_exec(staged: read staged, compile_status: 0 - 5, run_status: 0 - 1, stderr_len: 0)
+        }
         List.push<String>(list: mut input_types, value: read realize_host_c_scalar_type(dt: read in0.dtype))
         local in_buf = buffer_ensure_allocated(store: mut ctx.store, buf: read in0)
         let in_nbytes = buffer_nbytes(buf: read in_buf)
@@ -535,7 +548,7 @@ fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut Realize
         realize_exec_context_set_buffer(ctx: mut ctx, index: in_idx, buf: read in_buf)
         ii = ii + 1
     }
-    let n = out_nbytes / 4
+    let n = out_nbytes / out_itemsize
     let source = uop_arg_to_string(arg: read node_arg(cache: read cache, id: staged.source_id))
     let harness = realize_host_oneout_main(function_name: read staged.function_name, output_type: read output_type,
                                            input_types: read input_types, input_inits: read input_inits,
@@ -591,9 +604,9 @@ fn realize_exec_program_host_oneout_4byte(cache: read UOpCache, ctx: mut Realize
 }
 
 fn realize_exec_program_host_default(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeHostProgramExec {
-    return realize_exec_program_host_oneout_4byte(cache: read cache, ctx: mut ctx, call: call,
-                                                 c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
-                                                 exe_path_text: read "/tmp/tinygrad-rss-realize-program")
+    return realize_exec_program_host_oneout_scalar(cache: read cache, ctx: mut ctx, call: call,
+                                                  c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
+                                                  exe_path_text: read "/tmp/tinygrad-rss-realize-program")
 }
 
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {

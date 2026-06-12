@@ -912,11 +912,30 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mdev_inner_load = mk_load(cache: mut mcache, ptr: mdev_ptr0, srcs: read mdev_empty_src, dt: read i32)
+    let mdev_load_load = mk_load(cache: mut mcache, ptr: mdev_inner_load, srcs: read mdev_empty_src, dt: read i32)
+    let mut mdev_load_load_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_load_load) {
+        Some(r) => {
+            mdev_load_load_ok = node_op(cache: read mcache, id: r) == LOAD && node_src_id(cache: read mcache, id: r, k: 0) == mdev_ptr0 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_store_load = mk_store(cache: mut mcache, ptr: mdev_inner_load, value: m2, gate: read None)
+    let mut mdev_store_load_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_store_load) {
+        Some(r) => {
+            mdev_store_load_ok = node_op(cache: read mcache, id: r) == STORE && node_src_id(cache: read mcache, id: r, k: 0) == mdev_ptr0 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "codegen.devectorizer expands stack index = ", v: mdev_stack_index_ok)
     showb(label: read "codegen.devectorizer folds gep after load = ", v: mdev_load_gep_ok)
     showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
     showb(label: read "codegen.devectorizer folds ptrcat load = ", v: mdev_load_ptrcat_ok)
     showb(label: read "codegen.devectorizer folds ptrcat store = ", v: mdev_store_ptrcat_ok)
+    showb(label: read "codegen.devectorizer removes nested load load = ", v: mdev_load_load_ok)
+    showb(label: read "codegen.devectorizer removes nested store load = ", v: mdev_store_load_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)
     let maxis_param2 = mk_param_axis(cache: mut mcache, slot: 7, dt: read i32, shape: read mparam_shape, name: read "sharded2", axis: 1)
     let maxis_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: maxis_param, y: maxis_param2)

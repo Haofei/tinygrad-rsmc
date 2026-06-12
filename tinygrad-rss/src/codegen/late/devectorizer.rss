@@ -4,9 +4,9 @@
 // pm_render normalization rules: vector ALU/CAST/BITCAST nodes become a STACK
 // of scalar lane operations, and vector CONST/GEP/STACK nodes are normalized
 // for rendering. It also ports the context-free load/store folding rules for
-// STACK-backed INDEX, GEP, and PTRCAT. Folded-index regrouping, load/store
-// splitting, buffer/index devectorization, REDUCE lowering, and image rewrites
-// remain later slices.
+// STACK-backed INDEX, GEP, PTRCAT, and nested-load cleanup. Folded-index
+// regrouping, load/store splitting, buffer/index devectorization, REDUCE
+// lowering, and image rewrites remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -285,6 +285,28 @@ fn devectorizer_ptrcat_after_store(cache: mut UOpCache, id: Int) -> Option<Int> 
     return Some(mk_group(cache: mut cache, srcs: read stores))
 }
 
+fn devectorizer_store_load_ptr_cleanup(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STORE { return None }
+    if node_num_src(cache: read cache, id: id) < 2 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != LOAD { return None }
+    if node_num_src(cache: read cache, id: ptr) < 1 { return None }
+    let raw_ptr = node_src_id(cache: read cache, id: ptr, k: 0)
+    let value = node_src_id(cache: read cache, id: id, k: 1)
+    return Some(devectorizer_store_with_ptr_value(cache: mut cache, id: id, ptr: raw_ptr, value: value))
+}
+
+fn devectorizer_load_load_ptr_cleanup(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != LOAD { return None }
+    if node_num_src(cache: read cache, id: id) < 1 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != LOAD { return None }
+    if node_num_src(cache: read cache, id: ptr) < 1 { return None }
+    let raw_ptr = node_src_id(cache: read cache, id: ptr, k: 0)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return Some(devectorizer_load_with_ptr(cache: mut cache, id: id, ptr: raw_ptr, dt: read dt))
+}
+
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
     match devectorizer_expand_index_stack(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
@@ -303,6 +325,14 @@ fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match devectorizer_ptrcat_after_store(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_store_load_ptr_cleanup(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_load_load_ptr_cleanup(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

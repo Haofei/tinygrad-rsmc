@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 27 RSS files, 21,046 LOC.
+  - integrated `tinygrad-rss/src`: 27 RSS files, 21,095 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -175,11 +175,12 @@ Integrated pieces:
   becomes a `STACK` of lane `GEP`s, `GEP(x, 0)` on scalar `x` unwraps, and one-element `STACK`
   unwraps. The context-free `load_store_folding` rules for `INDEX(STACK(bufs), vec_idx)`,
   `GEP` after `LOAD`, `GEP` on `STORE`, `PTRCAT` after `LOAD`, and `PTRCAT` after `STORE`
-  are also integrated. Folded-index regrouping, load/store splitting,
+  are also integrated, along with the safe `pm_add_loads` nested-load cleanup rules for
+  `LOAD(LOAD(ptr))` and `STORE(LOAD(ptr), value)`. Folded-index regrouping, load/store splitting,
   buffer/index devectorization, WMMA scalarization, REDUCE-to-acc lowering, image rewrites, and
-  add-load cleanup remain later devectorizer slices. The `pm_add_loads` non-pointer `INDEX`
-  rewrite is intentionally held until RSS preserves enough pointer-vs-value index metadata to
-  distinguish it safely.
+  non-pointer index add-load remain later devectorizer slices. The `pm_add_loads` non-pointer
+  `INDEX` rewrite is intentionally held until RSS preserves enough pointer-vs-value index metadata
+  to distinguish it safely.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style

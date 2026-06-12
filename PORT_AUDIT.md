@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 24 RSS files, 19,547 LOC.
+  - integrated `tinygrad-rss/src`: 25 RSS files, 19,664 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -149,6 +149,12 @@ Integrated pieces:
   and is idempotent when the program already has a `LINEAR` child.
   Pre-existing IF rejection, ISA register allocation, compile/binary, and full schedule/device
   rewrite orchestration remain unported.
+- `codegen/late/gater.rss`: first integrated source-shaped `tinygrad/codegen/late/gater.py`
+  slice, covering the 1D `pm_move_gates_from_index` rewrite for `INDEX(WHERE(gate, idx,
+  INVALID))` feeding `LOAD` or `STORE`. The port rebuilds the index with the raw idx, moves
+  the validity condition onto the load/store gate, supplies a zero-like load fallback, and
+  combines an existing store gate with the moved index gate. Image 2D cases and casted pointer
+  forms remain later slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style
@@ -376,6 +382,9 @@ Current integrated demo:
 - validates `pm_linearize_cleanups`-style gated-store lowering over a real UOp line stream:
   the cleaned stream contains one `IF` and one `ENDIF`, no gated `STORE`, and still satisfies
   dependency ordering.
+- validates the first `pm_move_gates_from_index` slice: masked 1D `INDEX` nodes feeding
+  `LOAD` and `STORE` are rewritten to plain indexes plus gates, and an existing store gate is
+  combined with the moved validity gate.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample
@@ -593,7 +602,7 @@ Major missing integrated work:
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
   toposort, CFG/control-flow insertion, split-end cleanup, gated-store line cleanup,
-  `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
+  1D gate-from-index movement, `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
   IF rejection, late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,

@@ -1,0 +1,76 @@
+// Integrated source-shaped slice of tinygrad/codegen/late/gater.py.
+//
+// This ports the core 1D "move gates from index" rewrite: an INDEX whose
+// offset is `WHERE(gate, idx, INVALID)` becomes a plain INDEX plus a gated
+// LOAD/STORE. Image 2D forms and outer pointer casts remain later slices.
+features: local
+
+struct GaterIndexParts derives(Clone) {
+    ok: Bool,
+    base: Int,
+    idx: Int,
+    gate: Int,
+}
+
+fn gater_no_index_parts() -> fresh GaterIndexParts {
+    return GaterIndexParts(ok: false, base: 0, idx: 0, gate: 0)
+}
+
+fn gater_index_parts(cache: mut UOpCache, ptr: Int) -> fresh GaterIndexParts {
+    if node_op(cache: read cache, id: ptr) != INDEX { return gater_no_index_parts() }
+    if node_num_src(cache: read cache, id: ptr) != 2 { return gater_no_index_parts() }
+    let raw_idx = node_src_id(cache: read cache, id: ptr, k: 1)
+    let idx = uop_get_idx(cache: read cache, id: raw_idx)
+    if idx == raw_idx { return gater_no_index_parts() }
+    let gate = uop_get_valid(cache: mut cache, id: raw_idx)
+    return GaterIndexParts(ok: true, base: node_src_id(cache: read cache, id: ptr, k: 0), idx: idx, gate: gate)
+}
+
+fn gater_rebuild_index(cache: mut UOpCache, base: Int, idx: Int) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read idx)
+    return mk_index(cache: mut cache, base: base, srcs: read srcs, ptr: true)
+}
+
+fn gater_zero_like(cache: mut UOpCache, dt: read DType) -> Int {
+    if dtype_is_float(d: read dt) { return mk_const_float(cache: mut cache, dt: read dt, v: 0.0) }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 0)
+}
+
+fn gater_combine_gate(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    if a == b { return a }
+    return mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: a, y: b)
+}
+
+fn gater_move_gate_from_index(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != LOAD && op != STORE { return None }
+    if node_num_src(cache: read cache, id: id) < 1 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    local parts = gater_index_parts(cache: mut cache, ptr: ptr)
+    if parts.ok == false { return None }
+    let base = parts.base
+    let idx = parts.idx
+    let moved_gate = parts.gate
+    let new_ptr = gater_rebuild_index(cache: mut cache, base: base, idx: idx)
+    if op == LOAD {
+        if node_num_src(cache: read cache, id: id) != 1 { return None }
+        local extras = List.new<Int>()
+        let fallback = gater_zero_like(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: id))
+        List.push<Int>(list: mut extras, value: read fallback)
+        List.push<Int>(list: mut extras, value: read moved_gate)
+        return Some(mk_load(cache: mut cache, ptr: new_ptr, srcs: read extras, dt: read node_full_dtype(cache: read cache, id: id)))
+    }
+    if op == STORE {
+        let n = node_num_src(cache: read cache, id: id)
+        if n != 2 && n != 3 { return None }
+        let value = node_src_id(cache: read cache, id: id, k: 1)
+        let mut gate = moved_gate
+        if n == 3 {
+            let existing_gate = node_src_id(cache: read cache, id: id, k: 2)
+            gate = gater_combine_gate(cache: mut cache, a: existing_gate, b: moved_gate)
+        }
+        return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read Some(gate)))
+    }
+    return None
+}

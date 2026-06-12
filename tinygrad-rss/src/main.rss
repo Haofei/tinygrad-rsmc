@@ -1849,12 +1849,53 @@ fn main() -> Unit {
     showb(label: read "uop.get_idx(valid) is idx = ", v: uop_get_idx(cache: read mcache, id: mvalid_idx) == mweak7)
     showb(label: read "uop.get_valid(valid) is cond = ", v: uop_get_valid(cache: mut mcache, id: mvalid_idx) == mbool)
     showb(label: read "uop.spec valid masked idx = ", v: spec_type_verify(cache: read mcache, id: mvalid_idx))
+    let mfalse = mk_const_int(cache: mut mcache, dt: read bl, v: 0)
+    local mgater_shape = shp1(a: 16)
+    let mgater_buf = mk_buffer(cache: mut mcache, dt: read i32, shape: read mgater_shape)
+    local mgater_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut mgater_idx_srcs, value: read mvalid_idx)
+    let mgater_ptr = mk_index(cache: mut mcache, base: mgater_buf, srcs: read mgater_idx_srcs, ptr: true)
+    local mgater_load_srcs = List.new<Int>()
+    let mgater_load = mk_load(cache: mut mcache, ptr: mgater_ptr, srcs: read mgater_load_srcs, dt: read i32)
+    let mgater_store = mk_store(cache: mut mcache, ptr: mgater_ptr, value: m3, gate: read None)
+    let mgater_store_gated = mk_store(cache: mut mcache, ptr: mgater_ptr, value: m3, gate: read Some(mfalse))
+    let mut mgater_load_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_load) {
+        Some(gl) => {
+            let gl_ptr = node_src_id(cache: read mcache, id: gl, k: 0)
+            let gl_idx = node_src_id(cache: read mcache, id: gl_ptr, k: 1)
+            let gl_alt = node_src_id(cache: read mcache, id: gl, k: 1)
+            let gl_gate = node_src_id(cache: read mcache, id: gl, k: 2)
+            mgater_load_ok = node_op(cache: read mcache, id: gl) == LOAD && node_num_src(cache: read mcache, id: gl) == 3 && node_op(cache: read mcache, id: gl_ptr) == INDEX && node_op(cache: read mcache, id: gl_idx) != WHERE && node_const_int(cache: read mcache, id: gl_alt) == 0 && gl_gate == mbool
+        }
+        None => {}
+    }
+    let mut mgater_store_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_store) {
+        Some(gs) => {
+            let gs_ptr = node_src_id(cache: read mcache, id: gs, k: 0)
+            let gs_idx = node_src_id(cache: read mcache, id: gs_ptr, k: 1)
+            let gs_gate = node_src_id(cache: read mcache, id: gs, k: 2)
+            mgater_store_ok = node_op(cache: read mcache, id: gs) == STORE && node_num_src(cache: read mcache, id: gs) == 3 && node_op(cache: read mcache, id: gs_ptr) == INDEX && node_op(cache: read mcache, id: gs_idx) != WHERE && gs_gate == mbool && spec_type_verify(cache: read mcache, id: gs)
+        }
+        None => {}
+    }
+    let mut mgater_combine_ok = false
+    match gater_move_gate_from_index(cache: mut mcache, id: mgater_store_gated) {
+        Some(gsg) => {
+            let gsg_gate = node_src_id(cache: read mcache, id: gsg, k: 2)
+            mgater_combine_ok = node_op(cache: read mcache, id: gsg_gate) == AND && node_src_id(cache: read mcache, id: gsg_gate, k: 0) == mfalse && node_src_id(cache: read mcache, id: gsg_gate, k: 1) == mbool
+        }
+        None => {}
+    }
+    showb(label: read "codegen.gater load gate moved = ", v: mgater_load_ok)
+    showb(label: read "codegen.gater store gate moved = ", v: mgater_store_ok)
+    showb(label: read "codegen.gater combines store gates = ", v: mgater_combine_ok)
     let minvalid3 = uop_invalid(cache: mut mcache, count: 3)
     showb(label: read "uop.invalid(3) is invalid = ", v: uop_is_invalid(cache: read mcache, id: minvalid3))
     showi(label: read "uop.invalid(3) dtype count = ", v: node_full_dtype(cache: read mcache, id: minvalid3).count)
     let minvalid3_valid = uop_get_valid(cache: mut mcache, id: minvalid3)
     showi(label: read "uop.get_valid(invalid) value = ", v: node_const_int(cache: read mcache, id: minvalid3_valid))
-    let mfalse = mk_const_int(cache: mut mcache, dt: read bl, v: 0)
     showb(label: read "uop.validate range in bounds = ", v: validate_index_with_bounds(cache: read mcache, sz: 10, idx: mrange, gate: mbool))
     showb(label: read "uop.validate affine in bounds = ", v: validate_index_with_bounds(cache: read mcache, sz: 12, idx: mrange_expr, gate: mbool))
     showb(label: read "uop.validate rejects affine oob = ", v: validate_index_with_bounds(cache: read mcache, sz: 10, idx: mrange_expr, gate: mbool) == false)

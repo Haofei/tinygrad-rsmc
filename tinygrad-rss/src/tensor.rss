@@ -973,6 +973,84 @@ fn tensor_lerp(cache: mut UOpCache, x: Int, end: Int, weight: Float) -> Int {
     return tensor_add(cache: mut cache, a: x, b: scaled)
 }
 
+fn tensor_lerp_weight(cache: mut UOpCache, x: Int, end: Int, weight: Int) -> Int {
+    let diff = tensor_sub(cache: mut cache, a: end, b: x)
+    let scaled = tensor_mul(cache: mut cache, a: diff, b: weight)
+    return tensor_add(cache: mut cache, a: x, b: scaled)
+}
+
+fn tensor_interpolate_axis_index(cache: mut UOpCache, x: Int, axis: Int, out_size: Int, align_corners: Bool, nearest: Bool, exact: Bool) -> Int {
+    local xs = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read xs)
+    let d = tensor_resolve_dim(ndim: ndim, dim: axis, extra: false)
+    let in_size = List.get<Int>(list: read xs, index: d)
+    let ai = tensor_arange(cache: mut cache, dt: read dt_float32(), n: out_size)
+    let mut scale = Int.to_float(value: read in_size) / Int.to_float(value: read out_size)
+    if align_corners {
+        if out_size <= 1 {
+            scale = 0.0
+        } else {
+            scale = Int.to_float(value: read (in_size - 1)) / Int.to_float(value: read (out_size - 1))
+        }
+    }
+    let sc = tensor_const_like_float(cache: mut cache, x: ai, value: scale)
+    let half = tensor_const_like_float(cache: mut cache, x: ai, value: 0.5)
+    let mut idxf = tensor_mul(cache: mut cache, a: ai, b: sc)
+    if align_corners == false {
+        if nearest {
+            if exact {
+                let aip = tensor_add(cache: mut cache, a: ai, b: half)
+                idxf = tensor_mul(cache: mut cache, a: aip, b: sc)
+            }
+        } else {
+            let aip = tensor_add(cache: mut cache, a: ai, b: half)
+            let scaled = tensor_mul(cache: mut cache, a: aip, b: sc)
+            idxf = tensor_sub(cache: mut cache, a: scaled, b: half)
+        }
+    }
+    if nearest == false {
+        idxf = tensor_clip(cache: mut cache, x: idxf, min_value: 0.0, max_value: Int.to_float(value: read (in_size - 1)))
+    }
+    local reshape = List.new<Int>()
+    local expand = shape_copy_ints(src: read xs)
+    let mut i = 0
+    while i < ndim {
+        if i == d {
+            push1(l: mut reshape, a: out_size)
+            List.set<Int>(list: mut expand, index: i, value: read out_size)
+        } else {
+            push1(l: mut reshape, a: 1)
+        }
+        i = i + 1
+    }
+    let viewed = tensor_reshape(cache: mut cache, x: idxf, new_shape: read reshape)
+    return tensor_expand(cache: mut cache, x: viewed, new_shape: read expand)
+}
+
+fn tensor_interpolate_axis_nearest(cache: mut UOpCache, x: Int, axis: Int, out_size: Int) -> Int {
+    let idxf = tensor_interpolate_axis_index(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: false, nearest: true, exact: false)
+    let idx = tensor_cast(cache: mut cache, x: idxf, dt: read dt_int32())
+    return tensor_gather(cache: mut cache, x: x, dim: axis, index: idx)
+}
+
+fn tensor_interpolate_axis_nearest_exact(cache: mut UOpCache, x: Int, axis: Int, out_size: Int) -> Int {
+    let idxf = tensor_interpolate_axis_index(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: false, nearest: true, exact: true)
+    let idx = tensor_cast(cache: mut cache, x: idxf, dt: read dt_int32())
+    return tensor_gather(cache: mut cache, x: x, dim: axis, index: idx)
+}
+
+fn tensor_interpolate_axis_linear(cache: mut UOpCache, x: Int, axis: Int, out_size: Int, align_corners: Bool) -> Int {
+    let idx = tensor_interpolate_axis_index(cache: mut cache, x: x, axis: axis, out_size: out_size, align_corners: align_corners, nearest: false, exact: false)
+    let lowf = tensor_floor(cache: mut cache, x: idx)
+    let highf = tensor_ceil(cache: mut cache, x: idx)
+    let low = tensor_cast(cache: mut cache, x: lowf, dt: read dt_int32())
+    let high = tensor_cast(cache: mut cache, x: highf, dt: read dt_int32())
+    let perc = tensor_sub(cache: mut cache, a: idx, b: lowf)
+    let lx = tensor_gather(cache: mut cache, x: x, dim: axis, index: low)
+    let hx = tensor_gather(cache: mut cache, x: x, dim: axis, index: high)
+    return tensor_lerp_weight(cache: mut cache, x: lx, end: hx, weight: perc)
+}
+
 fn tensor_float_predicate(cache: mut UOpCache, x: Int, pred: Int) -> Int {
     local vals = eval_tensor(cache: read cache, id: x)
     local shape = uop_shape(cache: read cache, id: x)

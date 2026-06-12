@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,590 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,683 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -709,6 +709,8 @@ Current integrated demo:
 - validates bool and int bitwise/logical Tensor ops against real tinygrad: `AND`, `OR`, and `XOR`.
 - validates integer shift and division/modulo Tensor ops against real tinygrad: `SHL`, `SHR`,
   floor division/modulo, and truncating cstyle division/modulo.
+- validates the first Tensor interpolation slice against real tinygrad: one-axis `linear`,
+  `linear` with `align_corners=True`, `nearest`, and `nearest-exact` interpolation over `[1,4]`.
 - validates Tensor gradients through broadcast and sum: gradient wrt a `[2,3]` input is all ones,
   and gradient wrt a broadcasted `[1,3]` input accumulates to `[2,2,2]`.
 - validates Tensor gradients through graph-backed `SHRINK` slicing against real tinygrad:
@@ -774,7 +776,8 @@ Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random and initializer helpers are partially integrated now, but exact global
   seed/counter APIs, broader distribution helpers,
-  full symbolic/lazy indexing semantics, graph-backed NaN/Inf predicate lowering, broader composed transcendental/math method coverage,
+  full symbolic/lazy indexing semantics, graph-backed NaN/Inf predicate lowering,
+  broader multi-axis interpolation and composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   Python-facing method breadth,
   and exact tinygrad semantics are still incomplete.

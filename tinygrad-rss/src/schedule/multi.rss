@@ -292,3 +292,61 @@ fn multi_gettuple_multi(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
     let out = mk_multi(cache: mut cache, x: got, axis: node_const_int(cache: read cache, id: multi))
     return MultiRewrite(result: out, changed: true, ok: true)
 }
+
+fn multi_reduce_kind_to_op(kind: Int) -> fresh Ops {
+    if kind == 1 { return MUL }
+    if kind == 2 { return MAX }
+    return ADD
+}
+
+fn multi_effective_device_node(cache: mut UOpCache, id: Int) -> Int {
+    let cnt = node_effective_device_count(cache: read cache, id: id)
+    if cnt <= 1 {
+        local name = node_effective_device_name(cache: read cache, id: id, index: 0)
+        return mk_device(cache: mut cache, device: read name)
+    }
+    local devices = List.new<String>()
+    let mut i = 0
+    while i < cnt {
+        local name = node_effective_device_name(cache: read cache, id: id, index: i)
+        List.push<String>(list: mut devices, value: read manage name)
+        i = i + 1
+    }
+    return mk_device_tuple(cache: mut cache, devices: read devices)
+}
+
+fn multi_reduce(cache: mut UOpCache, root: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: root) != REDUCE || node_num_src(cache: read cache, id: root) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let multi = node_src_id(cache: read cache, id: root, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let payload = node_src_id(cache: read cache, id: multi, k: 0)
+    let axis = node_const_int(cache: read cache, id: multi)
+    local axes = node_argints(cache: read cache, id: root)
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read payload)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        List.push<Int>(list: mut srcs, value: read child)
+        i = i + 1
+    }
+    local dt = node_full_dtype(cache: read cache, id: root)
+    local arg = node_arg(cache: read cache, id: root)
+    let local_reduce = intern(cache: mut cache, op: REDUCE, dt: read dt, src: take srcs, arg: take arg)
+    if axis >= 0 && uop_ints_contains(vals: read axes, v: axis) {
+        let dev = multi_effective_device_node(cache: mut cache, id: multi)
+        local ar_src = List.new<Int>()
+        List.push<Int>(list: mut ar_src, value: read local_reduce)
+        List.push<Int>(list: mut ar_src, value: read dev)
+        local ar_arg = ArgOp(value: multi_reduce_kind_to_op(kind: node_reduce_kind(cache: read cache, id: root)))
+        let out = intern(cache: mut cache, op: ALLREDUCE, dt: read dt, src: take ar_src, arg: take ar_arg)
+        return MultiRewrite(result: out, changed: true, ok: true)
+    }
+    let out = mk_multi(cache: mut cache, x: local_reduce, axis: axis)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}

@@ -46,6 +46,28 @@ fn upat_no_children() -> fresh List<UPat> {
     return List.new<UPat>()
 }
 
+fn upat_copy_ops(xs: read List<Ops>) -> fresh List<Ops> {
+    local out = List.new<Ops>()
+    let mut i = 0
+    while i < List.len<Ops>(list: read xs) {
+        let v = List.get<Ops>(list: read xs, index: i)
+        List.push<Ops>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn upat_copy_children(xs: read List<UPat>) -> fresh List<UPat> {
+    local out = List.new<UPat>()
+    let mut i = 0
+    while i < List.len<UPat>(list: read xs) {
+        let v = List.get<UPat>(list: read xs, index: i)
+        List.push<UPat>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
 fn upat_any(name: read String) -> fresh UPat {
     return UPat(kind: UpatAny, op: NOOP, cval: 0, exact_const: false,
                 name: String.copy(value: read name), ops: upat_empty_ops(),
@@ -112,16 +134,48 @@ fn upat_op2_anylen(op: Ops, a: read UPat, b: read UPat) -> fresh UPat {
 }
 
 fn upat_f(op: Ops, x: read UPat) -> fresh UPat { return upat_op1(op: op, a: read x) }
+fn named(x: read UPat, name: read String) -> fresh UPat {
+    return UPat(kind: x.kind.clone(), op: x.op.clone(), cval: x.cval, exact_const: x.exact_const,
+                name: String.copy(value: read name), ops: upat_copy_ops(xs: read x.ops),
+                dtype_name: String.copy(value: read x.dtype_name),
+                allow_any_len: x.allow_any_len, children: upat_copy_children(xs: read x.children))
+}
+
+fn or_casted(x: read UPat, name: read String) -> fresh UPat {
+    let mut self_pat = x.clone()
+    if String.len(value: read name) > 0 {
+        self_pat = named(x: read x, name: read name)
+    }
+    let cast_pat = upat_cast(x: read x)
+    return upat_sink_anylen(a: read self_pat, b: read cast_pat)
+}
+
+fn or_after(x: read UPat, name: read String) -> fresh UPat {
+    let mut self_pat = x.clone()
+    if String.len(value: read name) > 0 {
+        self_pat = named(x: read x, name: read name)
+    }
+    local after_pat = upat_op1(op: AFTER, a: read x)
+    return upat_sink_anylen(a: read self_pat, b: read after_pat)
+}
+
+fn cvar(name: read String) -> fresh UPat { return upat_cvar(name: read name) }
 fn upat_sink2(a: read UPat, b: read UPat) -> fresh UPat { return upat_op2(op: SINK, a: read a, b: read b) }
+fn sink(a: read UPat, b: read UPat) -> fresh UPat { return upat_sink2(a: read a, b: read b) }
 fn upat_index2(base: read UPat, idx: read UPat) -> fresh UPat { return upat_op2(op: INDEX, a: read base, b: read idx) }
+fn index(base: read UPat, idx: read UPat) -> fresh UPat { return upat_index2(base: read base, idx: read idx) }
 fn upat_cast(x: read UPat) -> fresh UPat { return upat_op1(op: CAST, a: read x) }
 fn upat_bitcast(x: read UPat) -> fresh UPat { return upat_op1(op: BITCAST, a: read x) }
 fn upat_gep(x: read UPat) -> fresh UPat { return upat_op1(op: GEP, a: read x) }
+fn gep(x: read UPat) -> fresh UPat { return upat_gep(x: read x) }
 fn upat_load(ptr: read UPat) -> fresh UPat { return upat_op1(op: LOAD, a: read ptr) }
+fn load(ptr: read UPat) -> fresh UPat { return upat_load(ptr: read ptr) }
 fn upat_load_with_dep(ptr: read UPat, dep: read UPat) -> fresh UPat { return upat_op2_anylen(op: LOAD, a: read ptr, b: read dep) }
 fn upat_store(ptr: read UPat, value: read UPat) -> fresh UPat { return upat_op2(op: STORE, a: read ptr, b: read value) }
+fn store(ptr: read UPat, value: read UPat) -> fresh UPat { return upat_store(ptr: read ptr, value: read value) }
 fn upat_store_gate(ptr: read UPat, value: read UPat, gate: read UPat) -> fresh UPat { return upat_op3(op: STORE, a: read ptr, b: read value, c: read gate) }
 fn upat_reduce(value: read UPat) -> fresh UPat { return upat_op1(op: REDUCE, a: read value) }
+fn reduce(value: read UPat) -> fresh UPat { return upat_reduce(value: read value) }
 fn upat_broadcast(x: read UPat) -> fresh UPat {
     local kids = List.new<UPat>()
     List.push<UPat>(list: mut kids, value: read x)
@@ -129,9 +183,13 @@ fn upat_broadcast(x: read UPat) -> fresh UPat {
                 name: "", ops: upat_empty_ops(), dtype_name: "",
                 allow_any_len: true, children: take kids)
 }
+fn broadcast(x: read UPat) -> fresh UPat { return upat_broadcast(x: read x) }
 fn upat_contiguous(x: read UPat) -> fresh UPat { return upat_op1(op: CONTIGUOUS, a: read x) }
 fn upat_after2(x: read UPat, dep: read UPat) -> fresh UPat { return upat_op2_anylen(op: AFTER, a: read x, b: read dep) }
+fn after(x: read UPat, dep: read UPat) -> fresh UPat { return upat_after2(x: read x, dep: read dep) }
 fn upat_end2(x: read UPat, range: read UPat) -> fresh UPat { return upat_op2_anylen(op: END, a: read x, b: read range) }
+fn end(x: read UPat, range: read UPat) -> fresh UPat { return upat_end2(x: read x, range: read range) }
+fn mod(x: read UPat, y: read UPat) -> fresh UPat { return upat_op2(op: FLOORMOD, a: read x, b: read y) }
 
 fn upat_opset_any(o1: Ops, o2: Ops, name: read String) -> fresh UPat {
     local ops = List.new<Ops>()

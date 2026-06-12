@@ -21,14 +21,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 27,391 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 27,449 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
   - result: `tensor.py` 72/106 symbols, `mixin/__init__.py` 78/82 symbols,
-    `uop/ops.py` 160/221 symbols; 310/409 total rough symbols covered.
+    `uop/ops.py` 177/221 symbols; 327/409 total rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -115,7 +115,9 @@ Integrated pieces:
   capture consistency, op sets, dtype constraints, variadic `allow_any_len`, rules-as-data, and a
   generic bottom-up rewrite/fixpoint driver, plus grouped source-shaped builder helpers for
   unary/ternary ops and `cast`/`bitcast`/`gep`/`load`/`store`/`reduce`/`broadcast`/
-  `contiguous`/`after`/`end` patterns.
+  `contiguous`/`after`/`end` patterns, plus source-compatible pattern method wrappers for
+  `named`, `or_casted`, `or_after`, `cvar`, `sink`, `index`, `gep`, `load`, `store`, `reduce`,
+  `broadcast`, `after`, `end`, and modulo patterns.
 - `uop/spec.rss`: first integrated interned-graph verifier for the shared core currently built by
   the package: CONST/SPECIAL/RANGE, `DEFINE_VAR`/`BIND`, `PARAM`, `DEFINE_LOCAL`/`DEFINE_REG`,
   upstream-shaped device/buffer/copy/multi-device graph nodes, ALU dtype rules, same-itemsize `BITCAST`, WHERE/MULACC, buffers, movement

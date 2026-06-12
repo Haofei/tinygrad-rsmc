@@ -713,6 +713,93 @@ fn main() -> Unit {
         Some(r) => { showb(label: read "uop.spec valid decomp mul reciprocal = ", v: spec_type_verify(cache: read mcache, id: r)) }
         None => { showb(label: read "uop.spec valid decomp mul reciprocal = ", v: false) }
     }
+    let dc_den8 = mk_const_int(cache: mut mcache, dt: read i32, v: 8)
+    let dc_mod_pow_raw = mk_alu2(cache: mut mcache, op: FLOORMOD, dt: read i32, x: dc_neg, y: dc_den8)
+    let dc_mod_pow = decomp_late_basic(cache: mut mcache, id: dc_mod_pow_raw)
+    let dc_mul_pow_raw = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: dc_neg, y: dc_den8)
+    let dc_mul_pow = decomp_late_basic(cache: mut mcache, id: dc_mul_pow_raw)
+    let dc_up = mk_define_var(cache: mut mcache, name: read "du", min_val: 0, max_val: 63, dt: read dt_uint32())
+    let dc_u4 = mk_const_int(cache: mut mcache, dt: read dt_uint32(), v: 4)
+    let dc_cdiv_unsigned_raw = mk_alu2(cache: mut mcache, op: CDIV, dt: read dt_uint32(), x: dc_up, y: dc_u4)
+    let dc_cdiv_unsigned = decomp_late_basic(cache: mut mcache, id: dc_cdiv_unsigned_raw)
+    let dc_cdiv_signed_raw = mk_alu2(cache: mut mcache, op: CDIV, dt: read i32, x: dc_neg, y: dc_den4)
+    let dc_cdiv_signed = decomp_late_basic(cache: mut mcache, id: dc_cdiv_signed_raw)
+    let dc_neg_one = mk_const_int(cache: mut mcache, dt: read i32, v: 0 - 1)
+    let dc_mul_neg_raw = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: dc_neg, y: dc_neg_one)
+    let dc_mul_neg = decomp_late_basic(cache: mut mcache, id: dc_mul_neg_raw)
+    let dc_neg_three = mk_alu1(cache: mut mcache, op: NEG, dt: read i32, x: dc_den3)
+    let dc_add_neg_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: dc_pos, y: dc_neg_three)
+    let dc_add_neg = decomp_late_basic(cache: mut mcache, id: dc_add_neg_raw)
+    let dc_mul_for_acc = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: dc_pos, y: dc_den3)
+    let dc_add_mul_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: dc_mul_for_acc, y: dc_den4)
+    let dc_add_mul = decomp_late_basic(cache: mut mcache, id: dc_add_mul_raw)
+    let dc_shl_for_acc = mk_alu2(cache: mut mcache, op: SHL, dt: read i32, x: dc_pos, y: dc_den3)
+    let dc_add_shl_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: dc_shl_for_acc, y: dc_den4)
+    let dc_add_shl = decomp_late_basic(cache: mut mcache, id: dc_add_shl_raw)
+    match dc_mod_pow {
+        Some(r) => { showstr(label: read "uop.decomp floormod pow2 = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp floormod pow2 = None") }
+    }
+    match dc_mul_pow {
+        Some(r) => { showstr(label: read "uop.decomp mul pow2 = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp mul pow2 = None") }
+    }
+    match dc_cdiv_unsigned {
+        Some(r) => { showstr(label: read "uop.decomp cdiv unsigned pow2 = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp cdiv unsigned pow2 = None") }
+    }
+    match dc_cdiv_signed {
+        Some(r) => { showstr(label: read "uop.decomp cdiv signed pow2 = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp cdiv signed pow2 = None") }
+    }
+    match dc_mul_neg {
+        Some(r) => { showstr(label: read "uop.decomp mul neg one = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp mul neg one = None") }
+    }
+    match dc_add_neg {
+        Some(r) => { showstr(label: read "uop.decomp add neg = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp add neg = None") }
+    }
+    match dc_add_mul {
+        Some(r) => { showstr(label: read "uop.decomp add mul = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp add mul = None") }
+    }
+    match dc_add_shl {
+        Some(r) => { showstr(label: read "uop.decomp add shl = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp add shl = None") }
+    }
+    match dc_mod_pow {
+        Some(r) => { showb(label: read "uop.spec valid decomp floormod pow2 = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp floormod pow2 = ", v: false) }
+    }
+    match dc_mul_pow {
+        Some(r) => { showb(label: read "uop.spec valid decomp mul pow2 = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp mul pow2 = ", v: false) }
+    }
+    match dc_cdiv_unsigned {
+        Some(r) => { showb(label: read "uop.spec valid decomp cdiv unsigned = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp cdiv unsigned = ", v: false) }
+    }
+    match dc_cdiv_signed {
+        Some(r) => { showb(label: read "uop.spec valid decomp cdiv signed = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp cdiv signed = ", v: false) }
+    }
+    match dc_mul_neg {
+        Some(r) => { showb(label: read "uop.spec valid decomp mul neg one = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp mul neg one = ", v: false) }
+    }
+    match dc_add_neg {
+        Some(r) => { showb(label: read "uop.spec valid decomp add neg = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp add neg = ", v: false) }
+    }
+    match dc_add_mul {
+        Some(r) => { showb(label: read "uop.spec valid decomp add mul = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp add mul = ", v: false) }
+    }
+    match dc_add_shl {
+        Some(r) => { showb(label: read "uop.spec valid decomp add shl = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp add shl = ", v: false) }
+    }
     showb(label: read "uop.spec valid ALU = ", v: spec_type_verify(cache: read mcache, id: mea))
     let mf = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let bad_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: m2, y: mf)

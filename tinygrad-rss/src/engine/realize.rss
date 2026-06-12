@@ -31,6 +31,9 @@ struct RealizeProgramExec derives(Clone) {
     global_dim_count: Int,
     has_local_size: Bool,
     local_dim_count: Int,
+    val_count: Int,
+    val_known_count: Int,
+    val_runtime_count: Int,
     runtime_cache_hit: Bool,
     runtime_handle: Int,
 }
@@ -101,6 +104,8 @@ fn realize_program_exec_copy(exec: read RealizeProgramExec) -> fresh RealizeProg
                               allocated_count: exec.allocated_count, source_id: exec.source_id,
                               source_len: exec.source_len, global_dim_count: exec.global_dim_count,
                               has_local_size: exec.has_local_size, local_dim_count: exec.local_dim_count,
+                              val_count: exec.val_count, val_known_count: exec.val_known_count,
+                              val_runtime_count: exec.val_runtime_count,
                               runtime_cache_hit: exec.runtime_cache_hit, runtime_handle: exec.runtime_handle)
 }
 
@@ -472,7 +477,22 @@ fn realize_empty_host_exec(staged: read RealizeProgramExec, compile_status: Int,
                                          stderr_len: stderr_len)
 }
 
-fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeProgramExec {
+fn realize_empty_var_vals() -> fresh Map<String, Int> {
+    local vals = Map.new<String, Int>()
+    return take vals
+}
+
+fn realize_program_vals_count(flags: read List<Bool>) -> Int {
+    let mut count = 0
+    let mut i = 0
+    while i < List.len<Bool>(list: read flags) {
+        if List.get<Bool>(list: read flags, index: i) { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn realize_exec_program_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, var_vals: read Map<String, Int>) -> fresh RealizeProgramExec {
     local empty_slots = List.new<Int>()
     local empty_indices = List.new<Int>()
     if node_op(cache: read cache, id: call) != CALL {
@@ -480,6 +500,7 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                                   global_slots: take empty_slots, buffer_indices: take empty_indices,
                                   allocated_count: 0, source_id: 0 - 1, source_len: 0,
                                   global_dim_count: 0, has_local_size: false, local_dim_count: 0,
+                                  val_count: 0, val_known_count: 0, val_runtime_count: 0,
                                   runtime_cache_hit: false, runtime_handle: 0)
     }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
@@ -488,10 +509,12 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                                   global_slots: take empty_slots, buffer_indices: take empty_indices,
                                   allocated_count: 0, source_id: 0 - 1, source_len: 0,
                                   global_dim_count: 0, has_local_size: false, local_dim_count: 0,
+                                  val_count: 0, val_known_count: 0, val_runtime_count: 0,
                                   runtime_cache_hit: false, runtime_handle: 0)
     }
     local prog = node_program_arg(cache: read cache, id: ast)
     local launch = program_arg_launch_dims(arg: read prog)
+    local vals = program_arg_vals(cache: read cache, arg: read prog, var_vals: read var_vals)
     local global_slots = List.new<Int>()
     local buffer_indices = List.new<Int>()
     let mut allocated = 0
@@ -520,12 +543,21 @@ fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call:
                               global_dim_count: List.len<Int>(list: read launch.global_size),
                               has_local_size: take launch.has_local_size,
                               local_dim_count: List.len<Int>(list: read launch.local_size),
+                              val_count: List.len<Int>(list: read vals.values),
+                              val_known_count: realize_program_vals_count(flags: read vals.has_value),
+                              val_runtime_count: realize_program_vals_count(flags: read vals.is_runtime),
                               runtime_cache_hit: cache_hit, runtime_handle: runtime_handle)
 }
 
-fn realize_exec_program_host_scalar(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
-                                    c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
-    local staged = realize_exec_program(cache: read cache, ctx: mut ctx, call: call)
+fn realize_exec_program(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeProgramExec {
+    local vals = realize_empty_var_vals()
+    return realize_exec_program_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read vals)
+}
+
+fn realize_exec_program_host_scalar_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
+                                              c_path_text: read String, exe_path_text: read String,
+                                              var_vals: read Map<String, Int>) -> fresh RealizeHostProgramExec {
+    local staged = realize_exec_program_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read var_vals)
     if staged.ok == false { return realize_empty_host_exec(staged: read staged, compile_status: 0 - 1, run_status: 0 - 1, stderr_len: 0) }
     let ast = node_src_id(cache: read cache, id: call, k: 0)
     local prog = node_program_arg(cache: read cache, id: ast)
@@ -659,10 +691,25 @@ fn realize_exec_program_host_scalar(cache: read UOpCache, ctx: mut RealizeExecCo
     }
 }
 
+fn realize_exec_program_host_scalar(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int,
+                                    c_path_text: read String, exe_path_text: read String) -> fresh RealizeHostProgramExec {
+    local vals = realize_empty_var_vals()
+    return realize_exec_program_host_scalar_with_vars(cache: read cache, ctx: mut ctx, call: call,
+                                                      c_path_text: read c_path_text, exe_path_text: read exe_path_text,
+                                                      var_vals: read vals)
+}
+
 fn realize_exec_program_host_default(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> fresh RealizeHostProgramExec {
     return realize_exec_program_host_scalar(cache: read cache, ctx: mut ctx, call: call,
                                            c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
                                            exe_path_text: read "/tmp/tinygrad-rss-realize-program")
+}
+
+fn realize_exec_program_host_default_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, var_vals: read Map<String, Int>) -> fresh RealizeHostProgramExec {
+    return realize_exec_program_host_scalar_with_vars(cache: read cache, ctx: mut ctx, call: call,
+                                                     c_path_text: read "/tmp/tinygrad-rss-realize-program.c",
+                                                     exe_path_text: read "/tmp/tinygrad-rss-realize-program",
+                                                     var_vals: read var_vals)
 }
 
 fn realize_exec_call(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
@@ -701,6 +748,11 @@ fn realize_call_arg_buffer_index_default(cache: read UOpCache, ctx: read Realize
 }
 
 fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int) -> Bool {
+    local vals = realize_empty_var_vals()
+    return realize_exec_call_resolved_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read vals)
+}
+
+fn realize_exec_call_resolved_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, call: Int, var_vals: read Map<String, Int>) -> Bool {
     if node_op(cache: read cache, id: call) != CALL { return false }
     local args = realize_get_call_arg_uops(cache: read cache, call: call)
     if List.len<Int>(list: read args) < 2 { return realize_exec_call(cache: read cache, ctx: mut ctx, call: call) }
@@ -717,7 +769,7 @@ fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext,
         return true
     }
     if op == PROGRAM {
-        local host_exec = realize_exec_program_host_default(cache: read cache, ctx: mut ctx, call: call)
+        local host_exec = realize_exec_program_host_default_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read var_vals)
         if host_exec.ok { return true }
         return host_exec.staged.ok
     }
@@ -725,12 +777,17 @@ fn realize_exec_call_resolved(cache: read UOpCache, ctx: mut RealizeExecContext,
 }
 
 fn realize_run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int) -> Int {
+    local vals = realize_empty_var_vals()
+    return realize_run_linear_with_vars(cache: read cache, ctx: mut ctx, linear: linear, var_vals: read vals)
+}
+
+fn realize_run_linear_with_vars(cache: read UOpCache, ctx: mut RealizeExecContext, linear: Int, var_vals: read Map<String, Int>) -> Int {
     if node_op(cache: read cache, id: linear) != LINEAR { return 0 }
     let mut executed = 0
     let mut i = 0
     while i < node_num_src(cache: read cache, id: linear) {
         let call = node_src_id(cache: read cache, id: linear, k: i)
-        if realize_exec_call_resolved(cache: read cache, ctx: mut ctx, call: call) {
+        if realize_exec_call_resolved_with_vars(cache: read cache, ctx: mut ctx, call: call, var_vals: read var_vals) {
             executed = executed + 1
         }
         i = i + 1
@@ -740,7 +797,7 @@ fn realize_run_linear(cache: read UOpCache, ctx: mut RealizeExecContext, linear:
 
 fn realize_run_scheduled(cache: mut UOpCache, ctx: mut RealizeExecContext, big_sink: Int) -> fresh RealizeScheduledRun {
     local scheduled = schedule_create_linear_with_vars(cache: mut cache, big_sink: big_sink)
-    let executed = realize_run_linear(cache: read cache, ctx: mut ctx, linear: scheduled.linear)
+    let executed = realize_run_linear_with_vars(cache: read cache, ctx: mut ctx, linear: scheduled.linear, var_vals: read scheduled.var_vals)
     let vars = Map.len<String, Int>(map: read scheduled.var_vals)
     let planned = scheduled.planned
     let arenas = scheduled.arenas

@@ -4097,6 +4097,18 @@ fn tensor_matmul(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_dot(cache: mut cache, x: a, w: b)
 }
 
+fn tensor_scaled_dot_product_attention(cache: mut UOpCache, query: Int, key: Int, value: Int, dropout_p: Float, training: Bool, seed: Int) -> Int {
+    local qshape = uop_shape(cache: read cache, id: query)
+    let kdim = List.get<Int>(list: read qshape, index: List.len<Int>(list: read qshape) - 1)
+    let kt = tensor_transpose(cache: mut cache, x: key, dim0: 0 - 2, dim1: 0 - 1)
+    let qk0 = tensor_matmul(cache: mut cache, a: query, b: kt)
+    let scale = tensor_const_like_float(cache: mut cache, x: qk0, value: Math.sqrt(value: Int.to_float(value: read kdim)))
+    let qk = tensor_div(cache: mut cache, a: qk0, b: scale)
+    let weights = tensor_softmax_axis(cache: mut cache, x: qk, axis: 0 - 1)
+    let dropped = tensor_dropout(cache: mut cache, x: weights, p: dropout_p, training: training, seed: seed)
+    return tensor_matmul(cache: mut cache, a: dropped, b: value)
+}
+
 fn tensor_linear(cache: mut UOpCache, x: Int, weight: Int, bias: Int) -> Int {
     let y = tensor_dot(cache: mut cache, x: x, w: weight)
     return tensor_add(cache: mut cache, a: y, b: bias)

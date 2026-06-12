@@ -74,6 +74,33 @@ fn multi_mselect_mstack(cache: mut UOpCache, mselect: Int) -> fresh MultiRewrite
     return MultiRewrite(result: node_src_id(cache: read cache, id: src, k: idx), changed: true, ok: true)
 }
 
+fn multi_mselect_movement(cache: mut UOpCache, mselect: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: mselect) != MSELECT || node_num_src(cache: read cache, id: mselect) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let movement = node_src_id(cache: read cache, id: mselect, k: 0)
+    let mop = node_op(cache: read cache, id: movement)
+    if group_movement(op: read mop) == false || node_num_src(cache: read cache, id: movement) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let base = node_src_id(cache: read cache, id: movement, k: 0)
+    let idx = node_const_int(cache: read cache, id: mselect)
+    let selected = mk_mselect(cache: mut cache, x: base, index: idx)
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read selected)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: movement) {
+        let child = node_src_id(cache: read cache, id: movement, k: i)
+        List.push<Int>(list: mut srcs, value: read child)
+        i = i + 1
+    }
+    local dt = node_full_dtype(cache: read cache, id: movement)
+    local arg = node_arg(cache: read cache, id: movement)
+    let out = intern(cache: mut cache, op: mop, dt: read dt, src: take srcs, arg: take arg)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
 fn multi_rebuild_srcs_replacing_multi_with_payload(cache: read UOpCache, root: Int, start: Int) -> fresh List<Int> {
     local srcs = List.new<Int>()
     let mut i = start

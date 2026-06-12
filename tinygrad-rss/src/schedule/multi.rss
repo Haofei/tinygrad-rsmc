@@ -46,6 +46,9 @@ fn multi_copy_to_one(cache: mut UOpCache, copy: Int) -> fresh MultiRewrite {
         return MultiRewrite(result: fallback, changed: false, ok: false)
     }
     let x = node_src_id(cache: read cache, id: copy, k: 0)
+    if node_op(cache: read cache, id: x) == MULTI {
+        return multi_copy(cache: mut cache, copy: copy)
+    }
     let dev = node_src_id(cache: read cache, id: copy, k: 1)
     let target_count = node_effective_device_count(cache: read cache, id: dev)
     let source_count = node_effective_device_count(cache: read cache, id: x)
@@ -55,6 +58,45 @@ fn multi_copy_to_one(cache: mut UOpCache, copy: Int) -> fresh MultiRewrite {
     local target = node_effective_device_name(cache: read cache, id: dev, index: 0)
     let selected = mk_mselect(cache: mut cache, x: x, index: 0)
     let out = mk_copy_to_device(cache: mut cache, x: selected, device: read target)
+    return MultiRewrite(result: out, changed: true, ok: true)
+}
+
+fn multi_copy(cache: mut UOpCache, copy: Int) -> fresh MultiRewrite {
+    let fallback = multi_empty_result(cache: mut cache)
+    if node_op(cache: read cache, id: copy) != COPY || node_num_src(cache: read cache, id: copy) < 2 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let multi = node_src_id(cache: read cache, id: copy, k: 0)
+    if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let dev = node_src_id(cache: read cache, id: copy, k: 1)
+    if node_op(cache: read cache, id: dev) != DEVICE {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    let dcount = node_effective_device_count(cache: read cache, id: multi)
+    let target_count = node_effective_device_count(cache: read cache, id: dev)
+    if dcount <= 1 || target_count <= 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
+    if target_count == 1 {
+        local target = node_effective_device_name(cache: read cache, id: dev, index: 0)
+        let payload = node_src_id(cache: read cache, id: multi, k: 0)
+        local pieces = List.new<Int>()
+        let mut i = 0
+        while i < dcount {
+            let selected = mk_mselect(cache: mut cache, x: payload, index: i)
+            let copied = mk_copy_to_device(cache: mut cache, x: selected, device: read target)
+            List.push<Int>(list: mut pieces, value: read copied)
+            i = i + 1
+        }
+        let out = tensor_cat(cache: mut cache, tensors: read pieces, dim: node_const_int(cache: read cache, id: multi))
+        return MultiRewrite(result: out, changed: true, ok: true)
+    }
+    let out = multi_unshard_to_device(cache: mut cache, multi: multi, dcount: dcount, dev: dev)
+    if out < 0 {
+        return MultiRewrite(result: fallback, changed: false, ok: false)
+    }
     return MultiRewrite(result: out, changed: true, ok: true)
 }
 
@@ -665,8 +707,11 @@ fn multi_shard_to_axis(cache: mut UOpCache, id: Int, axis: Int, dcount: Int) -> 
     return multi_shard_shape_to_axis(cache: mut cache, id: id, shape: read shape, axis: axis, dcount: dcount)
 }
 
-fn multi_unshard_to_tuple(cache: mut UOpCache, multi: Int, dcount: Int) -> Int {
+fn multi_unshard_to_device(cache: mut UOpCache, multi: Int, dcount: Int, dev: Int) -> Int {
     if node_op(cache: read cache, id: multi) != MULTI || node_num_src(cache: read cache, id: multi) == 0 {
+        return 0 - 1
+    }
+    if node_op(cache: read cache, id: dev) != DEVICE {
         return 0 - 1
     }
     let old_axis = node_const_int(cache: read cache, id: multi)
@@ -697,13 +742,17 @@ fn multi_unshard_to_tuple(cache: mut UOpCache, multi: Int, dcount: Int) -> Int {
         i = i + 1
     }
     let padded = mk_pad_expr(cache: mut cache, x: payload, before: read before, after: read after)
-    let dev = multi_effective_device_node(cache: mut cache, id: multi)
     local srcs = List.new<Int>()
     List.push<Int>(list: mut srcs, value: read padded)
     List.push<Int>(list: mut srcs, value: read dev)
     local dt = node_full_dtype(cache: read cache, id: payload)
     local arg = ArgOp(value: ADD)
     return intern(cache: mut cache, op: ALLREDUCE, dt: read dt, src: take srcs, arg: take arg)
+}
+
+fn multi_unshard_to_tuple(cache: mut UOpCache, multi: Int, dcount: Int) -> Int {
+    let dev = multi_effective_device_node(cache: mut cache, id: multi)
+    return multi_unshard_to_device(cache: mut cache, multi: multi, dcount: dcount, dev: dev)
 }
 
 fn multi_unsharded_shape(cache: read UOpCache, multi: Int, dcount: Int) -> fresh List<Int> {

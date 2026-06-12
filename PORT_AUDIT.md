@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,308 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,365 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -219,7 +219,8 @@ Integrated pieces:
   `DEFINE_LOCAL`/`DEFINE_REG` shape payloads, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, upstream-style global shape for
   `MULTI` by expanding the payload shard axis by device count, boundary-node shape pass-through
-  for `CONTIGUOUS`/`CONTIGUOUS_BACKWARD`/`DETACH`/`COPY`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
+  for `CONTIGUOUS`/`CONTIGUOUS_BACKWARD`/`DETACH`/`COPY`/`ALLREDUCE`/`MSELECT`/`MSTACK`,
+  vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
   checks.
 - `schedule/__init__.rss`: first integrated source-shaped `tinygrad/schedule/__init__.py` slice:
@@ -263,8 +264,9 @@ Integrated pieces:
   unported.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
-  device as `MSTACK(copy...)`, copying a multi-device value to one device through shard-0
-  `MSELECT`, eliminating `MSELECT(MSTACK)`, moving `MSELECT` before movement ops, passthrough
+  device as `MSTACK(copy...)`, copying a multi-device value to one device by copying each shard and
+  concatenating along the sharded axis, copying a multi-device value to a tuple device through
+  symbolic unshard plus `ALLREDUCE(ADD)`, eliminating `MSELECT(MSTACK)`, moving `MSELECT` before movement ops, passthrough
   rebuilds for boundary ops with a leading `MULTI` child, source stripping for non-value-producing
   roots such as `STORE`, multi-aware `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and the first movement rewrite family for
   `RESHAPE`/`EXPAND`/`PAD`/`SHRINK`/`PERMUTE`/`FLIP`, nonzero shard-partition `SHRINK(MULTI)` lowering through
@@ -454,7 +456,8 @@ Current integrated demo:
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
   `MULTI` and `MSTACK` inputs emits verifier-accepted copied-shard `ADD` graphs.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
-  axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
+  axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one concatenation, multi-device
+  COPY-to-tuple unshard/allreduce, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,
   `SHRINK(MSTACK)` splitting, nonzero shard-partition `SHRINK(MULTI)` selection/copy lowering,
   `CAST`/`CONTIGUOUS`/`AFTER` passthrough, `STORE` source stripping,
   `AFTER(MULTI, STORE(MULTI, MULTI))` ordering, and

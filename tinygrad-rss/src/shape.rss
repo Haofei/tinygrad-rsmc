@@ -252,7 +252,7 @@ fn uop_shape(cache: read UOpCache, id: Int) -> fresh List<Int> {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return uop_shape(cache: read cache, id: x)
     }
-    if op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH || op == COPY {
+    if op == CONTIGUOUS || op == CONTIGUOUS_BACKWARD || op == DETACH || op == COPY || op == ALLREDUCE || op == MSELECT || op == MSTACK {
         let x = node_src_id(cache: read cache, id: id, k: 0)
         return uop_shape(cache: read cache, id: x)
     }

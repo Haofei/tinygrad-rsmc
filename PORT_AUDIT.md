@@ -407,7 +407,7 @@ Integrated pieces:
   `logsigmoid`, `elu`, `celu`, `selu`, `softsign`, `lerp`, `hardtanh`, `relu6`,
   explicit-seed `dropout`, no-mask `scaled_dot_product_attention`, and polynomial
   `newton_schulz`,
-  bitwise/logical `AND`/`OR`/`XOR`, integer shifts, floor/truncating div and modulo variants,
+  bitwise/logical `AND`/`OR`/`XOR`/`NOT`, integer shifts, floor/truncating div and modulo variants,
   `WHERE` mask selection, movement helpers (`reshape` with single `-1`
   inference, `view`, `permute`, `flip`, `pad`, `pad_to`, `expand`, `shrink` through explicit
   per-axis `slice`, `shrink_to`, `split`, `chunk`, `meshgrid` for 1D/scalar tensors, and
@@ -448,7 +448,8 @@ Integrated pieces:
   not yet mutate Python Tensor objects in place or discover targets through a weakref registry,
   constrained object-state helpers for `__hash__`, `get`/`set`-style state access,
   whole-tensor and indexed `__setitem__` graph assignment over the existing `assign`/`getitem`
-  helpers, `__delitem__` rejection as a false/unsupported result, and a metadata-state wrapper
+  helpers, explicit result wrappers for `__bool__`, scalar-shape `__len__`, and `__delitem__`
+  rejection, plus legacy false/unsupported sentinel helpers, and a metadata-state wrapper
   record, plus materialized 2D `qr` and thin `svd` helpers over the current evaluator-backed
   tensor data path. `qr` uses Gram-Schmidt and returns full `Q` and `R`; `svd` uses a Jacobi
   eigensolve of `A^T A`, returns thin `U`, `S`, and `Vt`, and accepts but does not yet implement
@@ -793,7 +794,7 @@ Current integrated demo:
   `unique_const`, reverse `_binop` with `const_like`, `_split_cumalu` for ADD/MUL, and pair
   returns for `cummax`/`cummin` on the active tensor smoke.
 - validates public Tensor wrapper aliases through the active tensor smoke: reverse/truediv
-  arithmetic, `rpow`, Python-style and C-style mod aliases, bitwise/shift aliases, `clamp`,
+  arithmetic, `rpow`, Python-style and C-style mod aliases, bitwise/shift/not aliases, `clamp`,
   `copysign`, `masked_fill`, `detach`, `contiguous_backward`, all/axis arg reductions, sort,
   argsort, topk, all/axis statistics aliases, softmax/log_softmax/logsumexp aliases, and
   cumsum/cumprod aliases.
@@ -844,6 +845,9 @@ Current integrated demo:
   matches tinygrad CPU output.
 - validates Tensor comparisons and mask selection against real tinygrad: `<`, `ne`, `eq`, and
   `where(mask, x, 0)` with scalar broadcasting.
+- validates Tensor object-magic result wrappers through the active smoke: `len` succeeds on
+  non-scalar tensors, `bool` is rejected with a TypeError-shaped message, and `delitem` is
+  rejected with a TypeError-shaped message.
 - validates representative unary/binary math Tensor ops against real tinygrad: `neg`,
   `reciprocal`, `sqrt`, `rsqrt`, `log2`, `log10`, `exp2`, zero-input `sin`, `trunc`, and `pow` on exactly
   representable or precision-stable values.
@@ -853,7 +857,8 @@ Current integrated demo:
   `leaky_relu`, `quick_gelu`, default tanh-approx `gelu`, `swish`/`silu`, `hardswish`,
   `hardsigmoid`, `softplus`, `mish`, `logsigmoid`, `elu`, `celu`, `selu`, `softsign`, `lerp`,
   `hardtanh`, `relu6`, and upstream-style `relu`, including positive, negative, and zero values.
-- validates bool and int bitwise/logical Tensor ops against real tinygrad: `AND`, `OR`, and `XOR`.
+- validates bool and int bitwise/logical Tensor ops against real tinygrad: `AND`, `OR`, `XOR`,
+  and signed/unsigned/bool `bitwise_not` aliases.
 - validates integer shift and division/modulo Tensor ops against real tinygrad: `SHL`, `SHR`,
   floor division/modulo, and truncating cstyle division/modulo.
 - validates Tensor interpolation against real tinygrad: one-axis `linear`, `linear` with
@@ -943,7 +948,7 @@ Major missing integrated work:
   `masked_select`/`nonzero` paths,
   broader composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
-  remaining Python-facing method breadth such as `bitwise_not`, exact object magic, and
+  remaining Python-facing method breadth such as exact object magic and
   Python-level overload/exception parity,
   and exact tinygrad semantics are still incomplete.
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp

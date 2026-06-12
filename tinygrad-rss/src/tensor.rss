@@ -55,6 +55,18 @@ struct TensorMetadataState derives(Clone) {
     value: String,
 }
 
+struct TensorIntResult derives(Clone) {
+    ok: Bool,
+    value: Int,
+    message: String,
+}
+
+struct TensorBoolResult derives(Clone) {
+    ok: Bool,
+    value: Bool,
+    message: String,
+}
+
 fn tensor_state_new(uop: Int) -> fresh TensorState {
     return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
 }
@@ -735,8 +747,20 @@ fn tensor_len(cache: read UOpCache, x: Int) -> Int {
     return List.get<Int>(list: read shape, index: 0)
 }
 
+fn tensor_len_result(cache: read UOpCache, x: Int) -> fresh TensorIntResult {
+    local shape = tensor_shape(cache: read cache, x: x)
+    if List.len<Int>(list: read shape) == 0 {
+        return TensorIntResult(ok: false, value: 0, message: String.copy(value: read "len() of a 0-d tensor"))
+    }
+    return TensorIntResult(ok: true, value: List.get<Int>(list: read shape, index: 0), message: String.copy(value: read ""))
+}
+
 fn tensor_bool(cache: read UOpCache, x: Int) -> Bool {
     return false
+}
+
+fn tensor_bool_result(cache: read UOpCache, x: Int) -> fresh TensorBoolResult {
+    return TensorBoolResult(ok: false, value: false, message: String.copy(value: read "__bool__ on Tensor is not defined"))
 }
 
 fn __hash__(cache: read UOpCache, x: Int) -> Int {
@@ -935,6 +959,10 @@ fn __delitem__(t: read TensorState, indices: read List<Int>) -> Bool {
 
 fn tensor_delitem(t: read TensorState, indices: read List<Int>) -> Bool {
     return __delitem__(t: read t, indices: read indices)
+}
+
+fn tensor_delitem_result(t: read TensorState, indices: read List<Int>) -> fresh TensorBoolResult {
+    return TensorBoolResult(ok: false, value: false, message: String.copy(value: read "Tensor does not support deleting items"))
 }
 
 fn tensor_metadata_state_default() -> fresh TensorMetadataState {
@@ -1781,6 +1809,31 @@ fn tensor_xor(cache: mut UOpCache, a: Int, b: Int) -> Int {
 
 fn tensor_bitwise_xor(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_xor(cache: mut cache, a: a, b: b)
+}
+
+fn tensor_bitwise_max_for_dtype(dt: read DType) -> Float {
+    let bits = dt.bitsize
+    if bits <= 1 { return 1.0 }
+    if bits == 8 { return 255.0 }
+    if bits == 16 { return 65535.0 }
+    if bits == 32 { return 4294967295.0 }
+    return 18446744073709551615.0
+}
+
+fn tensor_bitwise_not(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    if dtype_is_unsigned(d: read dt) || dtype_is_bool(d: read dt) {
+        let mask = tensor_const_like_float(cache: mut cache, x: x, value: tensor_bitwise_max_for_dtype(dt: read dt))
+        return tensor_xor(cache: mut cache, a: x, b: mask)
+    }
+    let zero = tensor_const_like_float(cache: mut cache, x: x, value: 0.0)
+    let one = tensor_const_like_float(cache: mut cache, x: x, value: 1.0)
+    let neg = tensor_sub(cache: mut cache, a: zero, b: x)
+    return tensor_sub(cache: mut cache, a: neg, b: one)
+}
+
+fn tensor_invert(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_bitwise_not(cache: mut cache, x: x)
 }
 
 fn tensor_shl(cache: mut UOpCache, a: Int, b: Int) -> Int {

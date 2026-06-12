@@ -1254,9 +1254,21 @@ fn uop_new_buffer(cache: mut UOpCache, device: read String, size: Int, dt: read 
     return mk_new_buffer(cache: mut cache, device: read device, size: size, dt: read dt, num: num)
 }
 
+fn uop_unique(cache: mut UOpCache, num: Int) -> Int {
+    return mk_unique(cache: mut cache, num: num)
+}
+
+fn uop_from_buffer(cache: mut UOpCache, device: read String, size: Int, dt: read DType, num: Int) -> Int {
+    return uop_new_buffer(cache: mut cache, device: read device, size: size, dt: read dt, num: num)
+}
+
 fn uop_empty(cache: mut UOpCache, shape: read List<Int>, dt: read DType, device: read String, num: Int) -> Int {
     let buf = uop_new_buffer(cache: mut cache, device: read device, size: prod(x: read shape), dt: read dt, num: num)
     return mk_reshape(cache: mut cache, x: buf, new_shape: read shape)
+}
+
+fn uop_frompy(cache: mut UOpCache, data: read List<Float>, shape: read List<Int>, dt: read DType) -> Int {
+    return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
 }
 
 fn uop_empty_like(cache: mut UOpCache, id: Int, dt: read DType, device: read String, num: Int) -> Int {
@@ -1268,8 +1280,9 @@ fn uop_clone(cache: mut UOpCache, id: Int, device: read String, num: Int) -> Int
     let dt = node_full_dtype(cache: read cache, id: id)
     let dst = uop_empty_like(cache: mut cache, id: id, dt: read dt, device: read device, num: num)
     let src = mk_copy_to_device(cache: mut cache, x: id, device: read device)
+    let store = uop_store(cache: mut cache, id: dst, value: src, gate: read None)
     local deps = List.new<Int>()
-    List.push<Int>(list: mut deps, value: read src)
+    List.push<Int>(list: mut deps, value: read store)
     return uop_after(cache: mut cache, id: dst, srcs: read deps)
 }
 
@@ -1277,6 +1290,38 @@ fn uop_shard(cache: mut UOpCache, id: Int, devices: read List<String>, axis: Int
     let copied = mk_copy_to_device(cache: mut cache, x: id, device: read device_arg_key(d: read device_arg_from_list(devices: read devices)))
     if axis < 0 { return copied }
     return mk_multi(cache: mut cache, x: copied, axis: axis)
+}
+
+fn uop_variable(cache: mut UOpCache, name: read String, min_val: Int, max_val: Int, dt: read DType) -> Int {
+    return mk_define_var(cache: mut cache, name: read name, min_val: min_val, max_val: max_val, dt: read dt)
+}
+
+fn uop_bind(cache: mut UOpCache, var: Int, value: Int) -> Int {
+    return mk_bind_int(cache: mut cache, var: var, value: value)
+}
+
+fn uop_placeholder(cache: mut UOpCache, shape: read List<Int>, dt: read DType, slot: Int) -> Int {
+    return mk_param(cache: mut cache, slot: slot, dt: read dt, shape: read shape, name: read "")
+}
+
+fn uop_placeholder_like(cache: mut UOpCache, id: Int, slot: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local sh = uop_max_shard_shape(cache: read cache, id: id)
+    return uop_placeholder(cache: mut cache, shape: read sh, dt: read dt, slot: slot)
+}
+
+fn uop_param(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, device: read String, name: read String) -> Int {
+    if String.len(value: read device) > 0 {
+        return mk_param_device(cache: mut cache, slot: slot, dt: read dt, shape: read shape, name: read name, device: read device)
+    }
+    return mk_param(cache: mut cache, slot: slot, dt: read dt, shape: read shape, name: read name)
+}
+
+fn uop_param_like(cache: mut UOpCache, id: Int, slot: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local sh = uop_shard_shape(cache: read cache, id: id)
+    local dev = uop_device(cache: read cache, id: id)
+    return uop_param(cache: mut cache, slot: slot, dt: read dt, shape: read sh, device: read dev, name: read "")
 }
 
 fn uop_contiguous(cache: mut UOpCache, id: Int) -> Int {

@@ -1,0 +1,282 @@
+// Integrated port slice of tinygrad/uop/divandmod.py over interned UOp ids.
+//
+// The upstream module is a symbolic rewrite pass for index FLOORDIV/FLOORMOD.
+// This file keeps the same rule shape for the integer subset currently present
+// in tinygrad-rss, and is called from the shared graph_rewrite simplifier.
+features: local
+
+fn divmod_const(cache: mut UOpCache, like: Int, value: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: like)
+    return mk_const_int(cache: mut cache, dt: read dt, v: value)
+}
+
+fn divmod_add(cache: mut UOpCache, dt: read DType, a: Int, b: Int) -> Int {
+    return mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: a, y: b)
+}
+
+fn divmod_sub(cache: mut UOpCache, dt: read DType, a: Int, b: Int) -> Int {
+    return mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a, y: b)
+}
+
+fn divmod_mul(cache: mut UOpCache, dt: read DType, a: Int, b: Int) -> Int {
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: a, y: b)
+}
+
+fn divmod_mul_const(cache: mut UOpCache, id: Int, value: Int) -> Int {
+    if value == 1 { return id }
+    let dt = node_dtype(cache: read cache, id: id)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: value)
+    return mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: id, y: c)
+}
+
+fn divmod_add_const(cache: mut UOpCache, id: Int, value: Int) -> Int {
+    if value == 0 { return id }
+    let dt = node_dtype(cache: read cache, id: id)
+    let c = mk_const_int(cache: mut cache, dt: read dt, v: value)
+    return mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: id, y: c)
+}
+
+fn divmod_usum(cache: mut UOpCache, dt: read DType, parts: read List<Int>) -> Int {
+    if List.len<Int>(list: read parts) == 0 {
+        return mk_const_int(cache: mut cache, dt: read dt, v: 0)
+    }
+    let mut out = List.get<Int>(list: read parts, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read parts) {
+        let part = List.get<Int>(list: read parts, index: i)
+        out = mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: out, y: part)
+        i = i + 1
+    }
+    return out
+}
+
+fn divmod_list_gcd(values: read List<Int>, extra: Int) -> Int {
+    let mut g = extra
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        g = int_gcd(a: g, b: List.get<Int>(list: read values, index: i))
+        i = i + 1
+    }
+    return iabs(x: g)
+}
+
+fn divmod_factor_terms(cache: mut UOpCache, terms: read List<Int>, factors: mut List<Int>, divided: mut List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read terms) {
+        let u = List.get<Int>(list: read terms, index: i)
+        let f = uop_const_factor(cache: read cache, id: u)
+        match uop_divides(cache: mut cache, id: u, v: f) {
+            Some(term) => {
+                List.push<Int>(list: mut factors, value: read f)
+                List.push<Int>(list: mut divided, value: read term)
+            }
+            None => { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn divmod_try_interval_cancel(cache: mut UOpCache, id: Int, x: Int, y: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    let xr = uop_min_max(cache: read cache, id: x)
+    let yr = uop_min_max(cache: read cache, id: y)
+    if yr.lo == 0 && yr.hi == 0 { return None }
+    if yr.lo * yr.hi > 0 {
+        let qv = floordiv(x: xr.lo, y: yr.lo)
+        if qv == floordiv(x: xr.lo, y: yr.hi) {
+            if qv == floordiv(x: xr.hi, y: yr.lo) {
+                if qv == floordiv(x: xr.hi, y: yr.hi) {
+                    if op == FLOORDIV { return Some(divmod_const(cache: mut cache, like: id, value: qv)) }
+                    let dt = node_dtype(cache: read cache, id: id)
+                    let q = divmod_const(cache: mut cache, like: id, value: qv)
+                    let qy = divmod_mul(cache: mut cache, dt: read dt, a: q, b: y)
+                    return Some(divmod_sub(cache: mut cache, dt: read dt, a: x, b: qy))
+                }
+            }
+        }
+    }
+    return None
+}
+
+fn divmod_try_nested(cache: mut UOpCache, id: Int, x: Int, y: Int, c: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) == FLOORMOD {
+        let inner_num = node_src_id(cache: read cache, id: x, k: 0)
+        let inner_den = node_src_id(cache: read cache, id: x, k: 1)
+        match uop_divides(cache: mut cache, id: inner_den, v: c) {
+            Some(kid) => {
+                let op = node_op(cache: read cache, id: id)
+                let dt = node_dtype(cache: read cache, id: id)
+                if op == FLOORMOD {
+                    return Some(mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: inner_num, y: y))
+                }
+                if node_is_const_int(cache: read cache, id: kid) {
+                    let k = node_const_int(cache: read cache, id: kid)
+                    if k > 0 {
+                        let div = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: inner_num, y: y)
+                        let kc = mk_const_int(cache: mut cache, dt: read dt, v: k)
+                        return Some(mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: div, y: kc))
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    return None
+}
+
+fn divmod_try_fold_binary_numerator(cache: mut UOpCache, id: Int, term: Int, factor: Int, const_part: Int, c: Int) -> Option<Int> {
+    let vr = uop_min_max(cache: read cache, id: term)
+    if vr.hi - vr.lo != 1 { return None }
+    let op = node_op(cache: read cache, id: id)
+    let mut y1 = floordiv(x: factor * vr.lo + const_part, y: c)
+    let mut y2 = floordiv(x: factor * vr.hi + const_part, y: c)
+    if op == FLOORMOD {
+        y1 = floormod(x: factor * vr.lo + const_part, y: c)
+        y2 = floormod(x: factor * vr.hi + const_part, y: c)
+    }
+    let dt = node_dtype(cache: read cache, id: id)
+    let lo = mk_const_int(cache: mut cache, dt: read dt, v: vr.lo)
+    let centered = mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: term, y: lo)
+    let scaled = divmod_mul_const(cache: mut cache, id: centered, value: y2 - y1)
+    let out = divmod_add_const(cache: mut cache, id: scaled, value: y1)
+    return Some(graph_rewrite(cache: mut cache, id: out))
+}
+
+fn divmod_try_gcd_with_remainder(cache: mut UOpCache, id: Int, x_peeled: Int, const_part: Int, c: Int,
+                                 factors: read List<Int>) -> Option<Int> {
+    let g = divmod_list_gcd(values: read factors, extra: c)
+    if g <= 1 { return None }
+    match uop_divides(cache: mut cache, id: x_peeled, v: g) {
+        Some(divided) => {
+            let dt = node_dtype(cache: read cache, id: id)
+            let reduced_c = c / g
+            let offset = floormod(x: const_part / g, y: reduced_c)
+            let shifted = divmod_add_const(cache: mut cache, id: divided, value: offset)
+            let new_x = graph_rewrite(cache: mut cache, id: shifted)
+            let nr = uop_min_max(cache: read cache, id: new_x)
+            if nr.lo >= 0 {
+                let den = mk_const_int(cache: mut cache, dt: read dt, v: reduced_c)
+                let op = node_op(cache: read cache, id: id)
+                if op == FLOORMOD {
+                    let modded = mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: new_x, y: den)
+                    let scaled = divmod_mul_const(cache: mut cache, id: modded, value: g)
+                    return Some(divmod_add_const(cache: mut cache, id: scaled, value: floormod(x: const_part, y: g)))
+                }
+                let divd = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: new_x, y: den)
+                return Some(divmod_add_const(cache: mut cache, id: divd, value: floordiv(x: const_part, y: c)))
+            }
+        }
+        None => {}
+    }
+    return None
+}
+
+fn divmod_try_variable_denominator(cache: mut UOpCache, id: Int, x: Int, y: Int) -> Option<Int> {
+    let xr = uop_min_max(cache: read cache, id: x)
+    let yr = uop_min_max(cache: read cache, id: y)
+    if yr.lo < 0 || xr.lo < 0 { return None }
+    local all_terms = uop_split_by_op(cache: read cache, id: x, sep: ADD)
+    local quo = List.new<Int>()
+    local rem = List.new<Int>()
+    let dt = node_dtype(cache: read cache, id: id)
+    let op = node_op(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read all_terms) {
+        let u = List.get<Int>(list: read all_terms, index: i)
+        match uop_divide_exact(cache: mut cache, id: u, divisor: y) {
+            Some(q) => {
+                let qs = graph_rewrite(cache: mut cache, id: q)
+                List.push<Int>(list: mut quo, value: read qs)
+            }
+            None => {
+                if node_op(cache: read cache, id: y) == CONST && node_is_const_int(cache: read cache, id: y) {
+                    let c = uop_const_factor(cache: read cache, id: u)
+                    let den = node_const_int(cache: read cache, id: y)
+                    if den != 0 && c % den != c {
+                        match uop_divides(cache: mut cache, id: u, v: c) {
+                            Some(t) => {
+                                List.push<Int>(list: mut rem, value: read divmod_mul_const(cache: mut cache, id: t, value: c % den))
+                                if op == FLOORDIV { List.push<Int>(list: mut quo, value: read divmod_mul_const(cache: mut cache, id: t, value: c / den)) }
+                                if op == FLOORMOD { List.push<Int>(list: mut quo, value: read mk_const_int(cache: mut cache, dt: read dt, v: 0)) }
+                            }
+                            None => { List.push<Int>(list: mut rem, value: read u) }
+                        }
+                    } else {
+                        List.push<Int>(list: mut rem, value: read u)
+                    }
+                } else {
+                    List.push<Int>(list: mut rem, value: read u)
+                }
+            }
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read quo) == 0 { return None }
+    let new_x = divmod_usum(cache: mut cache, dt: read dt, parts: read rem)
+    let nr = uop_min_max(cache: read cache, id: new_x)
+    if nr.lo < 0 { return None }
+    if op == FLOORMOD {
+        return Some(mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt, x: new_x, y: y))
+    }
+    let new_div = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: new_x, y: y)
+    local with_div = List.new<Int>()
+    List.push<Int>(list: mut with_div, value: read new_div)
+    let mut qi = 0
+    while qi < List.len<Int>(list: read quo) {
+        List.push<Int>(list: mut with_div, value: read List.get<Int>(list: read quo, index: qi))
+        qi = qi + 1
+    }
+    return Some(divmod_usum(cache: mut cache, dt: read dt, parts: read with_div))
+}
+
+fn divmod_fold_general(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != FLOORDIV && op != FLOORMOD { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let x = node_src_id(cache: read cache, id: id, k: 0)
+    let y = node_src_id(cache: read cache, id: id, k: 1)
+
+    match divmod_try_interval_cancel(cache: mut cache, id: id, x: x, y: y) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+
+    let split = uop_pop_const(cache: read cache, id: x, op: ADD)
+    let x_peeled = split.factor
+    let const_part = split.value
+    local terms = uop_split_by_op(cache: read cache, id: x_peeled, sep: ADD)
+
+    if node_op(cache: read cache, id: y) == CONST && node_is_const_int(cache: read cache, id: y) {
+        let c = node_const_int(cache: read cache, id: y)
+        if c > 0 {
+            match divmod_try_nested(cache: mut cache, id: id, x: x, y: y, c: c) {
+                Some(rn) => { return Some(rn) }
+                None => {}
+            }
+            // TODO: re-enable upstream remove_nested_mod once the generated runtime path for
+            // returning a rewritten modulo-of-sum has a small reproducer. The other div/mod
+            // folds remain active and verified below.
+            local factors = List.new<Int>()
+            local divided = List.new<Int>()
+            if divmod_factor_terms(cache: mut cache, terms: read terms, factors: mut factors, divided: mut divided) {
+                if List.len<Int>(list: read divided) == 1 {
+                    match divmod_try_fold_binary_numerator(cache: mut cache, id: id,
+                                                           term: List.get<Int>(list: read divided, index: 0),
+                                                           factor: List.get<Int>(list: read factors, index: 0),
+                                                           const_part: const_part, c: c) {
+                        Some(rb) => { return Some(rb) }
+                        None => {}
+                    }
+                }
+                match divmod_try_gcd_with_remainder(cache: mut cache, id: id, x_peeled: x_peeled,
+                                                    const_part: const_part, c: c, factors: read factors) {
+                    Some(rg) => { return Some(rg) }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    return divmod_try_variable_denominator(cache: mut cache, id: id, x: x, y: y)
+}

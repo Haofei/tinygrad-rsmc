@@ -364,6 +364,10 @@ fn simplify_rule(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
+    match divmod_fold_general(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match rule_identities(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

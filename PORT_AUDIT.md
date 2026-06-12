@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 16 RSS files, 13,232 LOC.
+  - integrated `tinygrad-rss/src`: 17 RSS files, 13,559 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -96,6 +96,11 @@ Integrated pieces:
   UOp ids, covering the core symbolic renderer (`DEFINE_VAR`, `PARAM`, `RANGE`, `CONST`,
   `CAST`, `BIND`, unary/binary/ternary ALU render rules, `INDEX`/`STAGE`, and `STACK`),
   inference-specific rendering for div/mod and `BITCAST`, plus compact UOp line printing.
+- `uop/divandmod.rss`: first integrated source-shaped `tinygrad/uop/divandmod.py` slice over
+  interned UOp ids, covering interval cancellation, nested `(x%(k*c))//c` and `%c` rewrites,
+  binary numerator folding, gcd-with-remainder factoring, and factor-remainder splitting for
+  non-negative integer index expressions. The upstream remove-nested-mod-in-sum rule is held back
+  pending a smaller generated-runtime reproducer.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -211,6 +216,10 @@ Current integrated demo:
 - validates UOp symbolic helpers for monotonicity, constant-factor extraction, exact
   divisibility on `(x*4)+8`, conservative `divide_exact` cancellation for `(x*6)/(x*3)`,
   and symbolic `gcd(x*6, x*9) -> 3*x`.
+- validates integrated div/mod symbolic rewrites against upstream-shaped samples:
+  `(n%8)//4 -> (n//4)%2`, `(n%8)%4 -> n%4`, `(b*6+2)//3 -> b*2`,
+  `(b*6+2)%3 -> 2`, `(n*4+8)//6 -> ((n*2+1)//3)+1`,
+  `(n*4+8)%6 -> ((n*2+1)%3)*2`, and `(n*6+m)//6 -> m//6+n`.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -414,9 +423,9 @@ Major missing integrated work:
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and selected unary/math VJPs, but full
   Function-style APIs, complete VJP coverage, gradient accumulation APIs, and exact tinygrad
   gradient semantics are still missing.
-- `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
+- `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a method-helper slice are integrated now, but
-  the full upstream method surface, symbolic/decomposition coverage, complete render/pyrender
+  the full upstream method surface, symbolic/decomposition/divmod coverage, complete render/pyrender
   behavior, full spec/validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad, with clear scope for GPU-only

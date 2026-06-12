@@ -733,6 +733,18 @@ fn indexing_stage_opts(cache: read UOpCache, parent_orig: Int, child_orig: Int, 
     let child_op = node_op(cache: read cache, id: child_orig)
     let removable = parent_op != COPY && indexing_always_contiguous(op: read child_op) == false
     if List.len<Int>(list: read out_ranges) == List.len<Int>(list: read realized_axes) {
+        if node_effective_device_count(cache: read cache, id: child_orig) > 0 {
+            local child_device = node_effective_device_name(cache: read cache, id: child_orig, index: 0)
+            if String.len(value: read child_device) > 0 {
+                return mk_bufferize_arg_device(device: read child_device, addrspace: read ADDR_GLOBAL, removable: removable)
+            }
+        }
+        if node_effective_device_count(cache: read cache, id: parent_orig) > 0 {
+            local parent_device = node_effective_device_name(cache: read cache, id: parent_orig, index: 0)
+            if String.len(value: read parent_device) > 0 {
+                return mk_bufferize_arg_device(device: read parent_device, addrspace: read ADDR_GLOBAL, removable: removable)
+            }
+        }
         return mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: removable)
     }
     return mk_bufferize_arg_none(addrspace: read ADDR_LOCAL, removable: removable)

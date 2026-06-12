@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 23,431 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 23,503 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -71,6 +71,7 @@ Integrated pieces:
   `AFTER`, `END`, `BARRIER`), matching the role of upstream
   `tinygrad/uop/ops.py`. REDUCE metadata is
   explicit (`sum`/`prod`/`max` kind plus axes) rather than encoded as sentinel axes.
+  `BufferizeArg` device metadata is inspectable for scheduler validation and rewrite tests.
 - `uop/methods.rss`: integrated UOp helper surface over interned node ids: `const_like`, `ufix`,
   masked-index `invalid`/`valid`/`get_idx`/`get_valid`,
   symbolic variable `expr`/`unbind`/`val`/sorted `variables`/`unbind_all`,
@@ -241,7 +242,8 @@ Integrated pieces:
   half for source `INDEX` insertion, realized `STAGE` insertion, movement removal, and `REDUCE`
   range-source conversion. Graph-backed `PAD`/`SHRINK` movement args are recovered from shape
   sources, `PAD` rewrites now emit the upstream local `WHERE(valid, value, 0)` form, and
-  realized child staging now follows upstream global-vs-local and removable option rules.
+  realized child staging now follows upstream global-vs-local, removable, and full-global device
+  option rules.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -370,7 +372,8 @@ Current integrated demo:
   unnecessary staging, EXPAND-triggered ending-range realization, and `REDUCE` `AXIS_REDUCE`
   injection.
 - validates scheduler indexing rangeify graph rewrite for movement removal through `INDEX` and
-  `REDUCE` metadata-to-range-source conversion, plus PAD-to-`WHERE` locality wrapping.
+  `REDUCE` metadata-to-range-source conversion, plus PAD-to-`WHERE` locality wrapping and
+  device-carrying full-global `STAGE` option propagation.
 - validates scheduler indexing rangeify `STAGE` option selection for full global staging,
   partial local staging, and upstream removable rules for always-contiguous vs non-contiguous children.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
@@ -722,7 +725,7 @@ Major missing integrated work:
   helpers including PAD and RESHAPE, first RESHAPE identity/per-coordinate symbolic
   simplification, first rangeify analysis records including same-index multi-consumer merging,
   first EXPAND-origin ending-range realization,
-  and first rangeify graph
+  first device-aware full-global staging options, and first rangeify graph
   rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, full upstream sink-level RESHAPE simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,
   and JIT capture plumbing remain.

@@ -1640,6 +1640,55 @@ fn node_bufferize_removable(cache: read UOpCache, id: Int) -> Bool {
     }
 }
 
+fn node_bufferize_has_device(cache: read UOpCache, id: Int) -> Bool {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBufferize(b) => { return b.has_device }
+        ArgNone => { return false }
+        ArgInt(v) => { return false }
+        ArgFloat(f) => { return false }
+        ArgBool(b) => { return false }
+        ArgStr(t) => { return false }
+        ArgInts(vals) => { return false }
+        ArgReduce(r) => { return false }
+        ArgVar(v) => { return false }
+        ArgRange(r) => { return false }
+        ArgParam(p) => { return false }
+        ArgAxisSizes(a) => { return false }
+        ArgDevice(dv) => { return false }
+        ArgOp(o) => { return false }
+        ArgProgram(p) => { return false }
+        ArgCall(c) => { return false }
+    }
+}
+
+fn node_bufferize_device_name(cache: read UOpCache, id: Int) -> fresh String {
+    let n = List.get<UOp>(list: read cache.nodes, index: id)
+    match n.arg {
+        ArgBufferize(b) => {
+            if b.has_device == false { return "" }
+            if b.is_device_int { return "" }
+            if List.len<String>(list: read b.devices) == 0 { return "" }
+            return String.copy(value: read List.get<String>(list: read b.devices, index: 0))
+        }
+        ArgNone => { return "" }
+        ArgInt(v) => { return "" }
+        ArgFloat(f) => { return "" }
+        ArgBool(b) => { return "" }
+        ArgStr(t) => { return "" }
+        ArgInts(vals) => { return "" }
+        ArgReduce(r) => { return "" }
+        ArgVar(v) => { return "" }
+        ArgRange(r) => { return "" }
+        ArgParam(p) => { return "" }
+        ArgAxisSizes(a) => { return "" }
+        ArgDevice(dv) => { return "" }
+        ArgOp(o) => { return "" }
+        ArgProgram(p) => { return "" }
+        ArgCall(c) => { return "" }
+    }
+}
+
 fn node_program_name(cache: read UOpCache, id: Int) -> fresh String {
     let n = List.get<UOp>(list: read cache.nodes, index: id)
     match n.arg {

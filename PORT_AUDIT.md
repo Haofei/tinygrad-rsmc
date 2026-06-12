@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 33 RSS files, 25,880 LOC.
+  - integrated `tinygrad-rss/src`: 33 RSS files, 25,925 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -678,8 +678,8 @@ Current integrated demo:
 - validates Tensor `nbytes` against real tinygrad for float32 and int32 2x3 tensors.
 - validates Tensor `dropout` against real tinygrad for explicit-seed training `p=0.25`,
   eval/no-op behavior, and training `p=1` zeroing.
-- validates Tensor `scaled_dot_product_attention` against real tinygrad for no-mask/no-dropout
-  and causal/no-dropout batched cases.
+- validates Tensor `scaled_dot_product_attention` against real tinygrad for no-mask/no-dropout,
+  causal/no-dropout, boolean-mask, and additive-mask batched cases.
 - validates Tensor normalization helpers against real tinygrad: `normalize(p=2, dim=1)`,
   `normalize(p=1, dim=0)`, `normalize(p=0, dim=1)`, and `layernorm(axis=1, eps=1e-5)`.
 - validates tuple-axis Tensor statistics/normalization against real tinygrad: `mean(axis=(1,2))`,

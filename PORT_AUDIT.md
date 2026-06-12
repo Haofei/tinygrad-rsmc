@@ -360,8 +360,17 @@ Integrated pieces:
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,
-  and reducing copied shards with `ADD`/`MUL`/`MAX`. Ring/all2all chunking and allreduce function
-  wrapping remain unported.
+  and reducing copied shards with `ADD`/`MUL`/`MAX`. Source-shaped `handle_allreduce` now delegates
+  to the naive path, and `create_allreduce_function` provides the current cache-backed store/after
+  wrapper while full Python `call(..., precompile=True)` lowering remains tied to later function-call
+  scheduler/runtime work. Ring/all2all chunking remains unported.
+- `codegen/gpudims.rss`: first integrated source-shaped `tinygrad/codegen/gpudims.py` slice for
+  the current all-integer RSS IR: `_dim_max`, `_group_dims`, `_split_dims`, `get_grouped_dims`,
+  and `add_gpudims`. It covers max-size grouping, factor splitting, grouped `SPECIAL` index
+  creation, flat-to-coordinate reconstruction, and conservative `RANGE -> SPECIAL` substitution
+  for `GLOBAL`/`THREAD` and `WARP`/`LOCAL`/`GROUP_REDUCE` axes. Symbolic `sint.vmax`, renderer
+  product-limit tuning, and the upstream missing-local invalid-store guard remain future fidelity
+  work.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device by copying each shard and

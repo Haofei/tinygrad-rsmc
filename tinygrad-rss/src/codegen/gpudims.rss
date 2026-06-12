@@ -1,0 +1,398 @@
+// Integrated source-shaped slice of tinygrad/codegen/gpudims.py.
+//
+// This covers the all-int dimension path used by the current RSS IR. Symbolic
+// sint vmax handling is intentionally represented by concrete Int sizes here.
+features: local
+
+struct GPUDimsContext derives(Clone) {
+    has_threads: Bool,
+    dont_use_locals: Bool,
+    has_global_max: Bool,
+    global_max: List<Int>,
+    has_local_max: Bool,
+    local_max: List<Int>,
+    has_global_prod_max: Bool,
+    global_prod_max: List<Int>,
+}
+
+fn gpudims_default_context() -> fresh GPUDimsContext {
+    local gm = List.new<Int>()
+    List.push<Int>(list: mut gm, value: read 2147483647)
+    List.push<Int>(list: mut gm, value: read 2147483647)
+    List.push<Int>(list: mut gm, value: read 2147483647)
+    local lm = List.new<Int>()
+    List.push<Int>(list: mut lm, value: read 1024)
+    List.push<Int>(list: mut lm, value: read 1024)
+    List.push<Int>(list: mut lm, value: read 64)
+    local pm = List.new<Int>()
+    return GPUDimsContext(has_threads: false, dont_use_locals: false,
+                          has_global_max: true, global_max: take gm,
+                          has_local_max: true, local_max: take lm,
+                          has_global_prod_max: false, global_prod_max: take pm)
+}
+
+fn _dim_max(d: Int) -> Int {
+    return d
+}
+
+fn gpudims_int_list_copy(xs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read xs) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read xs, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn gpudims_dim_fits(dims: read List<Int>, max_sizes: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read dims) && i < List.len<Int>(list: read max_sizes) {
+        if _dim_max(d: List.get<Int>(list: read dims, index: i)) > List.get<Int>(list: read max_sizes, index: i) { return false }
+        i = i + 1
+    }
+    return List.len<Int>(list: read dims) <= List.len<Int>(list: read max_sizes)
+}
+
+fn _group_dims(dims: read List<Int>, max_sizes: read List<Int>) -> Option<List<Int>> {
+    let mut out = gpudims_int_list_copy(xs: read dims)
+    while List.len<Int>(list: read out) > List.len<Int>(list: read max_sizes) || gpudims_dim_fits(dims: read out, max_sizes: read max_sizes) == false {
+        let mut changed = false
+        let mut i = 0
+        while i < List.len<Int>(list: read max_sizes) && changed == false {
+            if i < List.len<Int>(list: read out) - 1 {
+                let joined = _dim_max(d: List.get<Int>(list: read out, index: i)) * _dim_max(d: List.get<Int>(list: read out, index: i + 1))
+                if joined <= List.get<Int>(list: read max_sizes, index: i) {
+                    local nd = List.new<Int>()
+                    let mut j = 0
+                    while j < List.len<Int>(list: read out) {
+                        if j == i {
+                            List.push<Int>(list: mut nd, value: read joined)
+                            j = j + 2
+                        } else {
+                            List.push<Int>(list: mut nd, value: read List.get<Int>(list: read out, index: j))
+                            j = j + 1
+                        }
+                    }
+                    out = take nd
+                    changed = true
+                }
+            }
+            i = i + 1
+        }
+        if changed == false { return None }
+    }
+    return Some(gpudims_int_list_copy(xs: read out))
+}
+
+fn gpudims_small_factor(x: Int) -> Int {
+    let mut d = 2
+    while d * d <= x {
+        if x % d == 0 { return d }
+        d = d + 1
+    }
+    return 1
+}
+
+fn _split_dims(dims: read List<Int>, max_sizes: read List<Int>) -> Option<List<Int>> {
+    if gpudims_dim_fits(dims: read dims, max_sizes: read max_sizes) { return Some(gpudims_int_list_copy(xs: read dims)) }
+    local out = gpudims_int_list_copy(xs: read dims)
+    while List.len<Int>(list: read out) < 3 {
+        List.push<Int>(list: mut out, value: read 1)
+    }
+    let mut i = 0
+    while i < List.len<Int>(list: read out) {
+        while i < List.len<Int>(list: read max_sizes) && List.get<Int>(list: read out, index: i) > List.get<Int>(list: read max_sizes, index: i) {
+            let div = gpudims_small_factor(x: List.get<Int>(list: read out, index: i))
+            if div == 1 { return None }
+            let cur = List.get<Int>(list: read out, index: i)
+            let ni = (i + 1) % List.len<Int>(list: read out)
+            let nxt = List.get<Int>(list: read out, index: ni)
+            List.set<Int>(list: mut out, index: i, value: read (cur / div))
+            List.set<Int>(list: mut out, index: ni, value: read (nxt * div))
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read out) >= 3 && List.get<Int>(list: read out, index: 2) == 1 {
+        local two = List.new<Int>()
+        List.push<Int>(list: mut two, value: read List.get<Int>(list: read out, index: 0))
+        List.push<Int>(list: mut two, value: read List.get<Int>(list: read out, index: 1))
+        return Some(take two)
+    }
+    if List.len<Int>(list: read out) >= 3 && List.get<Int>(list: read out, index: 1) == 1 && List.get<Int>(list: read out, index: 2) == 1 {
+        local one = List.new<Int>()
+        List.push<Int>(list: mut one, value: read List.get<Int>(list: read out, index: 0))
+        return Some(take one)
+    }
+    return Some(take out)
+}
+
+fn gpudims_raw_idxs(cache: mut UOpCache, prefix: read String, dims: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read dims) {
+        let nm = String.concat(left: read prefix, right: read Int.to_string(value: read i))
+        List.push<Int>(list: mut out, value: read mk_special_named(cache: mut cache, dt: read dt_int32(), size: List.get<Int>(list: read dims, index: i), name: read nm))
+        i = i + 1
+    }
+    return take out
+}
+
+fn gpudims_reverse(xs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = List.len<Int>(list: read xs) - 1
+    while i >= 0 {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read xs, index: i))
+        i = i - 1
+    }
+    return take out
+}
+
+fn gpudims_build_flat(cache: mut UOpCache, raw: read List<Int>, limited: read List<Int>) -> Int {
+    if List.len<Int>(list: read raw) == 0 { return mk_const_int(cache: mut cache, dt: read dt_int32(), v: 0) }
+    let mut out = List.get<Int>(list: read raw, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read raw) {
+        let scale = mk_const_int(cache: mut cache, dt: read dt_int32(), v: List.get<Int>(list: read limited, index: i))
+        out = mk_alu2(cache: mut cache, op: MUL, dt: read node_full_dtype(cache: read cache, id: out), x: out, y: scale)
+        out = mk_alu2(cache: mut cache, op: ADD, dt: read node_full_dtype(cache: read cache, id: out), x: out, y: List.get<Int>(list: read raw, index: i))
+        i = i + 1
+    }
+    return out
+}
+
+fn get_grouped_dims(cache: mut UOpCache, prefix: read String, dims: read List<Int>, max_sizes: read List<Int>, has_max: Bool, reverse: Bool) -> Option<List<Int>> {
+    if reverse {
+        let rdims = gpudims_reverse(xs: read dims)
+        let rmax = gpudims_reverse(xs: read max_sizes)
+        match get_grouped_dims(cache: mut cache, prefix: read prefix, dims: read rdims, max_sizes: read rmax, has_max: has_max, reverse: false) {
+            Some(got) => { return Some(gpudims_reverse(xs: read got)) }
+            None => { return None }
+        }
+    }
+    let mut limited = gpudims_int_list_copy(xs: read dims)
+    if has_max {
+        let grouped = _group_dims(dims: read dims, max_sizes: read max_sizes)
+        let base = match grouped {
+            Some(g) => { g }
+            None => { gpudims_int_list_copy(xs: read dims) }
+        }
+        if List.len<Int>(list: read base) > List.len<Int>(list: read max_sizes) { return None }
+        if List.len<Int>(list: read base) == List.len<Int>(list: read dims) {
+            match _split_dims(dims: read dims, max_sizes: read max_sizes) {
+                Some(s) => { limited = s }
+                None => { return None }
+            }
+        } else {
+            limited = base
+        }
+    }
+    local raw = gpudims_raw_idxs(cache: mut cache, prefix: read prefix, dims: read limited)
+    if List.len<Int>(list: read limited) == List.len<Int>(list: read dims) { return Some(take raw) }
+    local ret = List.new<Int>()
+    if List.len<Int>(list: read limited) > List.len<Int>(list: read dims) {
+        let flat = gpudims_build_flat(cache: mut cache, raw: read raw, limited: read limited)
+        if List.len<Int>(list: read dims) == 1 {
+            List.push<Int>(list: mut ret, value: read flat)
+            return Some(take ret)
+        }
+        if List.len<Int>(list: read dims) == 2 {
+            let d1 = mk_const_int(cache: mut cache, dt: read dt_int32(), v: List.get<Int>(list: read dims, index: 1))
+            List.push<Int>(list: mut ret, value: read mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt_int32(), x: flat, y: d1))
+            List.push<Int>(list: mut ret, value: read mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt_int32(), x: flat, y: d1))
+            return Some(take ret)
+        }
+    }
+    if List.len<Int>(list: read limited) < List.len<Int>(list: read dims) {
+        let contr = get_contraction(old_shape: read dims, new_shape: read limited)
+        if contr.ok == false { return None }
+        let mut pos = 0
+        let mut gi = 0
+        while gi < List.len<Int>(list: read contr.group_lens) {
+            let glen = List.get<Int>(list: read contr.group_lens, index: gi)
+            let mut idx = List.get<Int>(list: read raw, index: gi)
+            let mut j = 0
+            while j < glen {
+                let old_axis = List.get<Int>(list: read contr.groups, index: pos)
+                if j < glen - 1 {
+                    let den = mk_const_int(cache: mut cache, dt: read dt_int32(), v: List.get<Int>(list: read dims, index: old_axis))
+                    List.push<Int>(list: mut ret, value: read mk_alu2(cache: mut cache, op: FLOORMOD, dt: read dt_int32(), x: idx, y: den))
+                    idx = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt_int32(), x: idx, y: den)
+                } else {
+                    List.push<Int>(list: mut ret, value: read idx)
+                }
+                pos = pos + 1
+                j = j + 1
+            }
+            gi = gi + 1
+        }
+        return Some(take ret)
+    }
+    return Some(take raw)
+}
+
+fn gpudims_axis_key(cache: read UOpCache, r: Int) -> Int {
+    if node_op(cache: read cache, id: r) != RANGE { return 0 - 1 }
+    return node_range_axis_id(cache: read cache, id: r)
+}
+
+fn gpudims_axis_list_contains(vals: read List<Int>, v: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        if List.get<Int>(list: read vals, index: i) == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn gpudims_axis_list_index(vals: read List<Int>, v: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        if List.get<Int>(list: read vals, index: i) == v { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn gpudims_push_sorted_unique(vals: mut List<Int>, v: Int) -> Unit {
+    if gpudims_axis_list_contains(vals: read vals, v: v) { return Unit }
+    List.push<Int>(list: mut vals, value: read v)
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        let mut j = i + 1
+        while j < List.len<Int>(list: read vals) {
+            let a = List.get<Int>(list: read vals, index: i)
+            let b = List.get<Int>(list: read vals, index: j)
+            if b < a {
+                List.set<Int>(list: mut vals, index: i, value: read b)
+                List.set<Int>(list: mut vals, index: j, value: read a)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn gpudims_range_end_int(cache: read UOpCache, r: Int) -> Int {
+    if node_num_src(cache: read cache, id: r) == 0 { return 1 }
+    let e = node_src_id(cache: read cache, id: r, k: 0)
+    if node_is_const_int(cache: read cache, id: e) { return node_const_int(cache: read cache, id: e) }
+    return 1
+}
+
+fn gpudims_find_range_by_axis(cache: read UOpCache, order: read List<Int>, axis: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let r = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: r) == RANGE && gpudims_axis_key(cache: read cache, r: r) == axis { return r }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<Int> {
+    local topo = uop_toposort(cache: read cache, id: s)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        if node_op(cache: read cache, id: List.get<Int>(list: read topo, index: i)) == SPECIAL { return None }
+        i = i + 1
+    }
+    local global_axes = List.new<Int>()
+    local local_axes = List.new<Int>()
+    i = 0
+    while i < List.len<Int>(list: read topo) {
+        let r = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: r) == RANGE {
+            let at = node_range_type(cache: read cache, id: r)
+            let ax = gpudims_axis_key(cache: read cache, r: r)
+            if at == AXIS_GLOBAL || at == AXIS_THREAD { gpudims_push_sorted_unique(vals: mut global_axes, v: ax) }
+            if at == AXIS_WARP || at == AXIS_LOCAL || at == AXIS_GROUP_REDUCE { gpudims_push_sorted_unique(vals: mut local_axes, v: ax) }
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read global_axes) == 0 && List.len<Int>(list: read local_axes) == 0 { return None }
+    local global_shape = List.new<Int>()
+    local local_shape = List.new<Int>()
+    i = 0
+    while i < List.len<Int>(list: read global_axes) {
+        let r = gpudims_find_range_by_axis(cache: read cache, order: read topo, axis: List.get<Int>(list: read global_axes, index: i))
+        List.push<Int>(list: mut global_shape, value: read gpudims_range_end_int(cache: read cache, r: r))
+        i = i + 1
+    }
+    i = 0
+    while i < List.len<Int>(list: read local_axes) {
+        let r = gpudims_find_range_by_axis(cache: read cache, order: read topo, axis: List.get<Int>(list: read local_axes, index: i))
+        List.push<Int>(list: mut local_shape, value: read gpudims_range_end_int(cache: read cache, r: r))
+        i = i + 1
+    }
+    let mut idxs = List.new<Int>()
+    if ctx.has_threads {
+        let mut n = 1
+        if List.len<Int>(list: read global_shape) > 0 { n = List.get<Int>(list: read global_shape, index: 0) }
+        List.push<Int>(list: mut idxs, value: read mk_define_var(cache: mut cache, name: read "core_id", min_val: 0, max_val: n - 1, dt: read dt_int32()))
+    } else {
+        if ctx.dont_use_locals {
+            if List.len<Int>(list: read local_axes) > 0 { return None }
+            match get_grouped_dims(cache: mut cache, prefix: read "idx", dims: read global_shape,
+                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true) {
+                Some(got) => { idxs = got }
+                None => { return None }
+            }
+        } else {
+            let mut local_idxs = List.new<Int>()
+            match get_grouped_dims(cache: mut cache, prefix: read "lidx", dims: read local_shape,
+                                   max_sizes: read ctx.local_max, has_max: ctx.has_local_max, reverse: false) {
+                Some(got) => { local_idxs = got }
+                None => { return None }
+            }
+            let mut global_idxs = List.new<Int>()
+            match get_grouped_dims(cache: mut cache, prefix: read "gidx", dims: read global_shape,
+                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true) {
+                Some(got) => { global_idxs = got }
+                None => { return None }
+            }
+            let mut gi = 0
+            while gi < List.len<Int>(list: read global_idxs) {
+                List.push<Int>(list: mut idxs, value: read List.get<Int>(list: read global_idxs, index: gi))
+                gi = gi + 1
+            }
+            let mut li = 0
+            while li < List.len<Int>(list: read local_idxs) {
+                List.push<Int>(list: mut idxs, value: read List.get<Int>(list: read local_idxs, index: li))
+                li = li + 1
+            }
+        }
+    }
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    i = 0
+    while i < List.len<Int>(list: read topo) {
+        let r = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: r) == RANGE {
+            let ax = gpudims_axis_key(cache: read cache, r: r)
+            let gi = gpudims_axis_list_index(vals: read global_axes, v: ax)
+            let li = gpudims_axis_list_index(vals: read local_axes, v: ax)
+            if gi >= 0 && node_range_type(cache: read cache, id: r) != AXIS_REDUCE && gi < List.len<Int>(list: read idxs) {
+                List.push<Int>(list: mut olds, value: read r)
+                List.push<Int>(list: mut news, value: read List.get<Int>(list: read idxs, index: gi))
+            } else {
+                if li >= 0 && node_range_type(cache: read cache, id: r) != AXIS_REDUCE {
+                    let at = List.len<Int>(list: read global_axes) + li
+                    if at < List.len<Int>(list: read idxs) {
+                        List.push<Int>(list: mut olds, value: read r)
+                        List.push<Int>(list: mut news, value: read List.get<Int>(list: read idxs, index: at))
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read olds) == 0 { return None }
+    return Some(memory_replace_many(cache: mut cache, id: s, olds: read olds, news: read news))
+}
+
+fn pm_add_gpudims(cache: mut UOpCache, s: Int) -> Option<Int> {
+    let ctx = gpudims_default_context()
+    return add_gpudims(cache: mut cache, ctx: read ctx, s: s)
+}

@@ -2,7 +2,7 @@
 //
 // This ports the simple naive allreduce graph shape: first make the multi-device input contiguous,
 // select each shard, copy it to the target device, then reduce the copied shards with the requested ALU op.
-// Ring/all2all chunking and allreduce function wrapping remain future scheduler slices.
+// Ring/all2all chunking remains a future scheduler slice.
 features: local
 
 struct AllreduceBuild derives(Clone) {
@@ -63,4 +63,28 @@ fn allreduce_handle_naive(cache: mut UOpCache, red: Int) -> fresh AllreduceBuild
         i = i + 1
     }
     return AllreduceBuild(result: result, copies: ndev, ok: true)
+}
+
+fn handle_allreduce(cache: mut UOpCache, buf: Int, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != ALLREDUCE { return None }
+    if node_num_src(cache: read cache, id: red) <= 0 { return None }
+    let red_buf = node_src_id(cache: read cache, id: red, k: 0)
+    if red_buf != buf { return None }
+    let built = allreduce_handle_naive(cache: mut cache, red: red)
+    if built.ok == false { return None }
+    return Some(built.result)
+}
+
+fn create_allreduce_function(cache: mut UOpCache, buf: Int, red: Int, output: Int, has_output: Bool) -> Option<Int> {
+    match handle_allreduce(cache: mut cache, buf: buf, red: red) {
+        Some(reduced) => {
+            let mut out = mk_contiguous(cache: mut cache, x: reduced)
+            if has_output { out = output }
+            let stored = uop_store(cache: mut cache, id: out, value: reduced, gate: read None)
+            local deps = List.new<Int>()
+            List.push<Int>(list: mut deps, value: read stored)
+            return Some(uop_after(cache: mut cache, id: out, srcs: read deps))
+        }
+        None => { return None }
+    }
 }

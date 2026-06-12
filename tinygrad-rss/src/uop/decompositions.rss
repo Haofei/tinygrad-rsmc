@@ -43,6 +43,20 @@ fn decomp_const_power_exp(cache: read UOpCache, id: Int) -> Option<Int> {
     return decomp_power_of_two_exp(v: node_const_int(cache: read cache, id: id))
 }
 
+fn decomp_is_true_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_is_const_int(cache: read cache, id: id) == false { return false }
+    let dt = node_dtype(cache: read cache, id: id)
+    if dtype_is_bool(d: read dt) == false { return false }
+    return node_const_int(cache: read cache, id: id) != 0
+}
+
+fn decomp_is_signed_int(cache: read UOpCache, id: Int) -> Bool {
+    let dt = node_dtype(cache: read cache, id: id)
+    if dtype_is_int(d: read dt) == false { return false }
+    if dtype_is_unsigned(d: read dt) { return false }
+    return true
+}
+
 fn decomp_sign_diff(cache: mut UOpCache, a: Int, b: Int) -> Int {
     let dt = node_full_dtype(cache: read cache, id: a)
     let zero_a = decomp_const_zero_like(cache: mut cache, x: a)
@@ -104,6 +118,20 @@ fn decomp_floormod_to_cmod(cache: mut UOpCache, id: Int) -> Option<Int> {
     let zero = decomp_const_zero_like(cache: mut cache, x: b)
     let addend = mk_where(cache: mut cache, dt: read dt, cond: adjust_bool, tval: b, fval: zero)
     return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: r, y: addend))
+}
+
+fn decomp_cmod_nonnegative_to_sub(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMOD { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dtype_is_int(d: read dt) == false { return None }
+    let ar = uop_min_max(cache: read cache, id: a)
+    if ar.lo < 0 && dtype_is_unsigned(d: read dt) == false { return None }
+    let q = mk_alu2(cache: mut cache, op: CDIV, dt: read dt, x: a, y: b)
+    let dq = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: b, y: q)
+    return Some(mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: a, y: dq))
 }
 
 fn decomp_max_to_where(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -239,6 +267,106 @@ fn decomp_recip_to_fdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
     return Some(mk_alu2(cache: mut cache, op: FDIV, dt: read dt, x: one, y: x))
 }
 
+fn decomp_not_cmplt_to_bound(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let cmp = node_src_id(cache: read cache, id: id, k: 0)
+    let truth = node_src_id(cache: read cache, id: id, k: 1)
+    if decomp_is_true_const(cache: read cache, id: truth) == false { return None }
+    if node_op(cache: read cache, id: cmp) != CMPLT { return None }
+    let a = node_src_id(cache: read cache, id: cmp, k: 0)
+    let b = node_src_id(cache: read cache, id: cmp, k: 1)
+    if decomp_is_signed_int(cache: read cache, id: a) == false { return None }
+    let dt = node_full_dtype(cache: read cache, id: a)
+    if node_is_const_int(cache: read cache, id: b) {
+        let c = node_const_int(cache: read cache, id: b)
+        let lower = mk_const_int(cache: mut cache, dt: read dt, v: c - 1)
+        return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: lower, y: a))
+    }
+    if node_is_const_int(cache: read cache, id: a) {
+        let c = node_const_int(cache: read cache, id: a)
+        let upper = mk_const_int(cache: mut cache, dt: read dt, v: c + 1)
+        return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: b, y: upper))
+    }
+    return None
+}
+
+fn decomp_negated_signed_lt(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPLT { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    if node_op(cache: read cache, id: lhs) != MUL { return None }
+    let x0 = node_src_id(cache: read cache, id: lhs, k: 0)
+    let x1 = node_src_id(cache: read cache, id: lhs, k: 1)
+    let mut x = x0
+    if node_is_const_int(cache: read cache, id: x1) {
+        if node_const_int(cache: read cache, id: x1) != 0 - 1 { return None }
+    } else {
+        if node_is_const_int(cache: read cache, id: x0) == false { return None }
+        if node_const_int(cache: read cache, id: x0) != 0 - 1 { return None }
+        x = x1
+    }
+    if decomp_is_signed_int(cache: read cache, id: x) == false { return None }
+    let dt = node_full_dtype(cache: read cache, id: x)
+    if node_is_const_int(cache: read cache, id: rhs) {
+        let c = node_const_int(cache: read cache, id: rhs)
+        let nc = mk_const_int(cache: mut cache, dt: read dt, v: 0 - c)
+        return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: nc, y: x))
+    }
+    if node_op(cache: read cache, id: rhs) == MUL {
+        let y0 = node_src_id(cache: read cache, id: rhs, k: 0)
+        let y1 = node_src_id(cache: read cache, id: rhs, k: 1)
+        let mut y = y0
+        let mut cnode = y1
+        if node_is_const_int(cache: read cache, id: y0) {
+            y = y1
+            cnode = y0
+        }
+        if node_is_const_int(cache: read cache, id: cnode) {
+            let c = node_const_int(cache: read cache, id: cnode)
+            let nc = mk_const_int(cache: mut cache, dt: read dt, v: 0 - c)
+            let ync = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: y, y: nc)
+            return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: ync, y: x))
+        }
+    }
+    return None
+}
+
+fn decomp_tight_range_to_eq(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != AND { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let left = node_src_id(cache: read cache, id: id, k: 0)
+    let right = node_src_id(cache: read cache, id: id, k: 1)
+    if node_op(cache: read cache, id: left) != CMPLT { return None }
+    if node_op(cache: read cache, id: right) != CMPLT { return None }
+    let c1 = node_src_id(cache: read cache, id: left, k: 0)
+    let x1 = node_src_id(cache: read cache, id: left, k: 1)
+    let x2 = node_src_id(cache: read cache, id: right, k: 0)
+    let c2 = node_src_id(cache: read cache, id: right, k: 1)
+    if x1 != x2 { return None }
+    if node_is_const_int(cache: read cache, id: c1) == false { return None }
+    if node_is_const_int(cache: read cache, id: c2) == false { return None }
+    let lo = node_const_int(cache: read cache, id: c1)
+    let hi = node_const_int(cache: read cache, id: c2)
+    if lo + 1 != hi - 1 { return None }
+    let dt = node_full_dtype(cache: read cache, id: x1)
+    let target = mk_const_int(cache: mut cache, dt: read dt, v: lo + 1)
+    return Some(mk_alu2(cache: mut cache, op: CMPEQ, dt: read dt_bool(), x: x1, y: target))
+}
+
+fn decomp_not_cmpne_to_cmpeq(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != CMPNE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let cmp = node_src_id(cache: read cache, id: id, k: 0)
+    let truth = node_src_id(cache: read cache, id: id, k: 1)
+    if decomp_is_true_const(cache: read cache, id: truth) == false { return None }
+    if node_op(cache: read cache, id: cmp) != CMPNE { return None }
+    let a = node_src_id(cache: read cache, id: cmp, k: 0)
+    let b = node_src_id(cache: read cache, id: cmp, k: 1)
+    return Some(mk_alu2(cache: mut cache, op: CMPEQ, dt: read dt_bool(), x: a, y: b))
+}
+
 fn decomp_mul_recip_to_fdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != MUL { return None }
     if node_num_src(cache: read cache, id: id) != 2 { return None }
@@ -298,6 +426,26 @@ fn decomp_late_basic(cache: mut UOpCache, id: Int) -> Option<Int> {
         None => {}
     }
     match decomp_add_mul_to_mulacc(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_cmod_nonnegative_to_sub(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_not_cmplt_to_bound(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_negated_signed_lt(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_tight_range_to_eq(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_not_cmpne_to_cmpeq(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }

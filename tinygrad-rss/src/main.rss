@@ -800,6 +800,85 @@ fn main() -> Unit {
         Some(r) => { showb(label: read "uop.spec valid decomp add shl = ", v: spec_type_verify(cache: read mcache, id: r)) }
         None => { showb(label: read "uop.spec valid decomp add shl = ", v: false) }
     }
+    let dc_true = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 1)
+    let dc_cmod_pos_raw = mk_alu2(cache: mut mcache, op: CMOD, dt: read i32, x: dc_pos, y: dc_den3)
+    let dc_cmod_pos = decomp_late_basic(cache: mut mcache, id: dc_cmod_pos_raw)
+    let dc_lt_upper = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_pos, y: dc_den4)
+    let dc_not_lt_upper_raw = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: dc_lt_upper, y: dc_true)
+    let dc_not_lt_upper = decomp_late_basic(cache: mut mcache, id: dc_not_lt_upper_raw)
+    let dc_lt_lower = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_den3, y: dc_pos)
+    let dc_not_lt_lower_raw = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: dc_lt_lower, y: dc_true)
+    let dc_not_lt_lower = decomp_late_basic(cache: mut mcache, id: dc_not_lt_lower_raw)
+    let dc_neg_pos = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: dc_pos, y: dc_neg_one)
+    let dc_neg_lt_const_raw = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_neg_pos, y: dc_den4)
+    let dc_neg_lt_const = decomp_late_basic(cache: mut mcache, id: dc_neg_lt_const_raw)
+    let dc_neg_rhs = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: dc_neg, y: dc_den3)
+    let dc_neg_lt_mul_raw = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_neg_pos, y: dc_neg_rhs)
+    let dc_neg_lt_mul = decomp_late_basic(cache: mut mcache, id: dc_neg_lt_mul_raw)
+    let dc_c2 = mk_const_int(cache: mut mcache, dt: read i32, v: 2)
+    let dc_left_tight = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_c2, y: dc_pos)
+    let dc_right_tight = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: dc_pos, y: dc_den4)
+    let dc_tight_raw = mk_alu2(cache: mut mcache, op: AND, dt: read dt_bool(), x: dc_left_tight, y: dc_right_tight)
+    let dc_tight = decomp_late_basic(cache: mut mcache, id: dc_tight_raw)
+    let dc_ne_three = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: dc_pos, y: dc_den3)
+    let dc_not_ne_raw = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: dc_ne_three, y: dc_true)
+    let dc_not_ne = decomp_late_basic(cache: mut mcache, id: dc_not_ne_raw)
+    match dc_cmod_pos {
+        Some(r) => { showstr(label: read "uop.decomp cmod nonnegative = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp cmod nonnegative = None") }
+    }
+    match dc_not_lt_upper {
+        Some(r) => { showstr(label: read "uop.decomp not x<c = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp not x<c = None") }
+    }
+    match dc_not_lt_lower {
+        Some(r) => { showstr(label: read "uop.decomp not c<x = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp not c<x = None") }
+    }
+    match dc_neg_lt_const {
+        Some(r) => { showstr(label: read "uop.decomp -x<c = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp -x<c = None") }
+    }
+    match dc_neg_lt_mul {
+        Some(r) => { showstr(label: read "uop.decomp -x<y*c = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp -x<y*c = None") }
+    }
+    match dc_tight {
+        Some(r) => { showstr(label: read "uop.decomp tight range = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp tight range = None") }
+    }
+    match dc_not_ne {
+        Some(r) => { showstr(label: read "uop.decomp not ne = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp not ne = None") }
+    }
+    match dc_cmod_pos {
+        Some(r) => { showb(label: read "uop.spec valid decomp cmod nonnegative = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp cmod nonnegative = ", v: false) }
+    }
+    match dc_not_lt_upper {
+        Some(r) => { showb(label: read "uop.spec valid decomp not x<c = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp not x<c = ", v: false) }
+    }
+    match dc_not_lt_lower {
+        Some(r) => { showb(label: read "uop.spec valid decomp not c<x = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp not c<x = ", v: false) }
+    }
+    match dc_neg_lt_const {
+        Some(r) => { showb(label: read "uop.spec valid decomp -x<c = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp -x<c = ", v: false) }
+    }
+    match dc_neg_lt_mul {
+        Some(r) => { showb(label: read "uop.spec valid decomp -x<y*c = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp -x<y*c = ", v: false) }
+    }
+    match dc_tight {
+        Some(r) => { showb(label: read "uop.spec valid decomp tight range = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp tight range = ", v: false) }
+    }
+    match dc_not_ne {
+        Some(r) => { showb(label: read "uop.spec valid decomp not ne = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp not ne = ", v: false) }
+    }
     showb(label: read "uop.spec valid ALU = ", v: spec_type_verify(cache: read mcache, id: mea))
     let mf = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let bad_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: m2, y: mf)

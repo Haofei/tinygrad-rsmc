@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 18 RSS files, 14,025 LOC.
+  - integrated `tinygrad-rss/src`: 18 RSS files, 14,252 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -106,9 +106,10 @@ Integrated pieces:
   `CDIV`/`CMOD` with mixed-sign adjustment, `MAX` lowering to `CMPLT`+`WHERE`, and
   `RECIPROCAL`/multiply-by-reciprocal lowering to `FDIV`, plus power-of-two floor-mod to `AND`,
   power-of-two multiply/divide to shifts, `x*-1` to `NEG`, `x+(-y)` to `SUB`, and
-  multiply/shift-plus-add to `MULACC`. The large transcendental, long-integer, dtype, fast-idiv,
-  boolean-normalization, comparison-normalization, and target-op-availability rewrite machinery
-  remains unported.
+  multiply/shift-plus-add to `MULACC`, non-negative `CMOD` to `x-d*CDIV(x,d)`, selected signed
+  comparison canonicalizations, tight integer range to `CMPEQ`, and logical-not-of-`CMPNE` to
+  `CMPEQ`. The large transcendental, long-integer, dtype, fast-idiv, broader boolean/comparison
+  normalization, and target-op-availability rewrite machinery remains unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -231,7 +232,8 @@ Current integrated demo:
 - validates integrated decomposition rewrites for same-sign floor division, mixed-sign floor
   division/modulo, `MAX` to `WHERE`, reciprocal to `FDIV`, and multiply-by-reciprocal to `FDIV`,
   plus power-of-two floor-mod/multiply/divide, `NEG`, `SUB`, and `MULACC` lowering, with verifier
-  acceptance for each emitted graph.
+  acceptance for each emitted graph. It also validates non-negative `CMOD` lowering, selected
+  signed comparison canonicalizations, tight-range equality, and logical-not-of-`CMPNE` lowering.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a

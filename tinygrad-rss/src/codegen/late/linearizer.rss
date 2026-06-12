@@ -327,3 +327,27 @@ fn linearizer_has_gated_store(cache: read UOpCache, order: read List<Int>) -> Bo
     }
     return false
 }
+
+fn linearizer_cleaned_order(cache: mut UOpCache, sink: Int) -> fresh List<Int> {
+    local order = linearize(cache: read cache, sink: sink)
+    return linearizer_line_rewrite_cleanups(cache: mut cache, order: read order)
+}
+
+fn linearizer_do_linearize(cache: mut UOpCache, prg: Int) -> Int {
+    if node_op(cache: read cache, id: prg) != PROGRAM { return prg }
+    if node_num_src(cache: read cache, id: prg) < 2 { return prg }
+    let sink = node_src_id(cache: read cache, id: prg, k: 0)
+    if node_op(cache: read cache, id: sink) != SINK { return prg }
+    local order = linearizer_cleaned_order(cache: mut cache, sink: sink)
+    let lin = mk_linear(cache: mut cache, srcs: read order)
+    local src = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: prg) {
+        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: i))
+        i = i + 1
+    }
+    List.push<Int>(list: mut src, value: read lin)
+    let dt = node_full_dtype(cache: read cache, id: prg)
+    local arg = node_arg(cache: read cache, id: prg)
+    return intern(cache: mut cache, op: PROGRAM, dt: read dt, src: take src, arg: take arg)
+}

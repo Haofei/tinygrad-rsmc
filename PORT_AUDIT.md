@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 20 RSS files, 15,186 LOC.
+  - integrated `tinygrad-rss/src`: 20 RSS files, 15,217 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -128,8 +128,9 @@ Integrated pieces:
   splitting of multi-range `END` nodes into nested single-range `END`s. It also has the first
   `pm_linearize_cleanups`-style line rewrite: gated `STORE(ptr,value,gate)` becomes
   `IF(gate,ptr)`, ungated `STORE`, `ENDIF`, with later line sources remapped to the ungated store.
-  CFG edge insertion, pre-existing IF rejection, ISA register allocation, and `to_program`
-  integration remain unported.
+  The first `do_linearize` wrapper now appends a cleaned `LINEAR` UOp to a `PROGRAM(SINK, DEVICE)`.
+  CFG edge insertion, pre-existing IF rejection, ISA register allocation, estimates, render/source,
+  compile/binary, and full `to_program` orchestration remain unported.
 - `shape.rss`: UOp shape inference helpers, including upstream-shaped buffer size shape, `BINARY` byte length, `STACK`/`GEP`, `GETTUPLE`
   tuple-element shape propagation through `TUPLE` and `FUNCTION`, vector-shaped scalar/control helper nodes, broadcasting, and View/ShapeTracker core for
   contiguous views, permute, flip, expand, pad, shrink, flat-index expression, and contiguity
@@ -272,6 +273,8 @@ Current integrated demo:
 - validates `pm_linearize_cleanups`-style gated-store lowering over a real UOp line stream:
   the cleaned stream contains one `IF` and one `ENDIF`, no gated `STORE`, and still satisfies
   dependency ordering.
+- validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
+  `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -481,10 +484,10 @@ Major missing integrated work:
   behavior, full spec/validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler, memory planner, rangeify/indexing, multi-kernel behavior.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority
-  toposort, split-end cleanup, and gated-store line cleanup are integrated, but CFG/control-flow insertion,
-  pre-existing IF rejection, late expansion/devectorization,
-  range simplification, GPU dims, ISA/regalloc, program assembly/render/compile, and clear scope for
-  GPU-only optimization passes remain.
+  toposort, split-end cleanup, gated-store line cleanup, and `PROGRAM` -> `PROGRAM+LINEAR` wrapper
+  are integrated, but CFG/control-flow insertion, pre-existing IF rejection, late expansion/devectorization,
+  range simplification, GPU dims, ISA/regalloc, estimates, program render/source, compile/binary,
+  and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
   generic kernel wrapper now in `renderer/cstyle.rss`.
 - `device.py`, `runtime/*`, `runtime/support/*`: handwritten device/runtime/compiler layers.

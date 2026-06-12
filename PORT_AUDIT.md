@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 28 RSS files, 21,503 LOC.
+  - integrated `tinygrad-rss/src`: 28 RSS files, 21,557 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -82,6 +82,7 @@ Integrated pieces:
   `gettuple`, `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`,
   source-shaped `load`/`store`/`wait`/`end`/`after`/`barrier`, `split_uop`, movement `base`,
   `multibase`, scheduler-facing `buf_uop` projection through movement/`AFTER`/`MSELECT`/`MSTACK`,
+  source-shaped `multi`/`copy_to_device`/`allreduce`/`mselect`/`mstack`/`detach`/`contiguous_backward`,
   source-aligned `has_buffer_identity`, source-aligned `contiguous` no-op behavior and `bufferize`
   as `STAGE`, concrete `as_shape`,
   movement-argument extraction, full-dtype-preserving replace-by-arg/substitute, replace-by-dtype, structural key rendering,
@@ -334,6 +335,9 @@ Current integrated demo:
   `UNIQUE`-backed `BUFFER` shape/device count, `COPY`, `MULTI`, `MSELECT`, `MSTACK`, `ALLREDUCE`,
   `CONTIGUOUS`, `DETACH`, `CUSTOM_FUNCTION`, and rejection of empty devices, out-of-range
   `MSELECT`, and invalid `ALLREDUCE` ops.
+- validates source-shaped multi-device method helpers for `copy_to_device`, `multi`,
+  `mselect`, `mstack`, `allreduce`, `detach`, and `contiguous_backward`, plus full-dtype
+  preservation through `COPY`, `CONTIGUOUS`, and `DETACH`.
 - validates source-aligned UOp `axis` propagation for `MULTI`, `COPY`, sharded `PARAM`, ALU,
   `GETTUPLE`, `REDUCE`, and `PERMUTE`.
 - validates source-aligned UOp device key/count propagation for tuple buffers, `COPY`,

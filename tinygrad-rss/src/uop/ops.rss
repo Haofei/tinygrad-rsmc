@@ -682,7 +682,7 @@ fn mk_new_buffer_tuple(cache: mut UOpCache, devices: read List<String>, size: In
 }
 
 fn mk_copy_to_device(cache: mut UOpCache, x: Int, device: read String) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let dev = mk_device(cache: mut cache, device: read device)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
@@ -692,7 +692,7 @@ fn mk_copy_to_device(cache: mut UOpCache, x: Int, device: read String) -> Int {
 }
 
 fn mk_allreduce(cache: mut UOpCache, x: Int, op: Ops, device: read String) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     let dev = mk_device(cache: mut cache, device: read device)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
@@ -702,7 +702,7 @@ fn mk_allreduce(cache: mut UOpCache, x: Int, op: Ops, device: read String) -> In
 }
 
 fn mk_multi(cache: mut UOpCache, x: Int, axis: Int) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     local a = ArgInt(value: axis)
@@ -710,7 +710,7 @@ fn mk_multi(cache: mut UOpCache, x: Int, axis: Int) -> Int {
 }
 
 fn mk_mselect(cache: mut UOpCache, x: Int, index: Int) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     local a = ArgInt(value: index)
@@ -726,7 +726,7 @@ fn mk_mstack(cache: mut UOpCache, dt: read DType, srcs: read List<Int>) -> Int {
 fn mk_contiguous(cache: mut UOpCache, x: Int) -> Int {
     let op = node_op(cache: read cache, id: x)
     if op == CONTIGUOUS { return x }
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     local a = ArgNone
@@ -734,7 +734,7 @@ fn mk_contiguous(cache: mut UOpCache, x: Int) -> Int {
 }
 
 fn mk_detach(cache: mut UOpCache, x: Int) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     local a = ArgNone
@@ -742,7 +742,7 @@ fn mk_detach(cache: mut UOpCache, x: Int) -> Int {
 }
 
 fn mk_contiguous_backward(cache: mut UOpCache, x: Int) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     local a = ArgNone
@@ -775,7 +775,7 @@ fn mk_bufferize_arg_device_int(device: Int, addrspace: read AddrSpace, removable
 }
 
 fn mk_stage(cache: mut UOpCache, x: Int, ranges: read List<Int>, opts: read BufferizeArg) -> Int {
-    let dt = node_dtype(cache: read cache, id: x)
+    let dt = node_full_dtype(cache: read cache, id: x)
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read x)
     let mut i = 0

@@ -504,6 +504,42 @@ fn uop_barrier(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
     return mk_barrier(cache: mut cache, id: id, srcs: read srcs)
 }
 
+fn uop_multi(cache: mut UOpCache, id: Int, axis: Int) -> Int {
+    return mk_multi(cache: mut cache, x: id, axis: axis)
+}
+
+fn uop_copy_to_device(cache: mut UOpCache, id: Int, device: read String) -> Int {
+    return mk_copy_to_device(cache: mut cache, x: id, device: read device)
+}
+
+fn uop_allreduce(cache: mut UOpCache, id: Int, op: Ops, device: read String) -> Int {
+    return mk_allreduce(cache: mut cache, x: id, op: op, device: read device)
+}
+
+fn uop_mselect(cache: mut UOpCache, id: Int, index: Int) -> Int {
+    return mk_mselect(cache: mut cache, x: id, index: index)
+}
+
+fn uop_mstack(cache: mut UOpCache, id: Int, srcs: read List<Int>) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local all = List.new<Int>()
+    List.push<Int>(list: mut all, value: read id)
+    let mut i = 0
+    while i < List.len<Int>(list: read srcs) {
+        List.push<Int>(list: mut all, value: read List.get<Int>(list: read srcs, index: i))
+        i = i + 1
+    }
+    return mk_mstack(cache: mut cache, dt: read dt, srcs: read all)
+}
+
+fn uop_detach(cache: mut UOpCache, id: Int) -> Int {
+    return mk_detach(cache: mut cache, x: id)
+}
+
+fn uop_contiguous_backward(cache: mut UOpCache, id: Int) -> Int {
+    return mk_contiguous_backward(cache: mut cache, x: id)
+}
+
 fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int {
     if id == old_id { return new_id }
     local new_src = List.new<Int>()

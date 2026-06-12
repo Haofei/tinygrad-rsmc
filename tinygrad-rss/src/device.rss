@@ -1,0 +1,240 @@
+// Integrated source-shaped slice of tinygrad/device.py.
+//
+// This covers the metadata side of Device/Buffer before real runtime allocators:
+// canonical device strings, BufferSpec, Buffer, MultiBuffer, allocation state,
+// nbytes, and view descriptors. Opaque memory handles, allocator LRU behavior,
+// compiler caches, dynamic runtime imports, and profile finalization remain
+// later runtime slices. The RSS struct is named TGBuffer to avoid a generated
+// Rust backend collision with std::io::Buffer.
+features: local
+
+struct BufferSpec derives(Clone, Eq, Hash) {
+    uncached: Bool,
+    cpu_access: Bool,
+    host: Bool,
+    nolru: Bool,
+    has_external_ptr: Bool,
+    external_ptr: Int,
+}
+
+struct TGBuffer derives(Clone) {
+    device: String,
+    size: Int,
+    dtype: DType,
+    has_options: Bool,
+    options: BufferSpec,
+    offset: Int,
+    has_base: Bool,
+    base_device: String,
+    base_size: Int,
+    base_offset: Int,
+    allocated: Bool,
+    allocated_views: Int,
+    uop_refcount: Int,
+}
+
+struct MultiBuffer derives(Clone) {
+    bufs: List<TGBuffer>,
+}
+
+fn buffer_spec_default() -> fresh BufferSpec {
+    return BufferSpec(uncached: false, cpu_access: false, host: false, nolru: false,
+                      has_external_ptr: false, external_ptr: 0)
+}
+
+fn buffer_spec_external_ptr(ptr: Int) -> fresh BufferSpec {
+    return BufferSpec(uncached: false, cpu_access: false, host: false, nolru: false,
+                      has_external_ptr: true, external_ptr: ptr)
+}
+
+fn device_default() -> fresh String { return String.copy(value: read "CPU") }
+
+fn device_strip_zero_suffix(device: read String) -> fresh String {
+    let n = String.len(value: read device)
+    if n > 2 {
+        if String.ends_with(value: read device, suffix: read ":0") {
+            return String.slice(value: read device, start: 0, len: n - 2)
+        }
+    }
+    return String.copy(value: read device)
+}
+
+fn device_canonicalize(device: read String) -> fresh String {
+    if String.len(value: read device) == 0 { return device_default() }
+    local stripped = device_strip_zero_suffix(device: read device)
+    if stripped == "cpu" || stripped == "CPU" { return String.copy(value: read "CPU") }
+    if stripped == "disk" || stripped == "DISK" { return String.copy(value: read "DISK") }
+    if stripped == "tinyfs" || stripped == "TINYFS" { return String.copy(value: read "TINYFS") }
+    if stripped == "npy" || stripped == "NPY" { return String.copy(value: read "NPY") }
+    if stripped == "python" || stripped == "PYTHON" { return String.copy(value: read "PYTHON") }
+    if stripped == "metal" || stripped == "METAL" { return String.copy(value: read "METAL") }
+    if stripped == "amd" || stripped == "AMD" { return String.copy(value: read "AMD") }
+    if stripped == "nv" || stripped == "NV" { return String.copy(value: read "NV") }
+    if stripped == "cuda" || stripped == "CUDA" { return String.copy(value: read "CUDA") }
+    if stripped == "qcom" || stripped == "QCOM" { return String.copy(value: read "QCOM") }
+    if stripped == "cl" || stripped == "CL" { return String.copy(value: read "CL") }
+    if stripped == "dsp" || stripped == "DSP" { return String.copy(value: read "DSP") }
+    if stripped == "webgpu" || stripped == "WEBGPU" { return String.copy(value: read "WEBGPU") }
+    if String.starts_with(value: read stripped, prefix: read "cpu:") {
+        return String.concat(left: read "CPU:", right: read String.slice(value: read stripped, start: 4, len: String.len(value: read stripped) - 4))
+    }
+    if String.starts_with(value: read stripped, prefix: read "CPU:") { return String.copy(value: read stripped) }
+    if String.starts_with(value: read stripped, prefix: read "disk:") {
+        return String.concat(left: read "DISK:", right: read String.slice(value: read stripped, start: 5, len: String.len(value: read stripped) - 5))
+    }
+    if String.starts_with(value: read stripped, prefix: read "DISK:") { return String.copy(value: read stripped) }
+    return String.copy(value: read stripped)
+}
+
+fn canonicalize_device(device: read String) -> fresh String {
+    return device_canonicalize(device: read device)
+}
+
+fn canonicalize_devices(devices: read List<String>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read devices) {
+        let d = List.get<String>(list: read devices, index: i)
+        List.push<String>(list: mut out, value: read canonicalize_device(device: read d))
+        i = i + 1
+    }
+    return take out
+}
+
+fn canonicalize_device_tuple(devices: read List<String>) -> fresh List<String> {
+    local canon = canonicalize_devices(devices: read devices)
+    local out = List.new<String>()
+    if List.len<String>(list: read canon) == 0 {
+        List.push<String>(list: mut out, value: read device_default())
+        return take out
+    }
+    let first = List.get<String>(list: read canon, index: 0)
+    let mut same = true
+    let mut i = 1
+    while i < List.len<String>(list: read canon) {
+        if List.get<String>(list: read canon, index: i) != first { same = false }
+        i = i + 1
+    }
+    if same {
+        List.push<String>(list: mut out, value: read first)
+        return take out
+    }
+    return take canon
+}
+
+fn buffer_new(device: read String, size: Int, dtype: read DType) -> fresh TGBuffer {
+    local opts = buffer_spec_default()
+    return TGBuffer(device: canonicalize_device(device: read device), size: size, dtype: dtype_scalar(d: read dtype),
+                  has_options: false, options: take opts, offset: 0, has_base: false,
+                  base_device: "", base_size: 0, base_offset: 0, allocated: false,
+                  allocated_views: 0, uop_refcount: 0)
+}
+
+fn buffer_new_with_options(device: read String, size: Int, dtype: read DType, options: read BufferSpec) -> fresh TGBuffer {
+    return TGBuffer(device: canonicalize_device(device: read device), size: size, dtype: dtype_scalar(d: read dtype),
+                  has_options: true, options: options.clone(), offset: 0, has_base: false,
+                  base_device: "", base_size: 0, base_offset: 0, allocated: false,
+                  allocated_views: 0, uop_refcount: 0)
+}
+
+fn buffer_ref(buf: read TGBuffer, cnt: Int) -> fresh TGBuffer {
+    return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                  base_size: buf.base_size, base_offset: buf.base_offset, allocated: buf.allocated,
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount + cnt)
+}
+
+fn buffer_is_allocated(buf: read TGBuffer) -> Bool { return buf.allocated }
+
+fn buffer_is_initialized(buf: read TGBuffer) -> Bool { return buffer_is_allocated(buf: read buf) }
+
+fn buffer_nbytes(buf: read TGBuffer) -> Int {
+    return buf.size * DType.itemsize(self: read buf.dtype)
+}
+
+fn buffer_allocate(buf: read TGBuffer) -> fresh TGBuffer {
+    return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                  base_size: buf.base_size, base_offset: buf.base_offset, allocated: true,
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount)
+}
+
+fn buffer_deallocate(buf: read TGBuffer) -> fresh TGBuffer {
+    return TGBuffer(device: String.copy(value: read buf.device), size: buf.size, dtype: dtype_copy(d: read buf.dtype),
+                  has_options: buf.has_options, options: buf.options.clone(), offset: buf.offset,
+                  has_base: buf.has_base, base_device: String.copy(value: read buf.base_device),
+                  base_size: buf.base_size, base_offset: buf.base_offset, allocated: false,
+                  allocated_views: buf.allocated_views, uop_refcount: buf.uop_refcount)
+}
+
+fn buffer_view(buf: read TGBuffer, size: Int, dtype: read DType, offset: Int) -> fresh TGBuffer {
+    let base_off = buf.offset
+    return TGBuffer(device: String.copy(value: read buf.device), size: size, dtype: dtype_scalar(d: read dtype),
+                  has_options: buf.has_options, options: buf.options.clone(), offset: base_off + offset,
+                  has_base: true, base_device: String.copy(value: read buf.device),
+                  base_size: buf.size, base_offset: buf.offset, allocated: buf.allocated,
+                  allocated_views: 0, uop_refcount: buf.uop_refcount)
+}
+
+fn buffer_repr(buf: read TGBuffer) -> fresh String {
+    let mut s = String.copy(value: read "<buf real:")
+    if buf.allocated { s = String.concat(left: read s, right: read "True") } else { s = String.concat(left: read s, right: read "False") }
+    s = String.concat(left: read s, right: read " device:")
+    s = String.concat(left: read s, right: read buf.device)
+    s = String.concat(left: read s, right: read " size:")
+    s = String.concat(left: read s, right: read Int.to_string(value: read buf.size))
+    s = String.concat(left: read s, right: read " dtype:")
+    s = String.concat(left: read s, right: read inverse_dtype_name(n: read buf.dtype.name))
+    if buf.has_base {
+        s = String.concat(left: read s, right: read " offset:")
+        s = String.concat(left: read s, right: read Int.to_string(value: read buf.offset))
+    }
+    return String.concat(left: read s, right: read ">")
+}
+
+fn multibuffer_new(devices: read List<String>, size: Int, dtype: read DType) -> fresh MultiBuffer {
+    local bufs = List.new<TGBuffer>()
+    let mut i = 0
+    while i < List.len<String>(list: read devices) {
+        let d = List.get<String>(list: read devices, index: i)
+        List.push<TGBuffer>(list: mut bufs, value: read buffer_new(device: read d, size: size, dtype: read dtype))
+        i = i + 1
+    }
+    return MultiBuffer(bufs: take bufs)
+}
+
+fn multibuffer_size(mb: read MultiBuffer) -> Int {
+    if List.len<TGBuffer>(list: read mb.bufs) == 0 { return 0 }
+    let b = List.get<TGBuffer>(list: read mb.bufs, index: 0)
+    return b.size
+}
+
+fn multibuffer_dtype(mb: read MultiBuffer) -> fresh DType {
+    if List.len<TGBuffer>(list: read mb.bufs) == 0 { return dt_void() }
+    let b = List.get<TGBuffer>(list: read mb.bufs, index: 0)
+    return dtype_copy(d: read b.dtype)
+}
+
+fn multibuffer_is_allocated(mb: read MultiBuffer) -> Bool {
+    if List.len<TGBuffer>(list: read mb.bufs) == 0 { return false }
+    let mut i = 0
+    while i < List.len<TGBuffer>(list: read mb.bufs) {
+        let b = List.get<TGBuffer>(list: read mb.bufs, index: i)
+        if buffer_is_allocated(buf: read b) == false { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn multibuffer_ref(mb: read MultiBuffer, cnt: Int) -> fresh MultiBuffer {
+    local bufs = List.new<TGBuffer>()
+    let mut i = 0
+    while i < List.len<TGBuffer>(list: read mb.bufs) {
+        let b = List.get<TGBuffer>(list: read mb.bufs, index: i)
+        List.push<TGBuffer>(list: mut bufs, value: read buffer_ref(buf: read b, cnt: cnt))
+        i = i + 1
+    }
+    return MultiBuffer(bufs: take bufs)
+}

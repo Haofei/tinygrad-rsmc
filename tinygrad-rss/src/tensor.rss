@@ -3333,6 +3333,24 @@ fn tensor_masked_select(cache: mut UOpCache, x: Int, mask: Int, size: Int, fill_
     return tensor_masked_select_size(cache: mut cache, x: x, mask: mask, size: size, fill_value: fill_value)
 }
 
+fn tensor_masked_select_dynamic_size(cache: mut UOpCache, x: Int, mask: Int) -> Int {
+    let mb = broadcast_to(cache: mut cache, x: mask, target: read uop_shape(cache: read cache, id: x))
+    let mf = tensor_flatten(cache: mut cache, x: mb, start_dim: 0, end_dim: 0 - 1)
+    local vals = eval_tensor(cache: read cache, id: mf)
+    let mut count = 0
+    let mut i = 0
+    while i < List.len<Float>(list: read vals) {
+        if List.get<Float>(list: read vals, index: i) != 0.0 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn tensor_masked_select_dynamic(cache: mut UOpCache, x: Int, mask: Int, fill_value: Float) -> Int {
+    let size = tensor_masked_select_dynamic_size(cache: mut cache, x: x, mask: mask)
+    return tensor_masked_select_size(cache: mut cache, x: x, mask: mask, size: size, fill_value: fill_value)
+}
+
 fn tensor_nonzero(cache: mut UOpCache, x: Int, size: Int, fill_value: Float) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     let n = List.get<Int>(list: read shape, index: 0)
@@ -3344,6 +3362,70 @@ fn tensor_nonzero(cache: mut UOpCache, x: Int, size: Int, fill_value: Float) -> 
     push1(l: mut out_shape, a: size)
     push1(l: mut out_shape, a: 1)
     return tensor_reshape(cache: mut cache, x: selected, new_shape: read out_shape)
+}
+
+fn tensor_nonzero_materialized(cache: mut UOpCache, x: Int, size: Int, fill_value: Float) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let ndim = List.len<Int>(list: read shape)
+    local out_shape = List.new<Int>()
+    push1(l: mut out_shape, a: size)
+    push1(l: mut out_shape, a: ndim)
+    local out = List.new<Float>()
+    local vals = eval_tensor(cache: read cache, id: x)
+    let mut found = 0
+    let mut linear = 0
+    while linear < List.len<Float>(list: read vals) {
+        let v = List.get<Float>(list: read vals, index: linear)
+        if v != 0.0 && found < size {
+            let mut ax = 0
+            while ax < ndim {
+                let mut stride = 1
+                let mut sx = ax + 1
+                while sx < ndim {
+                    stride = stride * List.get<Int>(list: read shape, index: sx)
+                    sx = sx + 1
+                }
+                let coord = (linear / stride) % List.get<Int>(list: read shape, index: ax)
+                pushf1(l: mut out, a: Int.to_float(value: read coord))
+                ax = ax + 1
+            }
+            found = found + 1
+        }
+        linear = linear + 1
+    }
+    while found < size {
+        let mut ax2 = 0
+        while ax2 < ndim {
+            pushf1(l: mut out, a: fill_value)
+            ax2 = ax2 + 1
+        }
+        found = found + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_int32(), shape: read out_shape, data: read out)
+}
+
+fn tensor_nonzero_nd(cache: mut UOpCache, x: Int, size: Int, fill_value: Float) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    if List.len<Int>(list: read shape) == 1 {
+        return tensor_nonzero(cache: mut cache, x: x, size: size, fill_value: fill_value)
+    }
+    return tensor_nonzero_materialized(cache: mut cache, x: x, size: size, fill_value: fill_value)
+}
+
+fn tensor_nonzero_dynamic_size(cache: read UOpCache, x: Int) -> Int {
+    local vals = eval_tensor(cache: read cache, id: x)
+    let mut count = 0
+    let mut i = 0
+    while i < List.len<Float>(list: read vals) {
+        if List.get<Float>(list: read vals, index: i) != 0.0 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn tensor_nonzero_dynamic(cache: mut UOpCache, x: Int, fill_value: Float) -> Int {
+    let size = tensor_nonzero_dynamic_size(cache: read cache, x: x)
+    return tensor_nonzero_nd(cache: mut cache, x: x, size: size, fill_value: fill_value)
 }
 
 fn tensor_norm_slice_bound(v: Int, dim: Int) -> Int {

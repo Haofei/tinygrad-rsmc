@@ -477,7 +477,8 @@ Integrated pieces:
   buffer placeholder, `from_url` through sync `Http.get`/`HttpResponse.bytes` with gzip byte
   decompression through `Gzip.decompress_bytes`,
   and `decode_hevc_frame` as an `encdec` `CUSTOM_FUNCTION` call dependency graph wrapper),
-  explicit-size graph-shaped `masked_select` and constrained 1D `nonzero` over scatter/gather
+  explicit-size graph-shaped `masked_select`, evaluator-backed default-size `masked_select`,
+  constrained 1D graph-shaped `nonzero`, and evaluator-backed N-D/default-size `nonzero`
   compaction,
   plus legacy materialized gather indexing (`gather_axis0`), upstream-style `dot`/`matmul`/`linear`
   composition for vector, matrix, and batched cases, upstream-style `relu` as
@@ -791,6 +792,9 @@ Current integrated demo:
   `copysign`, `masked_fill`, `detach`, `contiguous_backward`, all/axis arg reductions, sort,
   argsort, topk, all/axis statistics aliases, softmax/log_softmax/logsumexp aliases, and
   cumsum/cumprod aliases.
+- validates Tensor dynamic indexing helpers through the active tensor smoke: default-size
+  `masked_select`, default-size 2D `nonzero`, and padded/truncated explicit-size 2D `nonzero`
+  on materialized/evaluator-backed tensors.
 - validates Tensor normalization helpers against real tinygrad: `normalize(p=2, dim=1)`,
   `normalize(p=1, dim=0)`, `normalize(p=0, dim=1)`, and `layernorm(axis=1, eps=1e-5)`.
 - validates tuple-axis Tensor statistics/normalization against real tinygrad: `mean(axis=(1,2))`,
@@ -930,8 +934,8 @@ Major missing integrated work:
   actual HEVC decode runtime execution behind the `encdec` custom function,
   real packed image convolution kernels and lazy Winograd convolution integration rather than the
   current direct-conv fallback,
-  full symbolic/lazy indexing semantics, dynamic-size `masked_select`/`nonzero` paths that depend
-  on runtime `.item()` shape discovery,
+  full symbolic/lazy indexing semantics beyond the current evaluator-backed default-size
+  `masked_select`/`nonzero` paths,
   broader composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   remaining Python-facing method breadth such as `bitwise_not`, exact object magic, and

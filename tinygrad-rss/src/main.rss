@@ -647,6 +647,72 @@ fn main() -> Unit {
     showstr(label: read "uop.divmod gcd remainder div = ", v: read uop_render_expr(cache: read mcache, id: dm_gcd_div))
     showstr(label: read "uop.divmod gcd remainder mod = ", v: read uop_render_expr(cache: read mcache, id: dm_gcd_mod))
     showstr(label: read "uop.divmod factor remainder div = ", v: read uop_render_expr(cache: read mcache, id: dm_factor_div))
+    let dc_pos = mk_define_var(cache: mut mcache, name: read "dp", min_val: 0, max_val: 15, dt: read i32)
+    let dc_neg = mk_define_var(cache: mut mcache, name: read "dz", min_val: 0 - 7, max_val: 7, dt: read i32)
+    let dc_den4 = mk_const_int(cache: mut mcache, dt: read i32, v: 4)
+    let dc_den3 = mk_const_int(cache: mut mcache, dt: read i32, v: 3)
+    let dc_floor_pos_raw = mk_alu2(cache: mut mcache, op: FLOORDIV, dt: read i32, x: dc_pos, y: dc_den4)
+    let dc_floor_pos = decomp_late_basic(cache: mut mcache, id: dc_floor_pos_raw)
+    let dc_floor_general_raw = mk_alu2(cache: mut mcache, op: FLOORDIV, dt: read i32, x: dc_neg, y: dc_den3)
+    let dc_floor_general = decomp_late_basic(cache: mut mcache, id: dc_floor_general_raw)
+    let dc_mod_general_raw = mk_alu2(cache: mut mcache, op: FLOORMOD, dt: read i32, x: dc_neg, y: dc_den3)
+    let dc_mod_general = decomp_late_basic(cache: mut mcache, id: dc_mod_general_raw)
+    let dc_max_raw = mk_alu2(cache: mut mcache, op: MAX, dt: read i32, x: dc_neg, y: dc_den3)
+    let dc_max = decomp_late_basic(cache: mut mcache, id: dc_max_raw)
+    let dc_fa = mk_define_var(cache: mut mcache, name: read "fa", min_val: 1, max_val: 9, dt: read dt_float32())
+    let dc_fb = mk_define_var(cache: mut mcache, name: read "fb", min_val: 1, max_val: 9, dt: read dt_float32())
+    let dc_recip_raw = mk_alu1(cache: mut mcache, op: RECIPROCAL, dt: read dt_float32(), x: dc_fb)
+    let dc_recip = decomp_late_basic(cache: mut mcache, id: dc_recip_raw)
+    let dc_mul_recip_raw = mk_alu2(cache: mut mcache, op: MUL, dt: read dt_float32(), x: dc_fa, y: dc_recip_raw)
+    let dc_mul_recip = decomp_late_basic(cache: mut mcache, id: dc_mul_recip_raw)
+    match dc_floor_pos {
+        Some(r) => { showstr(label: read "uop.decomp floordiv same-sign = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp floordiv same-sign = None") }
+    }
+    match dc_floor_general {
+        Some(r) => { showstr(label: read "uop.decomp floordiv general = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp floordiv general = None") }
+    }
+    match dc_mod_general {
+        Some(r) => { showstr(label: read "uop.decomp floormod general = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp floormod general = None") }
+    }
+    match dc_max {
+        Some(r) => { showstr(label: read "uop.decomp max = ", v: read uop_render_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp max = None") }
+    }
+    match dc_recip {
+        Some(r) => { showstr(label: read "uop.decomp reciprocal = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp reciprocal = None") }
+    }
+    match dc_mul_recip {
+        Some(r) => { showstr(label: read "uop.decomp mul reciprocal = ", v: read uop_render_infer_expr(cache: read mcache, id: r)) }
+        None => { Log.write(message: read "uop.decomp mul reciprocal = None") }
+    }
+    match dc_floor_pos {
+        Some(r) => { showb(label: read "uop.spec valid decomp same-sign div = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp same-sign div = ", v: false) }
+    }
+    match dc_floor_general {
+        Some(r) => { showb(label: read "uop.spec valid decomp general div = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp general div = ", v: false) }
+    }
+    match dc_mod_general {
+        Some(r) => { showb(label: read "uop.spec valid decomp general mod = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp general mod = ", v: false) }
+    }
+    match dc_max {
+        Some(r) => { showb(label: read "uop.spec valid decomp max = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp max = ", v: false) }
+    }
+    match dc_recip {
+        Some(r) => { showb(label: read "uop.spec valid decomp reciprocal = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp reciprocal = ", v: false) }
+    }
+    match dc_mul_recip {
+        Some(r) => { showb(label: read "uop.spec valid decomp mul reciprocal = ", v: spec_type_verify(cache: read mcache, id: r)) }
+        None => { showb(label: read "uop.spec valid decomp mul reciprocal = ", v: false) }
+    }
     showb(label: read "uop.spec valid ALU = ", v: spec_type_verify(cache: read mcache, id: mea))
     let mf = mk_const_float(cache: mut mcache, dt: read dt_float32(), v: 2.5)
     let bad_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: m2, y: mf)

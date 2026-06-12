@@ -1,0 +1,140 @@
+// Integrated source-shaped slice of tinygrad/uop/decompositions.py late rewrites.
+//
+// These helpers lower high-level ALU nodes into backend-friendly UOps over the
+// interned DAG. They are explicit helpers for now because the backend rewrite
+// pipeline that decides which target ops are available is not integrated yet.
+features: local
+
+fn decomp_same_sign_divmod_ranges(cache: read UOpCache, a: Int, b: Int) -> Bool {
+    let ar = uop_min_max(cache: read cache, id: a)
+    let br = uop_min_max(cache: read cache, id: b)
+    if ar.lo >= 0 && br.lo > 0 { return true }
+    if ar.hi <= 0 && br.hi < 0 { return true }
+    return false
+}
+
+fn decomp_const_zero_like(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    if dtype_is_float(d: read dt) { return mk_const_float(cache: mut cache, dt: read dt, v: 0.0) }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 0)
+}
+
+fn decomp_const_one_like(cache: mut UOpCache, x: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: x)
+    if dtype_is_float(d: read dt) { return mk_const_float(cache: mut cache, dt: read dt, v: 1.0) }
+    return mk_const_int(cache: mut cache, dt: read dt, v: 1)
+}
+
+fn decomp_sign_diff(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    let zero_a = decomp_const_zero_like(cache: mut cache, x: a)
+    let zero_b = decomp_const_zero_like(cache: mut cache, x: b)
+    let a_neg = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: a, y: zero_a)
+    let b_neg = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: b, y: zero_b)
+    return mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: a_neg, y: b_neg)
+}
+
+fn decomp_floor_adjust(cache: mut UOpCache, a: Int, b: Int) -> Int {
+    let dt = node_full_dtype(cache: read cache, id: a)
+    let r = mk_alu2(cache: mut cache, op: CMOD, dt: read dt, x: a, y: b)
+    let zero_r = decomp_const_zero_like(cache: mut cache, x: r)
+    let r_ne_zero = mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: r, y: zero_r)
+    let sign_diff = decomp_sign_diff(cache: mut cache, a: a, b: b)
+    return mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: r_ne_zero, y: sign_diff)
+}
+
+fn decomp_floordiv_to_cdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != FLOORDIV { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let q = mk_alu2(cache: mut cache, op: CDIV, dt: read dt, x: a, y: b)
+    if decomp_same_sign_divmod_ranges(cache: read cache, a: a, b: b) { return Some(q) }
+    let adjust_bool = decomp_floor_adjust(cache: mut cache, a: a, b: b)
+    let adjust = mk_cast(cache: mut cache, x: adjust_bool, dt: read dt)
+    return Some(mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: q, y: adjust))
+}
+
+fn decomp_floormod_to_cmod(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != FLOORMOD { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let r = mk_alu2(cache: mut cache, op: CMOD, dt: read dt, x: a, y: b)
+    if decomp_same_sign_divmod_ranges(cache: read cache, a: a, b: b) { return Some(r) }
+    let adjust_bool = decomp_floor_adjust(cache: mut cache, a: a, b: b)
+    let zero = decomp_const_zero_like(cache: mut cache, x: b)
+    let addend = mk_where(cache: mut cache, dt: read dt, cond: adjust_bool, tval: b, fval: zero)
+    return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: r, y: addend))
+}
+
+fn decomp_max_to_where(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != MAX { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    let cond = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: a, y: b)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: cond, tval: b, fval: a))
+}
+
+fn decomp_recip_to_fdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != RECIPROCAL { return None }
+    if node_num_src(cache: read cache, id: id) != 1 { return None }
+    let x = node_src_id(cache: read cache, id: id, k: 0)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dtype_is_float(d: read dt) == false { return None }
+    let one = decomp_const_one_like(cache: mut cache, x: id)
+    return Some(mk_alu2(cache: mut cache, op: FDIV, dt: read dt, x: one, y: x))
+}
+
+fn decomp_mul_recip_to_fdiv(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != MUL { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: id, k: 0)
+    let b = node_src_id(cache: read cache, id: id, k: 1)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    if dtype_is_float(d: read dt) == false { return None }
+
+    if node_op(cache: read cache, id: b) == RECIPROCAL {
+        let denom = node_src_id(cache: read cache, id: b, k: 0)
+        return Some(mk_alu2(cache: mut cache, op: FDIV, dt: read dt, x: a, y: denom))
+    }
+    if node_op(cache: read cache, id: b) == FDIV {
+        let num = node_src_id(cache: read cache, id: b, k: 0)
+        if node_is_const(cache: read cache, id: num) {
+            let one = decomp_const_one_like(cache: mut cache, x: num)
+            if one == num {
+                let denom = node_src_id(cache: read cache, id: b, k: 1)
+                return Some(mk_alu2(cache: mut cache, op: FDIV, dt: read dt, x: a, y: denom))
+            }
+        }
+    }
+    return None
+}
+
+fn decomp_late_basic(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match decomp_floordiv_to_cdiv(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_floormod_to_cmod(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_max_to_where(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_recip_to_fdiv(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match decomp_mul_recip_to_fdiv(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return None
+}

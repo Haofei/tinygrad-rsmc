@@ -236,7 +236,8 @@ Integrated pieces:
   tuple-axis `layernorm`, channel-axis `batchnorm` with no-affine and affine forms, plus
   keepdim-backed `logsumexp(axis)`, `softmax(axis)`, `log_softmax(axis)`, first-index
   `argmax`/`argmin` for all/axis reductions, and graph-composed stable `sort`, `argsort`,
-  and sorted `topk` for fixed-shape tensors), finite-input `isclose`/`allclose`, loss helpers (`binary_crossentropy`,
+  and sorted `topk` for fixed-shape tensors), `isnan`/`isinf`/`isfinite` predicates plus
+  `isclose`/`allclose` with `equal_nan` handling, loss helpers (`binary_crossentropy`,
   `binary_crossentropy_logits`, `nll_loss`, and sparse-target `cross_entropy`), `_pool`-style
   NCHW `avg_pool2d` with count-include/count-exclude padding and `ceil_mode`, `max_pool2d` with
   low constant padding, dilation, `ceil_mode`, padded/dilated/ceil `return_indices`, default and
@@ -423,8 +424,8 @@ Current integrated demo:
   including first-index behavior for tied maxima.
 - validates Tensor `sort`, `argsort`, and sorted `topk` against real tinygrad for axis-0 and
   axis-1 cases, including stable duplicate-index reconstruction.
-- validates finite-input Tensor `isclose` and `allclose` against real tinygrad for loose and tight
-  tolerances. NaN/Inf-specific `isclose(equal_nan=...)` semantics still require `isnan`/`isinf`.
+- validates Tensor `isclose` and `allclose` for loose/tight finite tolerances and NaN/Inf
+  edge cases including `equal_nan=True`.
 - validates Tensor loss helpers against real tinygrad: binary cross entropy mean/sum, BCE logits
   mean with and without `pos_weight`, NLL loss none/mean, and sparse-target cross entropy none/mean.
 - validates Tensor statistics against real tinygrad: `var(axis=1, correction=0/1)`,
@@ -532,7 +533,7 @@ Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random and initializer helpers are partially integrated now, but exact global
   seed/counter APIs, broader distribution helpers,
-  full symbolic/lazy indexing semantics, NaN/Inf predicates, broader composed transcendental/math method coverage,
+  full symbolic/lazy indexing semantics, graph-backed NaN/Inf predicate lowering, broader composed transcendental/math method coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   Python-facing method breadth,
   and exact tinygrad semantics are still incomplete.

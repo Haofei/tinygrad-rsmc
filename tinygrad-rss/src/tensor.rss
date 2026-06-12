@@ -817,6 +817,35 @@ fn tensor_lerp(cache: mut UOpCache, x: Int, end: Int, weight: Float) -> Int {
     return tensor_add(cache: mut cache, a: x, b: scaled)
 }
 
+fn tensor_float_predicate(cache: mut UOpCache, x: Int, pred: Int) -> Int {
+    local vals = eval_tensor(cache: read cache, id: x)
+    local shape = uop_shape(cache: read cache, id: x)
+    local out = List.new<Float>()
+    let mut i = 0
+    while i < List.len<Float>(list: read vals) {
+        let v = List.get<Float>(list: read vals, index: i)
+        let mut ok = false
+        if pred == 0 { ok = Float.is_nan(value: read v) }
+        if pred == 1 { ok = Float.is_infinite(value: read v) }
+        if pred == 2 { ok = Float.is_finite(value: read v) }
+        if ok { pushf1(l: mut out, a: 1.0) } else { pushf1(l: mut out, a: 0.0) }
+        i = i + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_bool(), shape: read shape, data: read out)
+}
+
+fn tensor_isnan(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_float_predicate(cache: mut cache, x: x, pred: 0)
+}
+
+fn tensor_isinf(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_float_predicate(cache: mut cache, x: x, pred: 1)
+}
+
+fn tensor_isfinite(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_float_predicate(cache: mut cache, x: x, pred: 2)
+}
+
 fn tensor_isclose_finite(cache: mut UOpCache, x: Int, other: Int, rtol: Float, atol: Float) -> Int {
     let diff = tensor_sub(cache: mut cache, a: x, b: other)
     let adiff = tensor_abs(cache: mut cache, x: diff)
@@ -828,8 +857,30 @@ fn tensor_isclose_finite(cache: mut UOpCache, x: Int, other: Int, rtol: Float, a
     return tensor_le(cache: mut cache, a: adiff, b: tol)
 }
 
+fn tensor_isclose(cache: mut UOpCache, x: Int, other: Int, rtol: Float, atol: Float, equal_nan: Bool) -> Int {
+    let close = tensor_isclose_finite(cache: mut cache, x: x, other: other, rtol: rtol, atol: atol)
+    let xinf = tensor_isinf(cache: mut cache, x: x)
+    let yinf = tensor_isinf(cache: mut cache, x: other)
+    let both_inf = tensor_and(cache: mut cache, a: xinf, b: yinf)
+    let same_value = tensor_eq(cache: mut cache, a: x, b: other)
+    let inf_close = tensor_and(cache: mut cache, a: both_inf, b: same_value)
+    let mut out = tensor_or(cache: mut cache, a: close, b: inf_close)
+    if equal_nan {
+        let xnan = tensor_isnan(cache: mut cache, x: x)
+        let ynan = tensor_isnan(cache: mut cache, x: other)
+        let both_nan = tensor_and(cache: mut cache, a: xnan, b: ynan)
+        out = tensor_or(cache: mut cache, a: out, b: both_nan)
+    }
+    return out
+}
+
 fn tensor_allclose_finite(cache: mut UOpCache, x: Int, other: Int, rtol: Float, atol: Float) -> Int {
     let close = tensor_isclose_finite(cache: mut cache, x: x, other: other, rtol: rtol, atol: atol)
+    return tensor_all_all(cache: mut cache, x: close)
+}
+
+fn tensor_allclose(cache: mut UOpCache, x: Int, other: Int, rtol: Float, atol: Float, equal_nan: Bool) -> Int {
+    let close = tensor_isclose(cache: mut cache, x: x, other: other, rtol: rtol, atol: atol, equal_nan: equal_nan)
     return tensor_all_all(cache: mut cache, x: close)
 }
 

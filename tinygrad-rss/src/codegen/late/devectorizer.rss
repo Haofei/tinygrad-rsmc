@@ -3,8 +3,9 @@
 // This first slice ports the devectorize_alu scalarization rule plus the
 // pm_render normalization rules: vector ALU/CAST/BITCAST nodes become a STACK
 // of scalar lane operations, and vector CONST/GEP/STACK nodes are normalized
-// for rendering. Load/store grouping, buffer/index devectorization, REDUCE
-// lowering, and image rewrites remain later slices.
+// for rendering. It also ports the context-free load/store folding rules for
+// GEP and PTRCAT. Index expansion/folding, load/store splitting, buffer/index
+// devectorization, REDUCE lowering, and image rewrites remain later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -159,7 +160,122 @@ fn devectorizer_render_stack(cache: read UOpCache, id: Int) -> Option<Int> {
     return Some(node_src_id(cache: read cache, id: id, k: 0))
 }
 
+fn devectorizer_load_with_ptr(cache: mut UOpCache, id: Int, ptr: Int, dt: read DType) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read ptr)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: id, k: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: LOAD, dt: read dt, src: take srcs, arg: take arg)
+}
+
+fn devectorizer_store_with_ptr_value(cache: mut UOpCache, id: Int, ptr: Int, value: Int) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read ptr)
+    List.push<Int>(list: mut srcs, value: read value)
+    let mut i = 2
+    while i < node_num_src(cache: read cache, id: id) {
+        List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: id, k: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return intern(cache: mut cache, op: STORE, dt: read dt, src: take srcs, arg: take arg)
+}
+
+fn devectorizer_gep_after_load(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != LOAD { return None }
+    if node_num_src(cache: read cache, id: id) < 1 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != GEP { return None }
+    local idxs = node_argints(cache: read cache, id: ptr)
+    let base = node_src_id(cache: read cache, id: ptr, k: 0)
+    let ldt = node_full_dtype(cache: read cache, id: id)
+    let scalar = dtype_scalar(d: read ldt)
+    let ndt = dtype_vec(base: read scalar, sz: List.len<Int>(list: read idxs))
+    let nload = devectorizer_load_with_ptr(cache: mut cache, id: id, ptr: base, dt: read ndt)
+    return Some(mk_gep(cache: mut cache, x: nload, idxs: read idxs))
+}
+
+fn devectorizer_gep_on_store(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STORE { return None }
+    if node_num_src(cache: read cache, id: id) < 2 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != GEP { return None }
+    local idxs = node_argints(cache: read cache, id: ptr)
+    if List.len<Int>(list: read idxs) == 0 { return None }
+    local inv = argsort(x: read idxs)
+    let data = node_src_id(cache: read cache, id: id, k: 1)
+    let ndata = mk_gep(cache: mut cache, x: data, idxs: read inv)
+    let base = node_src_id(cache: read cache, id: ptr, k: 0)
+    return Some(devectorizer_store_with_ptr_value(cache: mut cache, id: id, ptr: base, value: ndata))
+}
+
+fn devectorizer_ptrcat_after_load(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != LOAD { return None }
+    if node_num_src(cache: read cache, id: id) < 1 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != PTRCAT { return None }
+    local loads = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: ptr) {
+        let child = node_src_id(cache: read cache, id: ptr, k: i)
+        let cdt = node_dtype(cache: read cache, id: child)
+        let load = devectorizer_load_with_ptr(cache: mut cache, id: id, ptr: child, dt: read cdt)
+        List.push<Int>(list: mut loads, value: read load)
+        i = i + 1
+    }
+    let dt = node_full_dtype(cache: read cache, id: id)
+    return Some(mk_vcat(cache: mut cache, dt: read dt, srcs: read loads))
+}
+
+fn devectorizer_ptrcat_after_store(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STORE { return None }
+    if node_num_src(cache: read cache, id: id) < 2 { return None }
+    let ptr = node_src_id(cache: read cache, id: id, k: 0)
+    if node_op(cache: read cache, id: ptr) != PTRCAT { return None }
+    let data = node_src_id(cache: read cache, id: id, k: 1)
+    local stores = List.new<Int>()
+    let mut offset = 0
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: ptr) {
+        let child = node_src_id(cache: read cache, id: ptr, k: i)
+        let cnt = node_full_dtype(cache: read cache, id: child).count
+        local idxs = List.new<Int>()
+        let mut j = 0
+        while j < cnt {
+            List.push<Int>(list: mut idxs, value: read (offset + j))
+            j = j + 1
+        }
+        let val = mk_gep(cache: mut cache, x: data, idxs: read idxs)
+        let st = devectorizer_store_with_ptr_value(cache: mut cache, id: id, ptr: child, value: val)
+        List.push<Int>(list: mut stores, value: read st)
+        offset = offset + cnt
+        i = i + 1
+    }
+    return Some(mk_group(cache: mut cache, srcs: read stores))
+}
+
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match devectorizer_gep_after_load(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_gep_on_store(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_ptrcat_after_load(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_ptrcat_after_store(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match devectorizer_no_vectorized_alu(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

@@ -831,6 +831,73 @@ fn main() -> Unit {
     showb(label: read "codegen.devectorizer renders multi gep = ", v: mdev_gep_multi_ok)
     showb(label: read "codegen.devectorizer removes scalar gep0 = ", v: mdev_gep0_ok)
     showb(label: read "codegen.devectorizer unwraps single stack = ", v: mdev_stack1_ok)
+    local mdev_idx_src0 = List.new<Int>()
+    List.push<Int>(list: mut mdev_idx_src0, value: read m2)
+    let mdev_ptr0 = mk_index(cache: mut mcache, base: mbuf_cpu, srcs: read mdev_idx_src0, ptr: true)
+    local mdev_idx_src1 = List.new<Int>()
+    List.push<Int>(list: mut mdev_idx_src1, value: read m3)
+    let mdev_ptr1 = mk_index(cache: mut mcache, base: mbuf_cpu, srcs: read mdev_idx_src1, ptr: true)
+    local mdev_ptrcat_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_ptrcat_src, value: read mdev_ptr0)
+    List.push<Int>(list: mut mdev_ptrcat_src, value: read mdev_ptr1)
+    let mdev_ptrcat_dt = dtype_vec(base: read i32, sz: 2)
+    let mdev_ptrcat = mk_ptrcat(cache: mut mcache, dt: read mdev_ptrcat_dt, srcs: read mdev_ptrcat_src)
+    local mdev_rev = List.new<Int>()
+    List.push<Int>(list: mut mdev_rev, value: read 1)
+    List.push<Int>(list: mut mdev_rev, value: read 0)
+    let mdev_gep_ptr = mk_gep(cache: mut mcache, x: mdev_ptrcat, idxs: read mdev_rev)
+    local mdev_empty_src = List.new<Int>()
+    let mdev_load_gep = mk_load(cache: mut mcache, ptr: mdev_gep_ptr, srcs: read mdev_empty_src, dt: read mdev_ptrcat_dt)
+    let mut mdev_load_gep_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_load_gep) {
+        Some(r) => {
+            let src_load = node_src_id(cache: read mcache, id: r, k: 0)
+            let load_ptr = node_src_id(cache: read mcache, id: src_load, k: 0)
+            let load_gep_root_ok = node_op(cache: read mcache, id: r) == GEP && node_op(cache: read mcache, id: src_load) == LOAD
+            let load_gep_ptr_ok = load_ptr == mdev_ptrcat
+            mdev_load_gep_ok = load_gep_root_ok && load_gep_ptr_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_store_gep = mk_store(cache: mut mcache, ptr: mdev_gep_ptr, value: mgep2, gate: read None)
+    let mut mdev_store_gep_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_store_gep) {
+        Some(r) => {
+            let store_value = node_src_id(cache: read mcache, id: r, k: 1)
+            let store_gep_root_ok = node_op(cache: read mcache, id: r) == STORE && node_src_id(cache: read mcache, id: r, k: 0) == mdev_ptrcat
+            let store_gep_value_ok = node_op(cache: read mcache, id: store_value) == GEP
+            mdev_store_gep_ok = store_gep_root_ok && store_gep_value_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_load_ptrcat = mk_load(cache: mut mcache, ptr: mdev_ptrcat, srcs: read mdev_empty_src, dt: read mdev_ptrcat_dt)
+    let mut mdev_load_ptrcat_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_load_ptrcat) {
+        Some(r) => {
+            let l0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let l1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let load_ptrcat_root_ok = node_op(cache: read mcache, id: r) == VCAT
+            let load_ptrcat_src_ok = node_op(cache: read mcache, id: l0) == LOAD && node_op(cache: read mcache, id: l1) == LOAD
+            mdev_load_ptrcat_ok = load_ptrcat_root_ok && load_ptrcat_src_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_store_ptrcat = mk_store(cache: mut mcache, ptr: mdev_ptrcat, value: mgep2, gate: read None)
+    let mut mdev_store_ptrcat_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_store_ptrcat) {
+        Some(r) => {
+            let s0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let s1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let store_ptrcat_root_ok = node_op(cache: read mcache, id: r) == GROUP
+            let store_ptrcat_src_ok = node_op(cache: read mcache, id: s0) == STORE && node_op(cache: read mcache, id: s1) == STORE
+            mdev_store_ptrcat_ok = store_ptrcat_root_ok && store_ptrcat_src_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    showb(label: read "codegen.devectorizer folds gep after load = ", v: mdev_load_gep_ok)
+    showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
+    showb(label: read "codegen.devectorizer folds ptrcat load = ", v: mdev_load_ptrcat_ok)
+    showb(label: read "codegen.devectorizer folds ptrcat store = ", v: mdev_store_ptrcat_ok)
     let maxis_param = mk_param_axis(cache: mut mcache, slot: 6, dt: read i32, shape: read mparam_shape, name: read "sharded", axis: 1)
     let maxis_param2 = mk_param_axis(cache: mut mcache, slot: 7, dt: read i32, shape: read mparam_shape, name: read "sharded2", axis: 1)
     let maxis_add = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: maxis_param, y: maxis_param2)

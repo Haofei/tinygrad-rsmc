@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 31 RSS files, 22,785 LOC.
+  - integrated `tinygrad-rss/src`: 31 RSS files, 22,972 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -231,8 +231,10 @@ Integrated pieces:
   `ALWAYS_CONTIGUOUS` classification, realize-map generation for `COPY`/`CONTIGUOUS`/`STORE`,
   non-contiguous source realization for `COPY`/`MSELECT`/`MSTACK`, direct `COPY`/`SLICE` store-source
   cleanup, simple store self-dependency hazard detection, range-context allocation with size-1
-  folding, and first `apply_movement_op` mappings for `SHRINK`, `PERMUTE`, `FLIP`, `EXPAND`,
-  validity-guarded `PAD`, and row-major `RESHAPE` div/mod coordinate splitting.
+  folding, first `apply_movement_op` mappings for `SHRINK`, `PERMUTE`, `FLIP`, `EXPAND`,
+  validity-guarded `PAD`, and row-major `RESHAPE` div/mod coordinate splitting, plus the first
+  `run_rangeify` analysis half for realized output ranges, single/multiple consumer inheritance,
+  movement input-range swizzling, and `REDUCE` axis range injection.
 - `device.rss`: first integrated source-shaped `tinygrad/device.py` metadata and allocator slice,
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
@@ -356,6 +358,8 @@ Current integrated demo:
 - validates scheduler indexing range/movement helpers: size-1 range folding, sequential range ids,
   `SHRINK`/`PERMUTE`/`FLIP`/`EXPAND` index mapping, validity-guarded `PAD` index mapping,
   and row-major `RESHAPE` div/mod index mapping.
+- validates scheduler indexing rangeify analysis records for realized roots, inherited movement
+  chains, `PERMUTE` input-range swizzling, and `REDUCE` `AXIS_REDUCE` injection.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.
@@ -701,8 +705,9 @@ Major missing integrated work:
   behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler remains partial. The first dependency-ordering slice in
   `schedule/__init__.rss` and first monotonic-offset memory planner slice in `schedule/memory.rss`
-  are integrated, and `schedule/indexing.rss` has realize-map generation plus first range/movement
-  helpers including PAD and RESHAPE. Exact TLSF reuse, full rangeify/indexing, RESHAPE symbolic simplification,
+  are integrated, and `schedule/indexing.rss` has realize-map generation, first range/movement
+  helpers including PAD and RESHAPE, and first rangeify analysis records. Exact TLSF reuse, rangeify
+  graph rewrite to `STAGE`/`INDEX`, RESHAPE symbolic simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,
   and JIT capture plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority

@@ -10,6 +10,23 @@ struct IndexingRealizeResult derives(Clone) {
     nodes: List<Int>,
 }
 
+struct IndexingRangeRecord derives(Clone) {
+    node: Int,
+    in_ranges: List<Int>,
+    out_ranges: List<Int>,
+}
+
+struct IndexingRealizeAxisRecord derives(Clone) {
+    node: Int,
+    axes: List<Int>,
+}
+
+struct IndexingRangeifyResult derives(Clone) {
+    records: List<IndexingRangeRecord>,
+    realize_axes: List<IndexingRealizeAxisRecord>,
+    ok: Bool,
+}
+
 struct IndexingContext derives(Clone) {
     next_range: Int,
 }
@@ -320,7 +337,7 @@ fn indexing_apply_reshape(cache: mut UOpCache, rngs: read List<Int>, in_shape: r
     return take out
 }
 
-fn indexing_apply_movement_op(cache: mut UOpCache, op: Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
+fn indexing_apply_movement_op(cache: mut UOpCache, op: read Ops, in_shape: read List<Int>, arg: read List<Int>, rngs: read List<Int>) -> fresh List<Int> {
     if op == SHRINK {
         local starts = List.new<Int>()
         let rank = List.len<Int>(list: read in_shape)
@@ -343,4 +360,145 @@ fn indexing_apply_movement_op(cache: mut UOpCache, op: Ops, in_shape: read List<
         j = j + 1
     }
     return take out
+}
+
+fn indexing_record_index(records: read List<IndexingRangeRecord>, node: Int) -> Int {
+    let mut i = 0
+    while i < List.len<IndexingRangeRecord>(list: read records) {
+        let rec = List.get<IndexingRangeRecord>(list: read records, index: i)
+        if rec.node == node { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn indexing_consumer_uses(cache: read UOpCache, consumer: Int, node: Int) -> Bool {
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: consumer) {
+        if node_src_id(cache: read cache, id: consumer, k: i) == node { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn indexing_collect_consumer_records(cache: read UOpCache, order: read List<Int>, records: read List<IndexingRangeRecord>, node: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let cand = List.get<Int>(list: read order, index: i)
+        if indexing_consumer_uses(cache: read cache, consumer: cand, node: node) {
+            let ri = indexing_record_index(records: read records, node: cand)
+            if ri >= 0 { indexing_add_unique(items: mut out, value: ri) }
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_all_axes(rank: Int) -> fresh List<Int> {
+    local axes = List.new<Int>()
+    let mut i = 0
+    while i < rank {
+        List.push<Int>(list: mut axes, value: read i)
+        i = i + 1
+    }
+    return take axes
+}
+
+fn indexing_add_realize_axes(realize_axes: mut List<IndexingRealizeAxisRecord>, node: Int, axes: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<IndexingRealizeAxisRecord>(list: read realize_axes) {
+        let rec = List.get<IndexingRealizeAxisRecord>(list: read realize_axes, index: i)
+        if rec.node == node { return Unit }
+        i = i + 1
+    }
+    local copied = copy_int_list(l: read axes)
+    local rec = IndexingRealizeAxisRecord(node: node, axes: take copied)
+    List.push<IndexingRealizeAxisRecord>(list: mut realize_axes, value: read manage rec)
+    return Unit
+}
+
+fn indexing_is_rangeify_skip(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEVICE || op == UNIQUE { return true }
+    if op == CALL || op == FUNCTION || op == LINEAR { return true }
+    if op == AFTER { return true }
+    if op == MSTACK || op == MSELECT { return true }
+    if node_dtype(cache: read cache, id: id).name == "weakint" { return true }
+    return false
+}
+
+fn indexing_movement_arg_for_node(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op == RESHAPE || op == EXPAND { return uop_shape(cache: read cache, id: id) }
+    return node_argints(cache: read cache, id: id)
+}
+
+fn indexing_reduce_input_ranges(cache: mut UOpCache, ctx: mut IndexingContext, reduce: Int, out_ranges: read List<Int>) -> fresh List<Int> {
+    local axes = node_argints(cache: read cache, id: reduce)
+    if List.len<Int>(list: read axes) == 0 { return copy_int_list(l: read out_ranges) }
+    let src = node_src_id(cache: read cache, id: reduce, k: 0)
+    local src_shape = uop_shape(cache: read cache, id: src)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read src_shape) {
+        if int_contains(items: read axes, v: i) {
+            let r = indexing_new_range(cache: mut cache, ctx: mut ctx, size: List.get<Int>(list: read src_shape, index: i), axis_type: read AXIS_REDUCE)
+            List.push<Int>(list: mut out, value: read r)
+        } else {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read out_ranges, index: i))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn indexing_run_rangeify_analysis(cache: mut UOpCache, root: Int) -> fresh IndexingRangeifyResult {
+    local rctx = indexing_context_new()
+    local realized = indexing_generate_realize_map(cache: read cache, root: root)
+    local records = List.new<IndexingRangeRecord>()
+    local realize_axes = List.new<IndexingRealizeAxisRecord>()
+    local order = uop_toposort_enter_calls(cache: read cache, id: root, enter_calls: false)
+    let mut oi = List.len<Int>(list: read order) - 1
+    while oi >= 0 {
+        let x = List.get<Int>(list: read order, index: oi)
+        if indexing_is_rangeify_skip(cache: read cache, id: x) == false {
+            let mut out_rngs = List.new<Int>()
+            local shape = uop_shape(cache: read cache, id: x)
+            if indexing_list_contains(items: read realized.nodes, value: x) {
+                out_rngs = indexing_ranges_for_shape(cache: mut cache, ctx: mut rctx, shape: read shape, axis_type: read AXIS_LOOP)
+                local axes = indexing_all_axes(rank: List.len<Int>(list: read shape))
+                indexing_add_realize_axes(realize_axes: mut realize_axes, node: x, axes: read axes)
+            } else {
+                local consumers = indexing_collect_consumer_records(cache: read cache, order: read order, records: read records, node: x)
+                if List.len<Int>(list: read consumers) == 1 {
+                    let cr = List.get<IndexingRangeRecord>(list: read records, index: List.get<Int>(list: read consumers, index: 0))
+                    out_rngs = copy_int_list(l: read cr.in_ranges)
+                } else {
+                    if List.len<Int>(list: read consumers) > 1 {
+                        out_rngs = indexing_ranges_for_shape(cache: mut cache, ctx: mut rctx, shape: read shape, axis_type: read AXIS_LOOP)
+                        local axes = indexing_all_axes(rank: List.len<Int>(list: read shape))
+                        indexing_add_realize_axes(realize_axes: mut realize_axes, node: x, axes: read axes)
+                    }
+                }
+            }
+            if List.len<Int>(list: read out_rngs) > 0 || List.len<Int>(list: read shape) == 0 {
+                let mut in_rngs = copy_int_list(l: read out_rngs)
+                let op = node_op(cache: read cache, id: x)
+                if group_movement(op: read op) {
+                    let src = node_src_id(cache: read cache, id: x, k: 0)
+                    local src_shape = uop_shape(cache: read cache, id: src)
+                    local marg = indexing_movement_arg_for_node(cache: read cache, id: x)
+                    in_rngs = indexing_apply_movement_op(cache: mut cache, op: read op, in_shape: read src_shape, arg: read marg, rngs: read out_rngs)
+                }
+                if op == REDUCE { in_rngs = indexing_reduce_input_ranges(cache: mut cache, ctx: mut rctx, reduce: x, out_ranges: read out_rngs) }
+                local in_copy = copy_int_list(l: read in_rngs)
+                local out_copy = copy_int_list(l: read out_rngs)
+                local rec = IndexingRangeRecord(node: x, in_ranges: take in_copy, out_ranges: take out_copy)
+                List.push<IndexingRangeRecord>(list: mut records, value: read manage rec)
+            }
+        }
+        oi = oi - 1
+    }
+    return IndexingRangeifyResult(records: take records, realize_axes: take realize_axes, ok: true)
 }

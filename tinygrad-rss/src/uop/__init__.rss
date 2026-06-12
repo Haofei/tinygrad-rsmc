@@ -120,6 +120,14 @@ fn group_associative(op: read Ops) -> Bool {
     return false
 }
 
+// GroupOp.Idempotent
+fn group_idempotent(op: read Ops) -> Bool {
+    if op == OR { return true }
+    if op == AND { return true }
+    if op == MAX { return true }
+    return false
+}
+
 // GroupOp.Comparison
 fn group_comparison(op: read Ops) -> Bool {
     if op == CMPLT { return true }

@@ -11,6 +11,16 @@ fn const_int_eq(cache: read UOpCache, id: Int, k: Int) -> Bool {
     return false
 }
 
+fn const_bool_eq(cache: read UOpCache, id: Int, k: Int) -> Bool {
+    if node_is_const_int(cache: read cache, id: id) {
+        let dt = node_dtype(cache: read cache, id: id)
+        if dtype_is_bool(d: read dt) {
+            if node_const_int(cache: read cache, id: id) == k { return true }
+        }
+    }
+    return false
+}
+
 fn int_gcd(a: Int, b: Int) -> Int {
     let mut x = iabs(x: a)
     let mut y = iabs(x: b)
@@ -363,6 +373,7 @@ fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
         // same-operand rules: with interning, identical operands share an id, so this is id equality.
         // x-x->0, x^x->0, x%x->0, x//x->1 (tinygrad symbolic.py).
         if s0 == s1 {
+            if group_idempotent(op: read op) { return Some(s0) }
             if op == SUB {
                 let dt = node_dtype(cache: read cache, id: id)
                 return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
@@ -378,6 +389,17 @@ fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
             if op == FLOORDIV {
                 let dt = node_dtype(cache: read cache, id: id)
                 return Some(mk_const_int(cache: mut cache, dt: read dt, v: 1))
+            }
+            if op == CMPLT {
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+            }
+            if op == CMPNE {
+                let dt0 = node_dtype(cache: read cache, id: s0)
+                if dtype_is_int(d: read dt0) || dtype_is_bool(d: read dt0) {
+                    let dt = node_dtype(cache: read cache, id: id)
+                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+                }
             }
         }
         if op == ADD {
@@ -399,9 +421,37 @@ fn rule_identities(cache: mut UOpCache, id: Int) -> Option<Int> {
         if op == XOR {
             if const_int_eq(cache: read cache, id: s1, k: 0) { return Some(s0) }
             if const_int_eq(cache: read cache, id: s0, k: 0) { return Some(s1) }
+            if node_op(cache: read cache, id: s0) == XOR {
+                let x0 = node_src_id(cache: read cache, id: s0, k: 0)
+                let x1 = node_src_id(cache: read cache, id: s0, k: 1)
+                if x1 == s1 { return Some(x0) }
+                if x0 == s1 { return Some(x1) }
+            }
+        }
+        if op == AND {
+            if const_int_eq(cache: read cache, id: s1, k: 0) {
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+            }
+            if const_int_eq(cache: read cache, id: s0, k: 0) {
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
+            }
+            if const_bool_eq(cache: read cache, id: s1, k: 1) { return Some(s0) }
+            if const_bool_eq(cache: read cache, id: s0, k: 1) { return Some(s1) }
+        }
+        if op == OR {
+            if const_bool_eq(cache: read cache, id: s1, k: 0) { return Some(s0) }
+            if const_bool_eq(cache: read cache, id: s0, k: 0) { return Some(s1) }
+            if const_bool_eq(cache: read cache, id: s1, k: 1) { return Some(s1) }
+            if const_bool_eq(cache: read cache, id: s0, k: 1) { return Some(s0) }
         }
         if op == FLOORDIV {
             if const_int_eq(cache: read cache, id: s1, k: 1) { return Some(s0) }
+            if const_int_eq(cache: read cache, id: s1, k: 0 - 1) {
+                let dt = node_dtype(cache: read cache, id: id)
+                return Some(mk_alu1(cache: mut cache, op: NEG, dt: read dt, x: s0))
+            }
         }
         if op == SUB {
             if const_int_eq(cache: read cache, id: s1, k: 0) { return Some(s0) }

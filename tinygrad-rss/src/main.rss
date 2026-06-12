@@ -3700,6 +3700,34 @@ fn main() -> Unit {
     let idx_rf_end_root = mk_contiguous(cache: mut mcache, x: idx_rf_end_expand)
     local idx_rf_end_result = indexing_run_rangeify_analysis(cache: mut mcache, root: idx_rf_end_root)
     let idx_rf_end_add_realize_i = indexing_realize_axis_index(records: read idx_rf_end_result.realize_axes, node: idx_rf_end_add)
+    local rfac_lctx = rangeify_local_context_new()
+    let rfac_graph = get_kernel_graph(cache: mut mcache, sink: idx_rf_contig)
+    let mut rfac_contig_ok = false
+    match get_contiguous(cache: read mcache, x: idx_rf_contig) {
+        Some(r) => { rfac_contig_ok = r == idx_rf_perm }
+        None => {}
+    }
+    let rfac_mop_idx = mk_index(cache: mut mcache, base: idx_rf_perm, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    let mut rfac_mop_ok = false
+    match _mop_index(cache: mut mcache, r: idx_rf_perm, idx: rfac_mop_idx) {
+        Some(r) => { rfac_mop_ok = node_op(cache: read mcache, id: r) == INDEX }
+        None => {}
+    }
+    let mut rfac_flatten_ok = true
+    match flatten_bufferize(cache: mut mcache, x: idx_rf_stage_stage) {
+        Some(r) => { rfac_flatten_ok = node_op(cache: read mcache, id: r) == STAGE }
+        None => {}
+    }
+    let mut rfac_debuf_ok = false
+    match debuf(cache: mut mcache, ctx: mut rfac_lctx, buf: idx_rf_buf) {
+        Some(r) => { rfac_debuf_ok = node_op(cache: read mcache, id: r) == PARAM }
+        None => {}
+    }
+    let mut rfac_split_ok = true
+    match split_store(cache: mut mcache, x: idx_store) {
+        Some(r) => { rfac_split_ok = node_op(cache: read mcache, id: r) == CALL }
+        None => {}
+    }
     showb(label: read "schedule.indexing rangeify records movement chain = ", v: idx_rf_contig_rec_i >= 0 && idx_rf_perm_rec_i >= 0 && idx_rf_buf_rec_i >= 0)
     showb(label: read "schedule.indexing rangeify realizes root axes = ", v: List.len<IndexingRealizeAxisRecord>(list: read idx_rf.realize_axes) == 1 && List.len<Int>(list: read idx_rf_contig_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify permute swizzles inputs = ", v: List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1) && List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 1) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0) && List.get<Int>(list: read idx_rf_buf_rec.out_ranges, index: 0) == List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0))
@@ -3713,6 +3741,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

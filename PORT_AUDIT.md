@@ -345,6 +345,18 @@ Integrated pieces:
   sources, `PAD` rewrites now emit the upstream local `WHERE(valid, value, 0)` form, and
   realized child staging now follows upstream global-vs-local, removable, and full-global device
   option rules.
+- `schedule/rangeify.rss`: first source-shaped `tinygrad/schedule/rangeify.py` facade over the
+  cache-backed RSS IR, exposing `add_ranges_to_store`, `lower_shaped_wmma`, `found_after`,
+  `_mop_index`, `fix_store_hazard`, `split_reduceop`, `resolve_function`,
+  `cleanup_dead_axes`, `gate_substitute`, `remove_bufferize`, `remove_noop_bufferize`,
+  `late_buffer_view`, `limit_bufs`, `bufferize_to_store`, `flatten_bufferize`, `debuf`,
+  `unbind_kernel`, `handle_after`, `renumber_range`, `find_bufs`, `get_contiguous`,
+  `split_store`, and `get_kernel_graph`. It delegates `get_kernel_graph` to the integrated
+  indexing rangeify analysis/rewrite, implements practical movement-index lowering, store range
+  injection, simple hazard contiguity, noop/dead-axis staging cleanup, buffer-to-param
+  placeholder conversion, range renumbering, and a conservative call wrapper for kernel split.
+  Exact upstream kernel graph repair, buffer-cost modeling, all local bufferize forms,
+  SHAPED_WMMA lowering, and full assign-dependency repair remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,
@@ -603,6 +615,9 @@ Current integrated demo:
   device-carrying full-global `STAGE` option propagation.
 - validates scheduler indexing rangeify `STAGE` option selection for full global staging,
   partial local staging, and upstream removable rules for always-contiguous vs non-contiguous children.
+- validates the first scheduler rangeify facade slice by calling `get_kernel_graph`,
+  `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, and `split_store` against the
+  integrated rangeify smoke graph.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

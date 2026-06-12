@@ -1,0 +1,229 @@
+// Source-shaped facade for tinygrad/schedule/rangeify.py.
+//
+// The current RSS scheduler already carries the first rangeify analysis and
+// graph-rewrite machinery in schedule/indexing.rss. This module exposes the
+// upstream rangeify names and delegates to those integrated pieces where the
+// cache-backed IR can express the behavior. Kernel splitting, exact buffer
+// cost modeling, ImageDType/WMMA lowering, and full assign dependency repair
+// remain deeper slices.
+features: local
+
+struct RangeifyLocalContext derives(Clone) {
+    next_lunique: Int,
+    next_range: Int,
+}
+
+fn rangeify_local_context_new() -> fresh RangeifyLocalContext {
+    return RangeifyLocalContext(next_lunique: 0, next_range: 0)
+}
+
+fn add_ranges_to_store(cache: mut UOpCache, ctx: mut IndexingContext, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != STORE { return None }
+    if node_num_src(cache: read cache, id: x) < 2 { return None }
+    let dest = node_src_id(cache: read cache, id: x, k: 0)
+    let value = node_src_id(cache: read cache, id: x, k: 1)
+    local shape = uop_shape(cache: read cache, id: value)
+    if List.len<Int>(list: read shape) == 0 { return None }
+    local ranges = indexing_ranges_for_shape(cache: mut cache, ctx: mut ctx, shape: read shape, axis_type: read AXIS_LOOP)
+    let ndest = mk_index(cache: mut cache, base: dest, srcs: read ranges, ptr: true)
+    let nval = mk_index(cache: mut cache, base: value, srcs: read ranges, ptr: false)
+    let st = mk_store(cache: mut cache, ptr: ndest, value: nval, gate: read None)
+    return Some(mk_end(cache: mut cache, id: st, srcs: read ranges))
+}
+
+fn lower_shaped_wmma(cache: mut UOpCache, ctx: mut IndexingContext, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != SHAPED_WMMA { return None }
+    if ctx.next_range < 0 { return None }
+    return None
+}
+
+fn found_after(cache: read UOpCache, after: Int, src: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: after) != AFTER { return None }
+    if src < 0 { return None }
+    return Some(after)
+}
+
+fn _mop_index(cache: mut UOpCache, r: Int, idx: Int) -> Option<Int> {
+    if group_movement(op: read node_op(cache: read cache, id: r)) == false { return None }
+    if node_op(cache: read cache, id: idx) != INDEX { return None }
+    if node_num_src(cache: read cache, id: r) <= 0 || node_num_src(cache: read cache, id: idx) <= 1 { return None }
+    local idxs = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: idx) {
+        List.push<Int>(list: mut idxs, value: read node_src_id(cache: read cache, id: idx, k: i))
+        i = i + 1
+    }
+    local rshape = uop_shape(cache: read cache, id: r)
+    if List.len<Int>(list: read idxs) != List.len<Int>(list: read rshape) { return None }
+    let src0 = node_src_id(cache: read cache, id: r, k: 0)
+    local in_shape = uop_shape(cache: read cache, id: src0)
+    local marg = indexing_movement_arg_for_node(cache: read cache, id: r)
+    local mapped = indexing_apply_movement_op(cache: mut cache, op: read node_op(cache: read cache, id: r), in_shape: read in_shape, arg: read marg, rngs: read idxs)
+    return Some(mk_index(cache: mut cache, base: src0, srcs: read mapped, ptr: node_index_is_ptr(cache: read cache, id: idx)))
+}
+
+fn fix_store_hazard(cache: mut UOpCache, target: Int, src: Int) -> Option<Int> {
+    let base = uop_base(cache: read cache, id: target)
+    if indexing_backward_slice_with_self_contains(cache: read cache, id: src, value: base) == false { return None }
+    let contig = mk_contiguous(cache: mut cache, x: src)
+    return Some(mk_store(cache: mut cache, ptr: target, value: contig, gate: read None))
+}
+
+fn split_reduceop(cache: mut UOpCache, reduce: Int, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: reduce) != REDUCE { return None }
+    if x < 0 { return None }
+    return None
+}
+
+fn resolve_function(cache: mut UOpCache, c: Int, allow_param_mismatch: Bool) -> Option<Int> {
+    if node_op(cache: read cache, id: c) != FUNCTION { return None }
+    if allow_param_mismatch == false { return None }
+    if node_num_src(cache: read cache, id: c) > 0 { return Some(node_src_id(cache: read cache, id: c, k: 0)) }
+    return None
+}
+
+fn cleanup_dead_axes(cache: mut UOpCache, b: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: b) != STAGE { return None }
+    if node_num_src(cache: read cache, id: b) <= 1 { return None }
+    local keep = List.new<Int>()
+    let value = node_src_id(cache: read cache, id: b, k: 0)
+    List.push<Int>(list: mut keep, value: read value)
+    let mut hit = false
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: b) {
+        let r = node_src_id(cache: read cache, id: b, k: i)
+        if node_op(cache: read cache, id: r) == CONST {
+            hit = true
+        } else {
+            List.push<Int>(list: mut keep, value: read r)
+        }
+        i = i + 1
+    }
+    if hit == false { return None }
+    local arg = node_arg(cache: read cache, id: b)
+    return Some(intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: b), src: take keep, arg: take arg))
+}
+
+fn gate_substitute(cache: read UOpCache, b: Int, ranges: read List<Int>) -> Bool {
+    local br = uop_ranges(cache: read cache, id: b)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        if indexing_list_contains(items: read br, value: List.get<Int>(list: read ranges, index: i)) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: buf) != STAGE { return None }
+    if node_op(cache: read cache, id: idx) != INDEX { return None }
+    if node_bufferize_removable(cache: read cache, id: buf) == false { return None }
+    if src < 0 { return None }
+    return Some(src)
+}
+
+fn remove_noop_bufferize(cache: read UOpCache, idx: Int, b2: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: idx) != INDEX || node_op(cache: read cache, id: b2) != STAGE { return None }
+    if node_num_src(cache: read cache, id: idx) != node_num_src(cache: read cache, id: b2) { return None }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: idx) {
+        if node_src_id(cache: read cache, id: idx, k: i) != node_src_id(cache: read cache, id: b2, k: i) { return None }
+        i = i + 1
+    }
+    return Some(node_src_id(cache: read cache, id: idx, k: 0))
+}
+
+fn late_buffer_view(cache: mut UOpCache, t: Int, b: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: b) != STAGE { return None }
+    if t < 0 { return None }
+    return None
+}
+
+fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Option<Int> {
+    if node_num_src(cache: read cache, id: root) < 0 || ctx.next_range < 0 { return None }
+    return None
+}
+
+fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int, idx: Int, allow_locals: Bool) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != STAGE { return None }
+    if node_op(cache: read cache, id: idx) != INDEX { return None }
+    if allow_locals == false && node_bufferize_addrspace(cache: read cache, id: x) == ADDR_LOCAL { return None }
+    let value = node_src_id(cache: read cache, id: x, k: 0)
+    let buf = mk_buffer(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: value), shape: read uop_shape(cache: read cache, id: value))
+    let st = mk_store(cache: mut cache, ptr: idx, value: value, gate: read None)
+    ctx.next_lunique = ctx.next_lunique + 1
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read st)
+    return Some(mk_after(cache: mut cache, id: buf, srcs: read deps))
+}
+
+fn flatten_bufferize(cache: mut UOpCache, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != STAGE { return None }
+    if node_num_src(cache: read cache, id: x) <= 2 { return None }
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: x, k: 0))
+    List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: x, k: 1))
+    local arg = node_arg(cache: read cache, id: x)
+    return Some(intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: x), src: take srcs, arg: take arg))
+}
+
+fn debuf(cache: mut UOpCache, ctx: mut RangeifyLocalContext, buf: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: buf)
+    if op != BUFFER && op != PARAM { return None }
+    local shape = uop_shape(cache: read cache, id: buf)
+    local devices = List.new<String>()
+    let p = mk_param_devices_full(cache: mut cache, slot: ctx.next_lunique, dt: read node_full_dtype(cache: read cache, id: buf),
+                                  shape: read shape, name: read "", has_vmin_vmax: false, vmin: 0, vmax: 0,
+                                  addrspace: read ADDR_GLOBAL, devices: read devices)
+    ctx.next_lunique = ctx.next_lunique + 1
+    return Some(p)
+}
+
+fn unbind_kernel(cache: read UOpCache, b: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: b) != BIND { return None }
+    if node_num_src(cache: read cache, id: b) > 0 { return Some(node_src_id(cache: read cache, id: b, k: 0)) }
+    return None
+}
+
+fn handle_after(cache: read UOpCache, after: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: after) != AFTER { return None }
+    if node_num_src(cache: read cache, id: after) > 0 { return Some(node_src_id(cache: read cache, id: after, k: 0)) }
+    return None
+}
+
+fn renumber_range(cache: mut UOpCache, ctx: mut RangeifyLocalContext, r: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: r) != RANGE { return None }
+    let mm = uop_min_max(cache: read cache, id: r)
+    let nr = mk_range_int(cache: mut cache, end: mm.hi + 1, axis_id: ctx.next_range, axis_type: read node_range_type(cache: read cache, id: r), dt: read node_dtype(cache: read cache, id: r))
+    ctx.next_range = ctx.next_range + 1
+    return Some(nr)
+}
+
+fn find_bufs(cache: read UOpCache, x: Int) -> Bool {
+    local order = uop_toposort_enter_calls(cache: read cache, id: x, enter_calls: false)
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        if node_op(cache: read cache, id: List.get<Int>(list: read order, index: i)) == INDEX { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn get_contiguous(cache: read UOpCache, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != CONTIGUOUS { return None }
+    if node_num_src(cache: read cache, id: x) > 0 { return Some(node_src_id(cache: read cache, id: x, k: 0)) }
+    return None
+}
+
+fn split_store(cache: mut UOpCache, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != STORE && node_op(cache: read cache, id: x) != END { return None }
+    if List.len<Int>(list: read uop_ranges(cache: read cache, id: x)) > 0 { return None }
+    local args = List.new<Int>()
+    local call = mk_call_arg(name: read "rangeify_kernel", has_name: true, precompile: false, precompile_backward: false)
+    return Some(mk_call(cache: mut cache, body: x, args: read args, call: read call))
+}
+
+fn get_kernel_graph(cache: mut UOpCache, sink: Int) -> Int {
+    local analysis = indexing_run_rangeify_analysis(cache: mut cache, root: sink)
+    return indexing_apply_rangeify_rewrite(cache: mut cache, root: sink, analysis: read analysis)
+}

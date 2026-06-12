@@ -21,7 +21,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 23 RSS files, 17,424 LOC.
+  - integrated `tinygrad-rss/src`: 23 RSS files, 17,629 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -175,9 +175,13 @@ Integrated pieces:
   `PROGRAM` execution staging that resolves/allocates declared global buffers and records function
   name, source id/length, launch metadata, declared global slots, and resolved buffer indices.
   It also includes the first per-context runtime cache keyed by function/source metadata, returning
-  stable runtime handles with hit/miss reporting. Local-size optimization, compiled numeric kernel
-  invocation, validation execution, graph execution, full multi-buffer/device remapping, and
-  dynamic-library runtime plumbing remain unported.
+  stable runtime handles with hit/miss reporting. The first hosted CPU numeric program execution
+  path is now integrated for the supported two-buffer `float32` shape: raw RSS byte buffers are
+  marshalled into a generated C harness, the rendered `SOURCE` is compiled and run through
+  `Path`/`Process`, stdout decimal bytes are parsed, and the output bytes are copied back into the
+  existing `TGBuffer` store. Local-size optimization, general compiled numeric kernel invocation,
+  validation execution, graph execution, full multi-buffer/device remapping, and dynamic-library
+  runtime plumbing remain unported.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream

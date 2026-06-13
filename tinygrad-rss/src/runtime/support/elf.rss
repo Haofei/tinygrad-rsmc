@@ -1,0 +1,45 @@
+features: local
+
+struct ElfSectionState derives(Clone) {
+    name: String,
+    addr: Int,
+    size: Int,
+}
+
+struct ElfLoadState derives(Clone) {
+    image_size: Int,
+    sections: List<ElfSectionState>,
+    relocs: List<Int>,
+}
+
+fn link_sym(sym: read String, libs: read List<String>) -> Int {
+    let mut h = 0
+    let mut i = 0
+    while i < String.len(value: read sym) {
+        h = h + i + 1
+        i = i + 1
+    }
+    return h + List.len<String>(list: read libs)
+}
+
+fn elf_loader(blob: read List<Int>, force_section_align: Int, link_libs: read List<String>) -> fresh ElfLoadState {
+    local sections = List.new<ElfSectionState>()
+    local relocs = List.new<Int>()
+    let mut image_size = List.len<Int>(list: read blob)
+    if force_section_align > 1 { image_size = round_up(num: image_size, amt: force_section_align) }
+    List.push<ElfSectionState>(list: mut sections, value: read ElfSectionState(name: String.copy(value: read ".text"), addr: 0, size: image_size))
+    List.push<Int>(list: mut relocs, value: read List.len<String>(list: read link_libs))
+    return ElfLoadState(image_size: image_size, sections: take sections, relocs: take relocs)
+}
+
+fn jit_loader(obj: read List<Int>, base: Int, link_libs: read List<String>) -> fresh List<Int> {
+    let loaded = elf_loader(blob: read obj, force_section_align: 1, link_libs: read link_libs)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < loaded.image_size {
+        if i < List.len<Int>(list: read obj) { List.push<Int>(list: mut out, value: read List.get<Int>(list: read obj, index: i)) }
+        else { List.push<Int>(list: mut out, value: read 0) }
+        i = i + 1
+    }
+    return take out
+}

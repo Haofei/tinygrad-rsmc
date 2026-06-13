@@ -1,0 +1,92 @@
+features: local
+
+struct CFieldState derives(Clone) {
+    name: String,
+    typ: String,
+    offset: Int,
+    bit_width: Int,
+    bit_off: Int,
+}
+
+struct CStructState derives(Clone) {
+    size: Int,
+    fields: List<CFieldState>,
+}
+
+struct DLLState derives(Clone) {
+    name: String,
+    path: String,
+    loaded: Bool,
+}
+
+fn _do_ioctl(idir: Int, base: Int, nr: Int, fd: Int, payload: Int) -> Int {
+    return (idir << 30) | (base << 8) | nr | payload | fd
+}
+
+fn _IO(base: Int, nr: Int) -> Int { return _do_ioctl(idir: 0, base: base, nr: nr, fd: 0, payload: 0) }
+
+fn _IOW(base: Int, nr: Int, typ_size: Int) -> Int { return _do_ioctl(idir: 1, base: base, nr: nr, fd: 0, payload: typ_size) }
+
+fn _IOR(base: Int, nr: Int, typ_size: Int) -> Int { return _do_ioctl(idir: 2, base: base, nr: nr, fd: 0, payload: typ_size) }
+
+fn _IOWR(base: Int, nr: Int, typ_size: Int) -> Int { return _do_ioctl(idir: 3, base: base, nr: nr, fd: 0, payload: typ_size) }
+
+fn __class_getitem__(name: read String, key: read String) -> fresh String {
+    return String.concat(left: read name, right: read String.concat(left: read "[", right: read String.concat(left: read key, right: read "]")))
+}
+
+fn pointer(addr: Int) -> Int { return addr }
+
+fn __new__(typ: read String, len: Int) -> fresh CStructState {
+    return CStructState(size: len, fields: List.new<CFieldState>())
+}
+
+fn register_fields(st: mut CStructState, fields: read List<CFieldState>) -> Unit {
+    let mut i = 0
+    while i < List.len<CFieldState>(list: read fields) {
+        List.push<CFieldState>(list: mut st.fields, value: read List.get<CFieldState>(list: read fields, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn record(st: read CStructState) -> fresh CStructState {
+    local fields = List.new<CFieldState>()
+    let mut i = 0
+    while i < List.len<CFieldState>(list: read st.fields) {
+        List.push<CFieldState>(list: mut fields, value: read List.get<CFieldState>(list: read st.fields, index: i))
+        i = i + 1
+    }
+    return CStructState(size: st.size, fields: take fields)
+}
+
+fn __set_name__(field: read CFieldState, owner: read String, name: read String) -> fresh CFieldState {
+    return CFieldState(name: String.copy(value: read name), typ: String.copy(value: read field.typ), offset: field.offset, bit_width: field.bit_width, bit_off: field.bit_off)
+}
+
+fn init_c_struct_t(sz: Int, fields: read List<CFieldState>) -> fresh CStructState {
+    local st = CStructState(size: sz, fields: List.new<CFieldState>())
+    register_fields(st: mut st, fields: read fields)
+    return take st
+}
+
+fn init_c_var(ty: read String, value: Int) -> Int { return value }
+
+fn findlib(nm: read String, paths: read List<String>) -> fresh String {
+    let mut i = 0
+    while i < List.len<String>(list: read paths) {
+        let p = List.get<String>(list: read paths, index: i)
+        if String.len(value: read p) > 0 { return String.copy(value: read p) }
+        i = i + 1
+    }
+    return String.copy(value: read nm)
+}
+
+fn dll_new(nm: read String, path: read String, loaded: Bool) -> fresh DLLState {
+    return DLLState(name: String.copy(value: read nm), path: String.copy(value: read path), loaded: loaded)
+}
+
+fn __getattr__(dll: read DLLState, nm: read String) -> fresh String {
+    if dll.loaded { return String.concat(left: read dll.name, right: read String.concat(left: read ".", right: read nm)) }
+    return String.copy(value: read "")
+}

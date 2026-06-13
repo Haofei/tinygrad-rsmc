@@ -22,14 +22,14 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 53 RSS files, about 36.4k LOC.
+  - integrated `tinygrad-rss/src`: 59 RSS files, about 37.2k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
 - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
-  - result: `tensor.py` 103/106 symbols, `mixin/__init__.py` 82/82 symbols,
-    `uop/ops.py` 216/221 symbols; 401/409 total rough symbols covered.
+  - result: `tensor.py` 106/106 symbols, `mixin/__init__.py` 82/82 symbols,
+    `uop/ops.py` 221/221 symbols; 409/409 total rough symbols covered.
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.
@@ -44,6 +44,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.
+  - focused runtime support batch: `runtime/support/hcq.py`, `runtime/support/memory.py`,
+    `runtime/support/elf.py`, `runtime/support/compiler_cpu.py`, `runtime/support/c.py`, and
+    `runtime/graph/hcq.py`: 167/167 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -831,6 +834,12 @@ Current integrated demo:
   disk open/close/io_uring/sharded-copy/offset surface, and the Python `generic_wmma_helper`
   path over the existing `mk_wmma` graph API. These are deterministic RSS runtime state facades,
   not real mmap/io_uring/thread/native-kernel execution yet.
+- validates first source-shaped runtime support and HCQ graph facade batch through the active
+  smoke and coverage audit: file/MMIO helper names, HCQ queue/symbol/bind/signal/device hooks,
+  TLSF/page-table/mapping allocator names, C ABI metadata helpers, CPU compiler object/JIT shells,
+  ELF loader/relocation shells, and graph dependency/timestamp helpers are present. These are
+  deterministic RSS state facades; native ioctl/mmap/eventfd/ELF relocation/clang/LLVM execution
+  remains future work.
 - validates first integrated codegen linearizer priority ordering over the same real kernel graph,
   producing a dependency-valid linear op stream from `CONST`/`PARAM`/`DEFINE_*` through
   `RANGE`/`INDEX`/`LOAD`/ALU/`STORE`/`END`/`IF`/`ENDIF`/`SINK`.
@@ -1185,10 +1194,11 @@ Major missing integrated work:
   WGSL/NIR emission, Mesa/LLVM/CUDA native bindings, and renderer policy beyond the source-shaped
   facade names now in `renderer/*.rss`.
 - target-specific `runtime/*`, `runtime/support/*`, native device backends, and full JIT graph
-  execution: the first source-shaped CPU/null/disk/Python runtime backend facades are present,
-  but real mmap/io_uring/thread/native-kernel execution, support-layer HCQ/compiler plumbing, and
-  device/runtime integration still need to be ported. The generated `runtime/autogen` data has
-  been copied, but handwritten behavior must still be ported and accounted for.
+  execution: the first source-shaped CPU/null/disk/Python runtime backend facades and HCQ/support
+  graph facades are present, but real mmap/io_uring/thread/native-kernel execution, native
+  clang/LLVM/ELF relocation, support-layer HCQ semantics, and device/runtime integration still
+  need to be ported. The generated `runtime/autogen` data has been copied, but handwritten
+  behavior must still be ported and accounted for.
 - `nn/*`: deeper layer/module semantics, optimizer algorithms, model state serialization, and real
   dataset loaders. The first source-shaped facade names are present, but exact upstream behavior is
   still incomplete. `nn/onnx.py` may be scoped as a separate importer rather than core tensor

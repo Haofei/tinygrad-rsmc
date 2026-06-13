@@ -1,0 +1,34 @@
+features: local
+
+struct CPUCompilerState derives(Clone) {
+    arch: String,
+    args: List<String>,
+    cachekey: String,
+    use_llvm: Bool,
+}
+
+fn cpu_compiler_new(arch: read String, cachekey: read String, use_llvm: Bool) -> fresh CPUCompilerState {
+    local args = List.new<String>()
+    List.push<String>(list: mut args, value: read String.copy(value: read arch))
+    return CPUCompilerState(arch: String.copy(value: read arch), args: take args, cachekey: String.copy(value: read cachekey), use_llvm: use_llvm)
+}
+
+fn compile_to_obj(src: read String, compiler: read CPUCompilerState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read src))
+    List.push<Int>(list: mut out, value: read String.len(value: read compiler.arch))
+    List.push<Int>(list: mut out, value: read List.len<String>(list: read compiler.args))
+    return take out
+}
+
+fn cerr() -> fresh String { return String.copy(value: read "") }
+
+fn expect(x: Bool, err: read String, ret: Int) -> Int {
+    if x { return 0 }
+    return ret
+}
+
+fn cpu_compile(src: read String, compiler: read CPUCompilerState) -> fresh List<Int> {
+    local libs = List.new<String>()
+    return jit_loader(obj: read compile_to_obj(src: read src, compiler: read compiler), base: 0, link_libs: read libs)
+}

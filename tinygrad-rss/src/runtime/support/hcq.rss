@@ -1,0 +1,246 @@
+features: local
+
+struct RuntimeFileInterface derives(Clone) {
+    path: String,
+    fd: Int,
+}
+
+struct HCQQueueState derives(Clone) {
+    values: List<Int>,
+    symbols: List<String>,
+    submitted: Bool,
+    binded_device: String,
+}
+
+struct HCQArgsState derives(Clone) {
+    bufs: List<RuntimeBufferState>,
+    vals: List<Int>,
+    bind_count: Int,
+}
+
+struct HCQDeviceProps derives(Clone) {
+    device: String,
+    arch: String,
+    compute_queues: Int,
+    copy_queues: Int,
+    is_cpu: Bool,
+}
+
+struct HCQCompiledState derives(Clone) {
+    device: String,
+    timeline: RuntimeSignalState,
+    props: HCQDeviceProps,
+    mappings: List<RuntimeBufferState>,
+}
+
+fn ioctl(fd: Int, request: Int, arg: Int) -> Int { return request + arg + fd }
+
+fn mmap(start: Int, sz: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int { return start + offset + sz }
+
+fn listdir(path: read String) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read String.copy(value: read path))
+    return take out
+}
+
+fn _mmap(start: Int, sz: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int {
+    return mmap(start: start, sz: sz, prot: prot, flags: flags, fd: fd, offset: offset)
+}
+
+fn anon_mmap(start: Int, sz: Int, prot: Int, flags: Int, offset: Int) -> Int {
+    return _mmap(start: start, sz: sz, prot: prot, flags: flags, fd: 0 - 1, offset: offset)
+}
+
+fn munmap(buf: Int, sz: Int) -> Bool { return sz >= 0 && buf >= 0 }
+
+fn exists(path: read String) -> Bool { return String.len(value: read path) > 0 }
+
+fn readlink(path: read String) -> fresh String { return String.copy(value: read path) }
+
+fn eventfd(initval: Int, flags: Int) -> fresh RuntimeFileInterface {
+    return RuntimeFileInterface(path: String.copy(value: read "eventfd"), fd: initval + flags)
+}
+
+fn hcq_filter_visible_devices(devs: read List<String>, device: read String) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read devs) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read devs, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn hcq_queue_new() -> fresh HCQQueueState {
+    return HCQQueueState(values: List.new<Int>(), symbols: List.new<String>(), submitted: false, binded_device: String.copy(value: read ""))
+}
+
+fn _new_sym(queue: mut HCQQueueState, sym: read String) -> Int {
+    let mut i = 0
+    while i < List.len<String>(list: read queue.symbols) {
+        if List.get<String>(list: read queue.symbols, index: i) == sym { return i }
+        i = i + 1
+    }
+    List.push<String>(list: mut queue.symbols, value: read String.copy(value: read sym))
+    return List.len<String>(list: read queue.symbols) - 1
+}
+
+fn q(queue: mut HCQQueueState, value: Int) -> Unit {
+    List.push<Int>(list: mut queue.values, value: read value)
+    return Unit
+}
+
+fn poll_bit(queue: mut HCQQueueState, buf: read RuntimeBufferState, val: Int, mask: Int) -> Unit {
+    q(queue: mut queue, value: buf.handle)
+    q(queue: mut queue, value: val & mask)
+    return Unit
+}
+
+fn bind(queue: mut HCQQueueState, dev: read String) -> Unit {
+    queue.binded_device = String.copy(value: read dev)
+    return Unit
+}
+
+fn bind_args_state(queue: mut HCQQueueState, args_state: read HCQArgsState) -> Unit {
+    q(queue: mut queue, value: args_state.bind_count)
+    return Unit
+}
+
+fn bind_sints(queue: mut HCQQueueState, vals: read List<Int>, offset: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        q(queue: mut queue, value: List.get<Int>(list: read vals, index: i) + offset)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn bind_sints_to_mem(queue: mut HCQQueueState, vals: read List<Int>, offset: Int, mask: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        q(queue: mut queue, value: (List.get<Int>(list: read vals, index: i) + offset) & mask)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn _apply_var_vals(queue: mut HCQQueueState, vals: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        if i < List.len<Int>(list: read queue.values) {
+            List.set<Int>(list: mut queue.values, index: i, value: read List.get<Int>(list: read vals, index: i))
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn submit(queue: mut HCQQueueState, dev: read String, vals: read List<Int>) -> Unit {
+    _apply_var_vals(queue: mut queue, vals: read vals)
+    bind(queue: mut queue, dev: read dev)
+    queue.submitted = true
+    return Unit
+}
+
+fn value_addr(signal: read RuntimeSignalState) -> Int { return signal.value }
+
+fn timestamp_addr(signal: read RuntimeSignalState) -> Int { return signal.timestamp_ns }
+
+fn value(signal: read RuntimeSignalState) -> Int { return signal.value }
+
+fn hcq_profile(name: read String, start_ns: Int, end_ns: Int) -> Int {
+    if end_ns < start_ns { return 0 }
+    return end_ns - start_ns
+}
+
+fn bind_sints_to_buf(queue: mut HCQQueueState, vals: read List<Int>, buf: read RuntimeBufferState) -> Unit {
+    bind_sints_to_mem(queue: mut queue, vals: read vals, offset: buf.offset, mask: 9223372036854775807)
+    return Unit
+}
+
+fn _fini(dev: mut HCQCompiledState) -> Unit {
+    dev.mappings = List.new<RuntimeBufferState>()
+    return Unit
+}
+
+fn fill_kernargs(args: read HCQArgsState, kernargs: read RuntimeBufferState) -> fresh HCQArgsState {
+    local bufs = List.new<RuntimeBufferState>()
+    let mut i = 0
+    while i < List.len<RuntimeBufferState>(list: read args.bufs) {
+        List.push<RuntimeBufferState>(list: mut bufs, value: read List.get<RuntimeBufferState>(list: read args.bufs, index: i))
+        i = i + 1
+    }
+    local vals = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read args.vals) {
+        List.push<Int>(list: mut vals, value: read List.get<Int>(list: read args.vals, index: j))
+        j = j + 1
+    }
+    List.push<RuntimeBufferState>(list: mut bufs, value: read kernargs)
+    return HCQArgsState(bufs: take bufs, vals: take vals, bind_count: args.bind_count + 1)
+}
+
+fn next_timeline(dev: mut HCQCompiledState) -> Int {
+    dev.timeline.value = dev.timeline.value + 1
+    return dev.timeline.value
+}
+
+fn new_signal(dev: read HCQCompiledState, value: Int) -> fresh RuntimeSignalState {
+    return runtime_signal_new(value: value, owner_thread: 0, is_timeline: false)
+}
+
+fn device_props(dev: read HCQCompiledState) -> fresh HCQDeviceProps {
+    return HCQDeviceProps(device: String.copy(value: read dev.device), arch: String.copy(value: read dev.props.arch), compute_queues: dev.props.compute_queues, copy_queues: dev.props.copy_queues, is_cpu: dev.props.is_cpu)
+}
+
+fn hw_compute_queues(dev: read HCQCompiledState) -> Int { return dev.props.compute_queues }
+
+fn hw_copy_queues(dev: read HCQCompiledState) -> Int { return dev.props.copy_queues }
+
+fn _wrap_timeline_signal(dev: read HCQCompiledState) -> fresh RuntimeSignalState {
+    return RuntimeSignalState(value: dev.timeline.value, timestamp_ns: dev.timeline.timestamp_ns, owner_thread: dev.timeline.owner_thread, is_timeline: true)
+}
+
+fn _realloc(buf: read RuntimeBufferState, size: Int) -> fresh RuntimeBufferState {
+    return RuntimeBufferState(handle: buf.handle, size: size, offset: buf.offset, device: String.copy(value: read buf.device))
+}
+
+fn _select_iface(device: read String) -> fresh String {
+    if String.len(value: read device) == 0 { return String.copy(value: read "default") }
+    return String.copy(value: read device)
+}
+
+fn _is_cpu(device: read String) -> Bool { return device == "CPU" || device == "cpu" }
+
+fn rdma_dev(device: read String) -> fresh String { return String.concat(left: read device, right: read ":rdma") }
+
+fn offset(buf: read RuntimeBufferState, offset_bytes: Int, size: Int) -> fresh RuntimeBufferState {
+    return RuntimeBufferState(handle: buf.handle, size: size, offset: buf.offset + offset_bytes, device: String.copy(value: read buf.device))
+}
+
+fn cpu_view(buf: read RuntimeBufferState) -> fresh List<Int> { return _as_buffer(src: read buf) }
+
+fn mappings(dev: read HCQCompiledState) -> fresh List<RuntimeBufferState> {
+    local out = List.new<RuntimeBufferState>()
+    let mut i = 0
+    while i < List.len<RuntimeBufferState>(list: read dev.mappings) {
+        List.push<RuntimeBufferState>(list: mut out, value: read List.get<RuntimeBufferState>(list: read dev.mappings, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn mapped_devs(buf: read RuntimeBufferState) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read String.copy(value: read buf.device))
+    return take out
+}
+
+fn map(dev: mut HCQCompiledState, buf: read RuntimeBufferState) -> fresh RuntimeBufferState {
+    List.push<RuntimeBufferState>(list: mut dev.mappings, value: read buf)
+    return RuntimeBufferState(handle: buf.handle, size: buf.size, offset: buf.offset, device: String.copy(value: read buf.device))
+}
+
+fn copy_from_disk(dest: read RuntimeBufferState, src: read RuntimeBufferState, size: Int) -> fresh RuntimeBufferState {
+    return RuntimeBufferState(handle: dest.handle, size: size, offset: dest.offset, device: String.copy(value: read dest.device))
+}

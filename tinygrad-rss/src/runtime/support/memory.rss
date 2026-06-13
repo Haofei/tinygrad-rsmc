@@ -1,0 +1,199 @@
+features: local
+
+struct RuntimeBlock derives(Clone) {
+    start: Int,
+    size: Int,
+    free: Bool,
+}
+
+struct RuntimeMapping derives(Clone) {
+    vaddr: Int,
+    size: Int,
+    paddr: Int,
+    aspace: String,
+    uncached: Bool,
+    snooped: Bool,
+}
+
+struct RuntimeMemoryState derives(Clone) {
+    va_base: Int,
+    va_next: Int,
+    pa_next: Int,
+    blocks: List<RuntimeBlock>,
+    mappings: List<RuntimeMapping>,
+}
+
+fn max_int(a: Int, b: Int) -> Int {
+    if a > b { return a }
+    return b
+}
+
+fn runtime_memory_new(va_base: Int) -> fresh RuntimeMemoryState {
+    return RuntimeMemoryState(va_base: va_base, va_next: va_base, pa_next: 0, blocks: List.new<RuntimeBlock>(), mappings: List.new<RuntimeMapping>())
+}
+
+fn lv1(size: Int) -> Int {
+    let mut bits = 0
+    let mut v = size
+    while v > 0 {
+        bits = bits + 1
+        v = v / 2
+    }
+    return bits
+}
+
+fn lv2(size: Int) -> Int {
+    let l1 = lv1(size: size)
+    if l1 <= 1 { return 0 }
+    let base = 1 << (l1 - 1)
+    let step = 1 << max_int(a: 0, b: l1 - 5)
+    if step == 0 { return 0 }
+    return (size - base) / step
+}
+
+fn _insert_block(mm: mut RuntimeMemoryState, start: Int, size: Int) -> Unit {
+    List.push<RuntimeBlock>(list: mut mm.blocks, value: read RuntimeBlock(start: start, size: size, free: true))
+    return Unit
+}
+
+fn _remove_block(mm: mut RuntimeMemoryState, start: Int) -> Unit {
+    local out = List.new<RuntimeBlock>()
+    let mut i = 0
+    while i < List.len<RuntimeBlock>(list: read mm.blocks) {
+        let b = List.get<RuntimeBlock>(list: read mm.blocks, index: i)
+        if b.start != start { List.push<RuntimeBlock>(list: mut out, value: read b) }
+        i = i + 1
+    }
+    mm.blocks = take out
+    return Unit
+}
+
+fn _split_block(mm: mut RuntimeMemoryState, start: Int, new_size: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<RuntimeBlock>(list: read mm.blocks) {
+        let b = List.get<RuntimeBlock>(list: read mm.blocks, index: i)
+        if b.start == start && b.size > new_size {
+            _remove_block(mm: mut mm, start: start)
+            _insert_block(mm: mut mm, start: start, size: new_size)
+            _insert_block(mm: mut mm, start: start + new_size, size: b.size - new_size)
+            return Unit
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn _merge_right(mm: mut RuntimeMemoryState, start: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<RuntimeBlock>(list: read mm.blocks) {
+        let a = List.get<RuntimeBlock>(list: read mm.blocks, index: i)
+        let mut j = 0
+        while j < List.len<RuntimeBlock>(list: read mm.blocks) {
+            let b = List.get<RuntimeBlock>(list: read mm.blocks, index: j)
+            if a.start == start && a.free && b.free && b.start == a.start + a.size {
+                _remove_block(mm: mut mm, start: a.start)
+                _remove_block(mm: mut mm, start: b.start)
+                _insert_block(mm: mut mm, start: a.start, size: a.size + b.size)
+                return Unit
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn _merge_block(mm: mut RuntimeMemoryState, start: Int) -> Unit {
+    _merge_right(mm: mut mm, start: start)
+    return Unit
+}
+
+fn _pt_pte_cnt(lv: Int) -> Int { return 1 << max_int(a: 0, b: 9 - lv) }
+
+fn _pt_pte_size(lv: Int) -> Int { return 4096 << max_int(a: 0, b: 3 - lv) }
+
+fn _pt_pte_idx(lv: Int, va: Int) -> Int {
+    let sz = _pt_pte_size(lv: lv)
+    let cnt = _pt_pte_cnt(lv: lv)
+    if sz == 0 || cnt == 0 { return 0 }
+    return (va / sz) % cnt
+}
+
+fn level_down(level: Int) -> Int { return level + 1 }
+
+fn _try_free_pt(mm: read RuntimeMemoryState, level: Int) -> Bool {
+    return level > 0 && List.len<RuntimeMapping>(list: read mm.mappings) == 0
+}
+
+fn level_up(level: Int) -> Int {
+    if level <= 0 { return 0 }
+    return level - 1
+}
+
+fn next(vaddr: Int, size: Int, step: Int) -> Int {
+    if step <= 0 { return vaddr + size }
+    return vaddr + step
+}
+
+fn _frag_size(va: Int, sz: Int, must_cover: Bool) -> Int {
+    let mut frag = 0
+    let mut cover = 4096
+    while cover < sz {
+        cover = cover * 2
+        frag = frag + 1
+    }
+    if must_cover == false && va > 0 { return frag }
+    return frag
+}
+
+fn page_tables(mm: read RuntimeMemoryState, vaddr: Int, size: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read _pt_pte_idx(lv: 0, va: vaddr - mm.va_base))
+    List.push<Int>(list: mut out, value: read _frag_size(va: vaddr, sz: size, must_cover: true))
+    return take out
+}
+
+fn map_range(mm: mut RuntimeMemoryState, vaddr: Int, size: Int, paddr: Int, aspace: read String, uncached: Bool, snooped: Bool) -> fresh RuntimeMapping {
+    List.push<RuntimeMapping>(list: mut mm.mappings, value: read RuntimeMapping(vaddr: vaddr, size: size, paddr: paddr, aspace: String.copy(value: read aspace), uncached: uncached, snooped: snooped))
+    on_range_mapped(mm: mut mm)
+    return RuntimeMapping(vaddr: vaddr, size: size, paddr: paddr, aspace: String.copy(value: read aspace), uncached: uncached, snooped: snooped)
+}
+
+fn unmap_range(mm: mut RuntimeMemoryState, vaddr: Int, size: Int) -> Unit {
+    local out = List.new<RuntimeMapping>()
+    let mut i = 0
+    while i < List.len<RuntimeMapping>(list: read mm.mappings) {
+        let m = List.get<RuntimeMapping>(list: read mm.mappings, index: i)
+        if m.vaddr != vaddr || m.size != size { List.push<RuntimeMapping>(list: mut out, value: read m) }
+        i = i + 1
+    }
+    mm.mappings = take out
+    return Unit
+}
+
+fn on_range_mapped(mm: mut RuntimeMemoryState) -> Unit { return Unit }
+
+fn alloc_vaddr(mm: mut RuntimeMemoryState, size: Int, align: Int) -> Int {
+    let addr = round_up(num: mm.va_next, amt: max_int(a: 1, b: align))
+    mm.va_next = addr + size
+    return addr
+}
+
+fn identity_va(mm: read RuntimeMemoryState, paddr: Int) -> Int { return mm.va_base + paddr }
+
+fn valloc(mm: mut RuntimeMemoryState, size: Int, align: Int) -> Int {
+    return alloc_vaddr(mm: mut mm, size: size, align: align)
+}
+
+fn vfree(mm: mut RuntimeMemoryState, vaddr: Int, size: Int) -> Unit {
+    unmap_range(mm: mut mm, vaddr: vaddr, size: size)
+    return Unit
+}
+
+fn palloc(mm: mut RuntimeMemoryState, size: Int, zero: Bool, boot: Bool, ptable: Bool) -> Int {
+    let addr = mm.pa_next
+    mm.pa_next = mm.pa_next + size
+    return addr
+}
+
+fn pfree(mm: mut RuntimeMemoryState, paddr: Int, ptable: Bool) -> Unit { return Unit }

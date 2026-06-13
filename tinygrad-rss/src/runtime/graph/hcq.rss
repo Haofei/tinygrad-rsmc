@@ -1,0 +1,51 @@
+features: local
+
+struct HCQGraphState derives(Clone) {
+    devices: List<String>,
+    deps: List<Int>,
+    timestamps: List<Int>,
+}
+
+fn hcq_graph_new(devices: read List<String>) -> fresh HCQGraphState {
+    local devs = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read devices) {
+        List.push<String>(list: mut devs, value: read List.get<String>(list: read devices, index: i))
+        i = i + 1
+    }
+    return HCQGraphState(devices: take devs, deps: List.new<Int>(), timestamps: List.new<Int>())
+}
+
+fn _resolve_deps(graph: mut HCQGraphState, bufs: read List<RuntimeBufferState>, out_count: Int, queue_id: Int) -> fresh List<Int> {
+    local deps = List.new<Int>()
+    let mut i = 0
+    while i < List.len<RuntimeBufferState>(list: read bufs) {
+        let b = List.get<RuntimeBufferState>(list: read bufs, index: i)
+        List.push<Int>(list: mut deps, value: read (b.handle + queue_id + out_count))
+        List.push<Int>(list: mut graph.deps, value: read (b.handle + queue_id + out_count))
+        i = i + 1
+    }
+    return take deps
+}
+
+fn _dev_copy_queues(graph: read HCQGraphState, dev: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<String>(list: read graph.devices) {
+        if List.get<String>(list: read graph.devices, index: i) == dev { List.push<Int>(list: mut out, value: read i) }
+        i = i + 1
+    }
+    if List.len<Int>(list: read out) == 0 { List.push<Int>(list: mut out, value: read 0) }
+    return take out
+}
+
+fn collect_timestamps(graph: mut HCQGraphState, start: Int, stop: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read start)
+    List.push<Int>(list: mut out, value: read stop)
+    List.push<Int>(list: mut graph.timestamps, value: read start)
+    List.push<Int>(list: mut graph.timestamps, value: read stop)
+    return take out
+}
+
+fn dev_name(dev: read String) -> fresh String { return String.copy(value: read dev) }

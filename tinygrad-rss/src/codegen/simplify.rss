@@ -30,6 +30,32 @@ fn simplify_subst_put(ctx: mut SimplifySubst, old_id: Int, new_id: Int) -> Unit 
     return Unit
 }
 
+fn simplify_subst_find(ctx: read SimplifySubst, old_id: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read ctx.olds) {
+        if List.get<Int>(list: read ctx.olds, index: i) == old_id { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn simplify_subst_put_guard_bound(cache: read UOpCache, ctx: mut SimplifySubst, r: Int, bound: Int) -> Unit {
+    let found = simplify_subst_find(ctx: read ctx, old_id: r)
+    if found < 0 {
+        simplify_subst_put(ctx: mut ctx, old_id: r, new_id: bound)
+        return Unit
+    }
+    let old_bound = List.get<Int>(list: read ctx.news, index: found)
+    if node_is_const_int(cache: read cache, id: old_bound) && node_is_const_int(cache: read cache, id: bound) {
+        if node_const_int(cache: read cache, id: bound) > node_const_int(cache: read cache, id: old_bound) {
+            List.set<Int>(list: mut ctx.news, index: found, value: read bound)
+        }
+        return Unit
+    }
+    List.set<Int>(list: mut ctx.news, index: found, value: read bound)
+    return Unit
+}
+
 fn simplify_ranges_from_toposort(cache: read UOpCache, ids: read List<Int>) -> fresh List<Int> {
     local out = List.new<Int>()
     let mut i = 0
@@ -103,16 +129,56 @@ fn simplify_merge_adjacent(cache: mut UOpCache, u: Int) -> Option<Int> {
     return None
 }
 
+fn simplify_single_range_expr(cache: read UOpCache, x: Int) -> Int {
+    if node_op(cache: read cache, id: x) == RANGE { return x }
+    if node_op(cache: read cache, id: x) == CAST && node_num_src(cache: read cache, id: x) == 1 {
+        let child = node_src_id(cache: read cache, id: x, k: 0)
+        if node_op(cache: read cache, id: child) == RANGE { return child }
+    }
+    return -1
+}
+
+fn simplify_mark_guard_clause(cache: read UOpCache, ctx: mut SimplifySubst, guarded: mut List<Int>, clause: Int) -> Unit {
+    if node_op(cache: read cache, id: clause) != CMPLT || node_num_src(cache: read cache, id: clause) != 2 { return Unit }
+    let lhs = node_src_id(cache: read cache, id: clause, k: 0)
+    let rhs = node_src_id(cache: read cache, id: clause, k: 1)
+    if node_is_const_int(cache: read cache, id: rhs) == false { return Unit }
+    let r = simplify_single_range_expr(cache: read cache, x: lhs)
+    if r < 0 { return Unit }
+    simplify_subst_put_guard_bound(cache: read cache, ctx: mut ctx, r: r, bound: rhs)
+    uop_push_unique(vals: mut guarded, v: r)
+    return Unit
+}
+
+fn simplify_mark_valid_guards(cache: read UOpCache, ctx: mut SimplifySubst, valid: Int) -> fresh List<Int> {
+    local guarded = List.new<Int>()
+    local clauses = uop_split_by_op(cache: read cache, id: valid, sep: AND)
+    let mut i = 0
+    while i < List.len<Int>(list: read clauses) {
+        simplify_mark_guard_clause(cache: read cache, ctx: mut ctx, guarded: mut guarded, clause: List.get<Int>(list: read clauses, index: i))
+        i = i + 1
+    }
+    return take guarded
+}
+
 fn mark_gated(cache: mut UOpCache, ctx: mut SimplifySubst, idx: Int) -> Unit {
     if node_op(cache: read cache, id: idx) != INDEX { return Unit }
-    local ranges = uop_ranges(cache: read cache, id: idx)
-    let mut i = 0
-    while i < List.len<Int>(list: read ranges) {
-        let r = List.get<Int>(list: read ranges, index: i)
-        if node_num_src(cache: read cache, id: r) > 0 {
-            simplify_subst_put(ctx: mut ctx, old_id: r, new_id: node_src_id(cache: read cache, id: r, k: 0))
+    let mut si = 1
+    while si < node_num_src(cache: read cache, id: idx) {
+        let raw = node_src_id(cache: read cache, id: idx, k: si)
+        let x = uop_get_idx(cache: read cache, id: raw)
+        let valid = uop_get_valid(cache: mut cache, id: raw)
+        local guarded = simplify_mark_valid_guards(cache: read cache, ctx: mut ctx, valid: valid)
+        local ranges = uop_ranges(cache: read cache, id: x)
+        let mut i = 0
+        while i < List.len<Int>(list: read ranges) {
+            let r = List.get<Int>(list: read ranges, index: i)
+            if uop_ints_contains(vals: read guarded, v: r) == false && node_num_src(cache: read cache, id: r) > 0 {
+                simplify_subst_put(ctx: mut ctx, old_id: r, new_id: node_src_id(cache: read cache, id: r, k: 0))
+            }
+            i = i + 1
         }
-        i = i + 1
+        si = si + 1
     }
     return Unit
 }

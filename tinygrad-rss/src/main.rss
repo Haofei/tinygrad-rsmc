@@ -2980,6 +2980,15 @@ fn main() -> Unit {
     mark_gated(cache: mut mcache, ctx: mut simp_ctx, idx: simp_idx)
     mark_range_mod(cache: mut mcache, ctx: mut simp_ctx, r: simp_r0, c: simp_c2)
     local simp_sub = do_substitute(cache: mut mcache, ctx: mut simp_ctx, x: simp_nested)
+    let simp_gr = mk_range_int(cache: mut mcache, end: 5, axis_id: 43, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_guard = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_gr, y: simp_c2)
+    let simp_gvalid = uop_valid(cache: mut mcache, id: simp_gr, cond: simp_guard)
+    local simp_gidx_srcs = List.new<Int>()
+    pushi(l: mut simp_gidx_srcs, v: simp_gvalid)
+    let simp_gidx = mk_index(cache: mut mcache, base: gpudims_buf, srcs: read simp_gidx_srcs, ptr: false)
+    local simp_gctx = simplify_empty_subst()
+    mark_gated(cache: mut mcache, ctx: mut simp_gctx, idx: simp_gidx)
+    local simp_gsub = do_substitute(cache: mut mcache, ctx: mut simp_gctx, x: simp_gr)
     local simp_red_srcs = List.new<Int>()
     pushi(l: mut simp_red_srcs, v: m2)
     pushi(l: mut simp_red_srcs, v: simp_r1)
@@ -3000,6 +3009,10 @@ fn main() -> Unit {
     match simp_sub {
         Some(v) => { showb(label: read "codegen.simplify substitute context = ", v: spec_type_verify(cache: read mcache, id: v)) }
         None => { showb(label: read "codegen.simplify substitute context = ", v: false) }
+    }
+    match simp_gsub {
+        Some(v) => { showb(label: read "codegen.simplify guarded range bound = ", v: v == simp_c2) }
+        None => { showb(label: read "codegen.simplify guarded range bound = ", v: false) }
     }
     showb(label: read "codegen.simplify no range/load = ", v: no_range(cache: read mcache, u: m2) && no_range(cache: read mcache, u: simp_nested) == false && no_load(cache: read mcache, u: m2) && no_load(cache: read mcache, u: simp_idx) == false)
     match simp_red_unparented {

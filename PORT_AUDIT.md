@@ -578,8 +578,11 @@ Integrated pieces:
   `do_substitute`, `no_range`, `reduce_unparented`, `reduce_collapse`, `reduce_load_collapse`,
   and `no_load`. It uses existing `graph_rewrite`, range discovery, and `memory_replace_many`
   primitives, with a real `reduce_unparented` path for unused ADD/MUL reduce ranges and
-  conservative collapse hooks for pattern-heavy upstream cases. Full PatternMatcher parity for
-  gated range shrinking and load-index collapse remains later fidelity work.
+  conservative collapse hooks for pattern-heavy upstream cases. `mark_gated` now recognizes
+  `WHERE(valid, idx, INVALID)` index operands, extracts `range < const` clauses from `AND`-split
+  validity guards, and substitutes guarded ranges with the tighter bound while leaving ungated
+  index ranges at their full end. Full PatternMatcher parity for load-index collapse remains later
+  fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

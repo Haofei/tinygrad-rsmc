@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 41 RSS files, 34,294 LOC.
+  - integrated `tinygrad-rss/src`: 41 RSS files, 34,559 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -33,6 +33,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.
+  - focused runtime-device batch: `device.py` 66/66 symbols covered in rough inventory.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -421,9 +422,16 @@ Integrated pieces:
   covering canonical device strings, `BufferSpec`, `Buffer`/`MultiBuffer` descriptors, nbytes,
   allocation-state projection, refcounts, view offsets, explicit RSS byte-list allocation handles,
   copyin/copyout, deallocate, cache reuse, and cache freeing. The RSS struct is named `TGBuffer`
-  to avoid a generated Rust backend collision, while the helper surface remains `buffer_*`.
-  Native opaque runtime handles, full device-specific LRU allocator behavior, compiler caches,
-  dynamic runtime loading, profiling finalization, and device enumeration remain unported.
+  to avoid a generated Rust backend collision, while the helper surface remains `buffer_*`. It now
+  also exposes source-shaped `Device`/`Buffer`/`Allocator`/`Compiler`/`Compiled` facade names:
+  canonicalization/default selection, available-device enumeration, buffer `size`/`base`/`ref`/
+  `is_allocated`/`is_initialized`/`get_buf`/`ensure_allocated`/`allocate`/`deallocate`/
+  `as_memoryview`/`copyin`/`copyout`, allocator `alloc`/`free`/`free_cache` and low-level
+  `_alloc`/`_free`/`_copyin`/`_copyout`/`_map`/`_unmap`/`_encode_decode`, byte-list compiler
+  `compile`/`compile_cached`/`disassemble`, renderer/compiler selection, device count,
+  synchronize/finalize/profile hooks, and `enumerate_devices_str`. Native opaque runtime handles,
+  real target imports, actual compiler cache persistence, and target-specific allocator backends
+  remain later fidelity work.
 - `engine/realize.rss`: first integrated source-shaped `tinygrad/engine/realize.py` metadata and
   byte-buffer execution slice, covering `get_call_arg_uops`, `get_call_outs_ins` for `PROGRAM`,
   `COPY`, `SLICE`, and `CUSTOM_FUNCTION("encdec")`, `estimate_uop` for `PROGRAM`, `COPY`, and
@@ -1126,7 +1134,7 @@ Major missing integrated work:
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: exact target-specific compiler integration, full prefix emission, and
   renderer policy beyond the source-shaped facade names now in `renderer/cstyle.rss`.
-- `engine/*`, `device.py` beyond the first allocator/metadata slice, `runtime/*`, `runtime/support/*`:
+- `engine/*`, target-specific `runtime/*`, `runtime/support/*`, and native device backends:
   handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.

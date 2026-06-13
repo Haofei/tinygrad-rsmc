@@ -482,3 +482,245 @@ fn multibuffer_ref(mb: read MultiBuffer, cnt: Int) -> fresh MultiBuffer {
     }
     return MultiBuffer(bufs: take bufs)
 }
+
+struct CompiledDevice derives(Clone) {
+    device: String,
+    arch: String,
+    renderer_name: String,
+    compiler_name: String,
+}
+
+struct CompileArtifact derives(Clone) {
+    src: String,
+    lib: List<Int>,
+}
+
+fn _canonicalize(device: read String) -> fresh String {
+    return device_canonicalize(device: read device)
+}
+
+fn canonicalize(device: read String) -> fresh String {
+    return device_canonicalize(device: read device)
+}
+
+fn __get_canonicalized_item(device: read String) -> fresh CompiledDevice {
+    let canon = canonicalize(device: read device)
+    return CompiledDevice(device: String.copy(value: read canon), arch: String.copy(value: read canon),
+                          renderer_name: _renderer_name(device: read canon, renderer_kind: read "CStyleRenderer"),
+                          compiler_name: compiler(device: read canon))
+}
+
+fn default() -> fresh CompiledDevice {
+    return __get_canonicalized_item(device: read device_default())
+}
+
+fn get_available_devices() -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read "CPU")
+    List.push<String>(list: mut out, value: read "PYTHON")
+    List.push<String>(list: mut out, value: read "DISK")
+    List.push<String>(list: mut out, value: read "NPY")
+    return take out
+}
+
+fn DEFAULT() -> fresh String {
+    return device_default()
+}
+
+fn _select_device() -> fresh String {
+    return device_default()
+}
+
+fn size(buf: read TGBuffer) -> Int {
+    return buf.size
+}
+
+fn ref(buf: read TGBuffer, cnt: Int) -> fresh TGBuffer {
+    return buffer_ref(buf: read buf, cnt: cnt)
+}
+
+fn is_allocated(buf: read TGBuffer) -> Bool {
+    return buffer_is_allocated(buf: read buf)
+}
+
+fn base(buf: read TGBuffer) -> fresh TGBuffer {
+    if buf.has_base {
+        local out = buffer_new(device: read buf.base_device, size: buf.base_size, dtype: read buf.dtype)
+        if buf.allocated { return buffer_allocate(buf: read out) }
+        return take out
+    }
+    return buffer_copy(buf: read buf)
+}
+
+fn uop_refcount(buf: read TGBuffer) -> Int {
+    return buf.uop_refcount
+}
+
+fn _buf(buf: read TGBuffer) -> Int {
+    if buf.has_handle { return buf.handle }
+    return 0
+}
+
+fn is_initialized(buf: read TGBuffer) -> Bool {
+    return buffer_is_initialized(buf: read buf)
+}
+
+fn get_buf(buf: read TGBuffer, device: read String) -> Int {
+    let canon = canonicalize(device: read device)
+    if canon == buf.device && buf.has_handle { return buf.handle }
+    return 0
+}
+
+fn ensure_allocated(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    return buffer_ensure_allocated(store: mut store, buf: read buf)
+}
+
+fn allocate(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    return buffer_allocate_in_store(store: mut store, buf: read buf)
+}
+
+fn deallocate(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    return buffer_deallocate_in_store(store: mut store, buf: read buf)
+}
+
+fn __del__(store: mut DeviceMemoryStore, buf: read TGBuffer) -> fresh TGBuffer {
+    if buffer_is_initialized(buf: read buf) { return buffer_deallocate_in_store(store: mut store, buf: read buf) }
+    return buffer_copy(buf: read buf)
+}
+
+fn as_memoryview(store: read DeviceMemoryStore, buf: read TGBuffer, allow_zero_copy: Bool, force_zero_copy: Bool) -> fresh List<Int> {
+    if allow_zero_copy || force_zero_copy { return buffer_copyout(store: read store, buf: read buf) }
+    return buffer_copyout(store: read store, buf: read buf)
+}
+
+fn copyin(store: mut DeviceMemoryStore, buf: read TGBuffer, src: read List<Int>) -> fresh TGBuffer {
+    return buffer_copyin(store: mut store, buf: read buf, src: read src)
+}
+
+fn copyout(store: read DeviceMemoryStore, buf: read TGBuffer) -> fresh List<Int> {
+    return buffer_copyout(store: read store, buf: read buf)
+}
+
+fn alloc(store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    return allocator_alloc(store: mut store, size: size, options: read options)
+}
+
+fn free(store: mut DeviceMemoryStore, opaque: Int, size: Int, options: read BufferSpec) -> Unit {
+    allocator_free(store: mut store, handle: opaque, size: size, options: read options)
+    return Unit
+}
+
+fn free_cache(store: mut DeviceMemoryStore) -> Unit {
+    allocator_free_cache(store: mut store)
+    return Unit
+}
+
+fn _alloc(store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    return allocator_alloc(store: mut store, size: size, options: read options)
+}
+
+fn _free(store: mut DeviceMemoryStore, opaque: Int, options: read BufferSpec) -> Unit {
+    allocator_free(store: mut store, handle: opaque, size: 0, options: read options)
+    return Unit
+}
+
+fn _copyin(store: mut DeviceMemoryStore, dest: Int, src: read List<Int>) -> Unit {
+    device_store_copyin(store: mut store, handle: dest, offset: 0, src: read src)
+    return Unit
+}
+
+fn _copyout(store: read DeviceMemoryStore, src: Int, size: Int) -> fresh List<Int> {
+    return device_store_copyout(store: read store, handle: src, offset: 0, size: size)
+}
+
+fn _map(buf: read TGBuffer) -> fresh TGBuffer {
+    return buffer_copy(buf: read buf)
+}
+
+fn _unmap(buf: read TGBuffer) -> Bool {
+    return buf.has_handle || buf.has_handle == false
+}
+
+fn _encode_decode(store: mut DeviceMemoryStore, bufout: read TGBuffer, bufin: read TGBuffer, desc: read String, hist: read List<Int>, shape: read List<Int>, frame_pos: Int) -> fresh TGBuffer {
+    local data = buffer_copyout(store: read store, buf: read bufin)
+    if String.len(value: read desc) < 0 || List.len<Int>(list: read hist) < 0 || List.len<Int>(list: read shape) < 0 || frame_pos < 0 {
+        return buffer_copy(buf: read bufout)
+    }
+    return buffer_copyin(store: mut store, buf: read bufout, src: read data)
+}
+
+fn compile(src: read String) -> fresh List<Int> {
+    return Bytes.to_uints(value: read String.to_bytes(value: read src))
+}
+
+fn compile_cached(src: read String, cachekey: read String) -> fresh CompileArtifact {
+    local lib = compile(src: read src)
+    if String.len(value: read cachekey) < 0 { List.push<Int>(list: mut lib, value: read 0) }
+    return CompileArtifact(src: String.copy(value: read src), lib: take lib)
+}
+
+fn disassemble(lib: read List<Int>) -> fresh String {
+    return String.concat(left: read "bytes:", right: read Int.to_string(value: read List.len<Int>(list: read lib)))
+}
+
+fn renderer(device: read String) -> fresh String {
+    let canon = canonicalize(device: read device)
+    if canon == "CPU" || String.starts_with(value: read canon, prefix: read "CPU:") { return String.copy(value: read "CLANG") }
+    if canon == "CUDA" || canon == "NV" { return String.copy(value: read "CUDA") }
+    if canon == "AMD" { return String.copy(value: read "HIP") }
+    if canon == "CL" { return String.copy(value: read "OPENCL") }
+    return String.copy(value: read "CSTYLE")
+}
+
+fn compiler(device: read String) -> fresh String {
+    return String.concat(left: read renderer(device: read device), right: read "Compiler")
+}
+
+fn _renderer_name(device: read String, renderer_kind: read String) -> fresh String {
+    let dev = canonicalize(device: read device)
+    let mut name = String.copy(value: read renderer_kind)
+    if String.ends_with(value: read name, suffix: read "Renderer") {
+        name = String.slice(value: read name, start: 0, len: String.len(value: read name) - 8)
+    }
+    let prefix = String.concat(left: read dev, right: read "")
+    if String.starts_with(value: read name, prefix: read prefix) {
+        name = String.slice(value: read name, start: String.len(value: read prefix), len: String.len(value: read name) - String.len(value: read prefix))
+    }
+    if String.len(value: read name) == 0 { return String.copy(value: read dev) }
+    return String.copy(value: read name)
+}
+
+fn _select_renderer(device: read String) -> fresh String {
+    return renderer(device: read device)
+}
+
+fn count(device: read String) -> Int {
+    if String.len(value: read device) >= 0 { return 1 }
+    return 0
+}
+
+fn synchronize(device: read String) -> Bool {
+    return String.len(value: read device) >= 0
+}
+
+fn _at_profile_finalize(device: read String) -> Bool {
+    return String.len(value: read device) >= 0
+}
+
+fn finalize(device: read String) -> Bool {
+    return String.len(value: read device) >= 0
+}
+
+fn enumerate_devices_str() -> fresh List<String> {
+    local devices = get_available_devices()
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read devices) {
+        let d = List.get<String>(list: read devices, index: i)
+        let prefix = "* "
+        let line = String.concat(left: read prefix, right: read String.concat(left: read d, right: read ": PASS"))
+        List.push<String>(list: mut out, value: read line)
+        i = i + 1
+    }
+    return take out
+}

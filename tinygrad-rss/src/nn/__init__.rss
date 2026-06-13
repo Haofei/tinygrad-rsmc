@@ -1,0 +1,142 @@
+// First source-shaped slice of tinygrad/nn/__init__.py.
+//
+// These are lightweight layer/function facades over the integrated Tensor UOp graph. They preserve
+// upstream entry-point names while using the current tensor primitives for supported CPU/value paths.
+features: local
+
+struct BatchNormStats derives(Clone) {
+    mean: Int,
+    var: Int,
+}
+
+struct Conv1dLayer derives(Clone) {
+    weight: Int,
+    bias: Int,
+    stride: Int,
+    padding: Int,
+    dilation: Int,
+    groups: Int,
+}
+
+struct RMSNormLayer derives(Clone) {
+    weight: Int,
+    eps: Float,
+    has_weight: Bool,
+}
+
+struct EmbeddingLayer derives(Clone) {
+    weight: Int,
+    vocab_size: Int,
+    embed_size: Int,
+}
+
+fn calc_stats(cache: mut UOpCache, x: Int) -> fresh BatchNormStats {
+    local shape = uop_shape(cache: read cache, id: x)
+    local axes = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        if i != 1 { push1(l: mut axes, a: i) }
+        i = i + 1
+    }
+    let mean = tensor_mean_axes(cache: mut cache, x: x, axes: read axes)
+    let centered = tensor_sub(cache: mut cache, a: x, b: mean)
+    let sq = tensor_mul(cache: mut cache, a: centered, b: centered)
+    let variance = tensor_mean_axes(cache: mut cache, x: sq, axes: read axes)
+    return BatchNormStats(mean: mean, var: variance)
+}
+
+fn Conv1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_size: Int, stride: Int, padding: Int, dilation: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv1dLayer {
+    local wshape = List.new<Int>()
+    push1(l: mut wshape, a: out_channels)
+    push1(l: mut wshape, a: in_channels / groups)
+    push1(l: mut wshape, a: kernel_size)
+    let scale = 1.0 / Math.sqrt(value: Int.to_float(value: read (in_channels * kernel_size)))
+    let weight = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read wshape, low: 0.0 - scale, high: scale, seed: seed)
+    let mut bias_node = 0 - 1
+    if bias {
+        local bshape = shp1(a: out_channels)
+        bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - scale, high: scale, seed: seed + 1)
+    }
+    return Conv1dLayer(weight: weight, bias: bias_node, stride: stride, padding: padding, dilation: dilation, groups: groups)
+}
+
+fn ConvTranspose1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_size: Int, stride: Int, padding: Int, output_padding: Int, dilation: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv1dLayer {
+    local wshape = List.new<Int>()
+    push1(l: mut wshape, a: in_channels)
+    push1(l: mut wshape, a: out_channels / groups)
+    push1(l: mut wshape, a: kernel_size)
+    let scale = 1.0 / Math.sqrt(value: Int.to_float(value: read (in_channels * kernel_size)))
+    let weight = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read wshape, low: 0.0 - scale, high: scale, seed: seed)
+    let mut bias_node = 0 - 1
+    if bias {
+        local bshape = shp1(a: out_channels)
+        bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - scale, high: scale, seed: seed + 1)
+    }
+    return Conv1dLayer(weight: weight, bias: bias_node, stride: stride, padding: padding, dilation: dilation, groups: groups)
+}
+
+fn _norm(cache: mut UOpCache, x: Int, eps: Float) -> Int {
+    let sq = tensor_mul(cache: mut cache, a: x, b: x)
+    let mean = tensor_mean_dim(cache: mut cache, x: sq, dim: 0 - 1)
+    let eps_t = tensor_const_like_float(cache: mut cache, x: mean, value: eps)
+    let mean_eps = tensor_add(cache: mut cache, a: mean, b: eps_t)
+    let denom = tensor_rsqrt(cache: mut cache, x: mean_eps)
+    return tensor_mul(cache: mut cache, a: x, b: denom)
+}
+
+fn _embedding_fwd(cache: mut UOpCache, weight: Int, idx: Int) -> Int {
+    local idx_vals = tensor_data(cache: read cache, x: idx)
+    local wshape = uop_shape(cache: read cache, id: weight)
+    local wdata = tensor_data(cache: read cache, x: weight)
+    let vocab = List.get<Int>(list: read wshape, index: 0)
+    let embed = List.get<Int>(list: read wshape, index: 1)
+    local out_shape = uop_shape(cache: read cache, id: idx)
+    push1(l: mut out_shape, a: embed)
+    local out = List.new<Float>()
+    let mut i = 0
+    while i < List.len<Float>(list: read idx_vals) {
+        let mut token = trunc_float_to_int(v: List.get<Float>(list: read idx_vals, index: i))
+        if token < 0 { token = 0 }
+        if token >= vocab { token = vocab - 1 }
+        let mut j = 0
+        while j < embed {
+            pushf1(l: mut out, a: List.get<Float>(list: read wdata, index: token * embed + j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read node_dtype(cache: read cache, id: weight), shape: read out_shape, data: read out)
+}
+
+fn _embedding_bwd(cache: mut UOpCache, grad_emb: Int, weight: Int, idx: Int) -> Int {
+    local wshape = uop_shape(cache: read cache, id: weight)
+    let vocab = List.get<Int>(list: read wshape, index: 0)
+    let embed = List.get<Int>(list: read wshape, index: 1)
+    local out = List.new<Float>()
+    let mut z = 0
+    while z < vocab * embed {
+        pushf1(l: mut out, a: 0.0)
+        z = z + 1
+    }
+    local idx_vals = tensor_data(cache: read cache, x: idx)
+    local grad_vals = tensor_data(cache: read cache, x: grad_emb)
+    let mut i = 0
+    while i < List.len<Float>(list: read idx_vals) {
+        let mut token = trunc_float_to_int(v: List.get<Float>(list: read idx_vals, index: i))
+        if token < 0 { token = 0 }
+        if token >= vocab { token = vocab - 1 }
+        let mut j = 0
+        while j < embed {
+            let pos = token * embed + j
+            let old = List.get<Float>(list: read out, index: pos)
+            List.set<Float>(list: mut out, index: pos, value: read (old + List.get<Float>(list: read grad_vals, index: i * embed + j)))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read node_dtype(cache: read cache, id: weight), shape: read wshape, data: read out)
+}
+
+fn _embedding_fwd_fxn(cache: mut UOpCache, weight: Int, idx: Int, device: read String) -> Int {
+    return _embedding_fwd(cache: mut cache, weight: weight, idx: idx)
+}

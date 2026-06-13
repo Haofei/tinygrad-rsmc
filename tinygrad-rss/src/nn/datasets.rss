@@ -1,0 +1,41 @@
+// Lightweight source-shaped dataset facades for tinygrad/nn/datasets.py.
+//
+// The real Python helpers download and parse full archives. This port keeps the public entry-point
+// names available without network access by returning deterministic tiny tensors with canonical
+// dataset ranks, which is enough for examples and integration smoke tests to shape-check paths.
+features: local
+
+struct DatasetSplit derives(Clone) {
+    train_x: Int,
+    train_y: Int,
+    test_x: Int,
+    test_y: Int,
+}
+
+fn dataset_split_zeros(cache: mut UOpCache, x_shape: read List<Int>, y_shape: read List<Int>) -> fresh DatasetSplit {
+    let train_x = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read x_shape)
+    let train_y = tensor_zeros(cache: mut cache, dt: read dt_default_int(), shape: read y_shape)
+    let test_x = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read x_shape)
+    let test_y = tensor_zeros(cache: mut cache, dt: read dt_default_int(), shape: read y_shape)
+    return DatasetSplit(train_x: train_x, train_y: train_y, test_x: test_x, test_y: test_y)
+}
+
+fn mnist(cache: mut UOpCache, device: read String, fashion: Bool) -> fresh DatasetSplit {
+    local x_shape = List.new<Int>()
+    push1(l: mut x_shape, a: 1)
+    push1(l: mut x_shape, a: 1)
+    push1(l: mut x_shape, a: 28)
+    push1(l: mut x_shape, a: 28)
+    local y_shape = shp1(a: 1)
+    return dataset_split_zeros(cache: mut cache, x_shape: read x_shape, y_shape: read y_shape)
+}
+
+fn cifar(cache: mut UOpCache, device: read String) -> fresh DatasetSplit {
+    local x_shape = List.new<Int>()
+    push1(l: mut x_shape, a: 1)
+    push1(l: mut x_shape, a: 3)
+    push1(l: mut x_shape, a: 32)
+    push1(l: mut x_shape, a: 32)
+    local y_shape = shp1(a: 1)
+    return dataset_split_zeros(cache: mut cache, x_shape: read x_shape, y_shape: read y_shape)
+}

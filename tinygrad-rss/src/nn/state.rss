@@ -1,0 +1,136 @@
+// First source-shaped slice of tinygrad/nn/state.py.
+features: native, local
+
+struct TensorIOState derives(Clone) {
+    tensor: Int,
+    position: Int,
+}
+
+struct StateDict derives(Clone) {
+    names: List<String>,
+    tensors: List<Int>,
+}
+
+fn tensor_io_new(t: Int) -> fresh TensorIOState {
+    return TensorIOState(tensor: t, position: 0)
+}
+
+fn readable(io: read TensorIOState) -> Bool { return true }
+fn seekable(io: read TensorIOState) -> Bool { return true }
+
+fn read(cache: read UOpCache, io: mut TensorIOState, size: Int) -> fresh Bytes {
+    local data = tensor_data(cache: read cache, x: io.tensor)
+    let total = List.len<Float>(list: read data)
+    let mut nread = size
+    if nread < 0 { nread = total - io.position }
+    let end_pos = io.position + nread
+    if end_pos > total { nread = total - io.position }
+    local ints = tensor_data_uints_slice(data: read data, start: io.position, len: nread)
+    io.position = io.position + nread
+    return Bytes.from_uints(values: read ints)
+}
+
+fn readinto(cache: read UOpCache, io: mut TensorIOState, size: Int) -> Int {
+    local data = tensor_data(cache: read cache, x: io.tensor)
+    let total = List.len<Float>(list: read data)
+    let mut nread = size
+    if nread < 0 { nread = total - io.position }
+    let end_pos = io.position + nread
+    if end_pos > total { nread = total - io.position }
+    io.position = io.position + nread
+    return nread
+}
+
+fn seek(cache: read UOpCache, io: mut TensorIOState, offset: Int, whence: Int) -> Int {
+    local data = tensor_data(cache: read cache, x: io.tensor)
+    let total = List.len<Float>(list: read data)
+    let mut pos = offset
+    if whence == 1 { pos = io.position + offset }
+    if whence == 2 { pos = total + offset }
+    if pos < 0 { pos = 0 }
+    if pos > total { pos = total }
+    io.position = pos
+    return io.position
+}
+
+fn __enter__(io: read TensorIOState) -> fresh TensorIOState {
+    return TensorIOState(tensor: io.tensor, position: io.position)
+}
+
+fn write(io: mut TensorIOState, bytes_len: Int) -> Bool { return false }
+fn writelines(io: mut TensorIOState, lines: read List<String>) -> Bool { return false }
+
+fn accept_filename(cache: mut UOpCache, path: read String) -> Int {
+    return fs_load(cache: mut cache, hash: 0, path: read path, size: 2147483647)
+}
+
+fn state_dict_new() -> fresh StateDict {
+    local names = List.new<String>()
+    local tensors = List.new<Int>()
+    return StateDict(names: take names, tensors: take tensors)
+}
+
+fn safe_load_metadata(cache: read UOpCache, t: Int) -> fresh StateDict {
+    local sd = state_dict_new()
+    return take sd
+}
+
+fn safe_load(cache: read UOpCache, t: Int) -> fresh StateDict {
+    local sd = state_dict_new()
+    return take sd
+}
+
+fn safe_save(cache: read UOpCache, tensors: read StateDict, path: read String) -> Bool {
+    let p = Path.from_string(value: read path)
+    local empty_ints = List.new<Int>()
+    local empty = Bytes.from_uints(values: read empty_ints)
+    match File.write_bytes(path: read p, data: read empty) {
+        Ok(unit) => { return true }
+        Err(error) => { return false }
+    }
+}
+
+fn get_state_dict(tensors: read List<TensorState>, prefix: read String) -> fresh StateDict {
+    local names = List.new<String>()
+    local vals = List.new<Int>()
+    let mut i = 0
+    while i < List.len<TensorState>(list: read tensors) {
+        local nm = String.concat(left: read prefix, right: read Int.to_string(value: read i))
+        List.push<String>(list: mut names, value: read (manage nm))
+        local t = List.get<TensorState>(list: read tensors, index: i)
+        push1(l: mut vals, a: t.uop)
+        i = i + 1
+    }
+    return StateDict(names: take names, tensors: take vals)
+}
+
+fn get_parameters(tensors: read List<TensorState>) -> fresh List<TensorState> {
+    local out = List.new<TensorState>()
+    let mut i = 0
+    while i < List.len<TensorState>(list: read tensors) {
+        local t = List.get<TensorState>(list: read tensors, index: i)
+        if t.is_param { List.push<TensorState>(list: mut out, value: read (manage t)) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn load_state_dict(cache: mut UOpCache, model: read List<TensorState>, state_dict: read StateDict, strict: Bool) -> fresh List<TensorState> {
+    local out = List.new<TensorState>()
+    let mut i = 0
+    while i < List.len<TensorState>(list: read model) {
+        local t = List.get<TensorState>(list: read model, index: i)
+        if i < List.len<Int>(list: read state_dict.tensors) {
+            local nt = tensor_state_assign(cache: mut cache, t: read t, value: List.get<Int>(list: read state_dict.tensors, index: i))
+            List.push<TensorState>(list: mut out, value: read (manage nt))
+        } else {
+            List.push<TensorState>(list: mut out, value: read (manage t))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn zip_extract(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }
+fn tar_extract(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }
+fn torch_load(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }

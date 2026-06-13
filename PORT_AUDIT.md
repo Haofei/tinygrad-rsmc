@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 42 RSS files, 35,334 LOC.
+  - integrated `tinygrad-rss/src`: 46 RSS files, about 35.8k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -38,6 +38,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused Tensor mixin/function batch: `mixin/creation.py`, `mixin/dtype.py`,
     `mixin/elementwise.py`, `mixin/movement.py`, `mixin/rand.py`, `mixin/reduce.py`,
     and `function.py`: 194/194 rough symbols covered.
+  - focused nn batch: `nn/__init__.py`, `nn/optim.py`, `nn/state.py`, and `nn/datasets.py`:
+    68/68 rough symbols covered. This is source-surface coverage with lightweight RSS facades,
+    not full training semantics.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -929,6 +932,15 @@ Current integrated demo:
 - validates ordinary Tensor reductions against real tinygrad: `sum(axis=0)`, `sum()`,
   `prod(axis=1)`, `prod()`, `max(axis=0)`, `max()`, `min(axis=1)`, `min()`, `mean(axis=1)`,
   and `mean()`.
+- `nn/*`: first source-shaped facade batch for `tinygrad/nn/__init__.py`, `nn/optim.py`,
+  `nn/state.py`, and `nn/datasets.py`. `calc_stats`, 1D convolution layer constructors,
+  RMS-style `_norm`, embedding forward/backward materialized helpers, optimizer entry points
+  (`SGD`, `Muon`, `AdamW`, `Adam`) over explicit `TensorState` lists, state-dict/list helpers,
+  tensor byte-IO shells, archive/load/save shells, and deterministic `mnist`/`cifar` dataset
+  split facades are present. The active smoke calls these entry points and checks constructor,
+  optimizer/state list, IO, embedding, and dataset shape behavior. This does not yet implement
+  exact upstream module objects, Python optimizer mutation semantics, safetensors/torch/zip/tar
+  formats, real dataset downloads/parsing, or enough backend behavior to train real examples.
 - validates bool Tensor reductions against real tinygrad: `all()`, `any()`, `all(axis=1)`, and
   `any(axis=0)`.
 - validates Tensor `argmax`/`argmin` against real tinygrad for all, axis-0, and axis-1 cases,
@@ -1155,8 +1167,10 @@ Major missing integrated work:
   execution: handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.
-- `nn/*`: layers, optimizers, state, datasets where in scope. `nn/onnx.py` may be scoped as a
-  separate importer rather than core tensor correctness.
+- `nn/*`: deeper layer/module semantics, optimizer algorithms, model state serialization, and real
+  dataset loaders. The first source-shaped facade names are present, but exact upstream behavior is
+  still incomplete. `nn/onnx.py` may be scoped as a separate importer rather than core tensor
+  correctness.
 - examples such as `beautiful_mnist.py`: only after Tensor, nn, datasets, optimizer, scheduler,
   and backend execution are integrated enough to run the real example, not a special demo.
 

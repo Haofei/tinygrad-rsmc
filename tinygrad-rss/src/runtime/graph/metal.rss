@@ -1,5 +1,48 @@
-// Source-path marker for tinygrad/runtime/graph/metal.py. Metal graph surface is
-// represented through runtime graph/runtime target facades.
+// Source-shaped Metal graph facade over deterministic command-buffer state.
 features: local
 
+struct MetalGraphState derives(Clone) {
+    device: String,
+    calls: Int,
+    vars: List<String>,
+    resources: List<Int>,
+    command_buffer: MetalCommandBufferState,
+    needs_icb_fix: Bool,
+}
+
 fn runtime_graph_metal_package_marker() -> fresh String { return String.copy(value: read "runtime.graph.metal") }
+
+fn metal_graph_new(device: read String, calls: Int, vars: read List<String>, resources: read List<Int>, arch: read String) -> fresh MetalGraphState {
+    local cmd = MetalCommandBufferState(label: String.copy(value: read ""), status: 0, error: String.copy(value: read ""))
+    let mut fix = true
+    if String.starts_with(value: read arch, prefix: read "Apple9") { fix = false }
+    if String.starts_with(value: read arch, prefix: read "Apple10") { fix = false }
+    if String.starts_with(value: read arch, prefix: read "Apple11") { fix = false }
+    return MetalGraphState(device: String.copy(value: read device), calls: calls, vars: vars.clone(), resources: resources.clone(), command_buffer: take cmd, needs_icb_fix: fix)
+}
+
+fn metal_graph_call(graph: mut MetalGraphState, updated_resources: read List<Int>, wait: Bool) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read updated_resources) {
+        List.push<Int>(list: mut graph.resources, value: read List.get<Int>(list: read updated_resources, index: i))
+        i = i + 1
+    }
+    cmdbuf_label(buf: mut graph.command_buffer, label: read String.concat(left: read "batched ", right: read Int.to_string(value: read graph.calls)))
+    if wait { return graph.calls }
+    return 0
+}
+
+fn metal_graph_collect_timestamps(graph: read MetalGraphState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i <= graph.calls {
+        List.push<Int>(list: mut out, value: read i)
+        i = i + 1
+    }
+    return take out
+}
+
+fn metal_graph_supports_uop(batch_devs: read List<String>, new_call_size: Int, max_offset: Int) -> Bool {
+    if max_offset > 4294967295 { return false }
+    return List.len<String>(list: read batch_devs) > 0 && new_call_size >= 0
+}

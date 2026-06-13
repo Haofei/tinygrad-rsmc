@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 42,013 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 42,195 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -46,6 +46,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     creation, dtype, elementwise, movement, random, and reduction helpers. These wrappers are
     exercised by the active smoke; they are still RSS graph-helper entry points, not Python
     descriptor/decorator object behavior.
+  - focused runtime backend wrapper batch: `runtime/graph/metal.py`, `runtime/ops_hip.py`,
+    `runtime/ops_npy.py`, and `runtime/support/compiler_qcom.py` now expose deterministic
+    source-path-local state wrappers for Metal graph launch metadata, HIP/NPY device allocation
+    and transfer shells, and QCOM compiler/check/disassembly hooks. These are smoke-tested RSS
+    facades over existing memory/compiler helpers, not real Metal ICB, HIP driver, NumPy device,
+    or QCOM LLVM/compiler behavior.
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.
@@ -927,6 +933,10 @@ Current integrated demo:
   ELF loader/relocation shells, and graph dependency/timestamp helpers are present. These are
   deterministic RSS state facades; native ioctl/mmap/eventfd/ELF relocation/clang/LLVM execution
   remains future work.
+- validates focused runtime backend wrapper batch through the active smoke and coverage audit:
+  Metal graph launch/timestamp/support predicates, HIP device/program allocation and transfer
+  shells, NPY allocation/transfer shells, and QCOM compile/check/read/disassemble wrappers are
+  present. These remain deterministic RSS state facades, not real native backend execution.
 - validates first integrated codegen linearizer priority ordering over the same real kernel graph,
   producing a dependency-valid linear op stream from `CONST`/`PARAM`/`DEFINE_*` through
   `RANGE`/`INDEX`/`LOAD`/ALU/`STORE`/`END`/`IF`/`ENDIF`/`SINK`.

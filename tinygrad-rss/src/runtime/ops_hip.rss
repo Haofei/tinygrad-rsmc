@@ -1,5 +1,62 @@
-// Source-path marker for tinygrad/runtime/ops_hip.py. HIP runtime symbols are
-// covered by AMD/CUDA compiler/runtime facades until real HIP bindings exist.
+// Source-shaped HIP runtime facade over the integrated device/runtime helpers.
 features: local
 
+struct HIPDeviceState {
+    device: String,
+    device_id: Int,
+    arch: String,
+    store: DeviceMemoryStore,
+}
+
+struct HIPProgramState {
+    device: HIPDeviceState,
+    name: String,
+    lib: List<Int>,
+    launches: Int,
+}
+
 fn runtime_ops_hip_package_marker() -> fresh String { return String.copy(value: read "runtime.ops_hip") }
+
+fn hip_check(status: Int) -> Bool { return status == 0 }
+
+fn hip_device_new(device: read String, arch: read String) -> fresh HIPDeviceState {
+    let mut device_id = 0
+    if String.contains(value: read device, needle: read ":1") { device_id = 1 }
+    if String.contains(value: read device, needle: read ":2") { device_id = 2 }
+    return HIPDeviceState(device: canonicalize(device: read "AMD"), device_id: device_id, arch: String.copy(value: read arch), store: device_memory_store_new())
+}
+
+fn hip_device_count(dev: read HIPDeviceState) -> Int { return dev.device_id + 1 }
+
+fn hip_synchronize(dev: read HIPDeviceState) -> Bool { return dev.device == "AMD" }
+
+fn hip_program_new(dev: read HIPDeviceState, name: read String, lib: read List<Int>) -> fresh HIPProgramState {
+    local store = device_memory_store_new()
+    local pdev = HIPDeviceState(device: String.copy(value: read dev.device), device_id: dev.device_id, arch: String.copy(value: read dev.arch), store: take store)
+    return HIPProgramState(device: take pdev, name: String.copy(value: read name), lib: lib.clone(), launches: 0)
+}
+
+fn hip_program_call(prg: mut HIPProgramState, args: read List<Int>, vals: read List<Int>, wait: Bool) -> Int {
+    prg.launches = prg.launches + 1
+    let elapsed = List.len<Int>(list: read args) + List.len<Int>(list: read vals)
+    if wait { return elapsed }
+    return 0
+}
+
+fn hip_allocator_alloc(dev: mut HIPDeviceState, size: Int, options: read BufferSpec) -> Int {
+    return alloc(store: mut dev.store, size: size, options: read options)
+}
+
+fn hip_allocator_free(dev: mut HIPDeviceState, opaque: Int, options: read BufferSpec) -> Unit {
+    free(store: mut dev.store, opaque: opaque, size: 0, options: read options)
+    return Unit
+}
+
+fn hip_allocator_copyin(dev: mut HIPDeviceState, dest: Int, src: read List<Int>) -> Unit {
+    _copyin(store: mut dev.store, dest: dest, src: read src)
+    return Unit
+}
+
+fn hip_allocator_copyout(dev: read HIPDeviceState, src: Int, size: Int) -> fresh List<Int> {
+    return _copyout(store: read dev.store, src: src, size: size)
+}

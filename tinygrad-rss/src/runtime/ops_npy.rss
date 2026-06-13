@@ -1,5 +1,31 @@
-// Source-path marker for tinygrad/runtime/ops_npy.py. NPY runtime symbols are
-// currently represented by generic buffer/runtime facades.
+// Source-shaped NPY runtime facade over the generic byte-list allocator.
 features: local
 
+struct NpyDeviceState {
+    device: String,
+    store: DeviceMemoryStore,
+}
+
 fn runtime_ops_npy_package_marker() -> fresh String { return String.copy(value: read "runtime.ops_npy") }
+
+fn npy_device_new(device: read String) -> fresh NpyDeviceState {
+    return NpyDeviceState(device: canonicalize(device: read device), store: device_memory_store_new())
+}
+
+fn npy_alloc(dev: mut NpyDeviceState, size: Int) -> Int {
+    local spec = buffer_spec_default()
+    return alloc(store: mut dev.store, size: size, options: read spec)
+}
+
+fn npy_as_buffer(dev: read NpyDeviceState, src: Int, size: Int) -> fresh List<Int> {
+    return _copyout(store: read dev.store, src: src, size: size)
+}
+
+fn npy_copyin(dev: mut NpyDeviceState, dest: Int, src: read List<Int>) -> Unit {
+    _copyin(store: mut dev.store, dest: dest, src: read src)
+    return Unit
+}
+
+fn npy_copyout(dev: read NpyDeviceState, src: Int, size: Int) -> fresh List<Int> {
+    return npy_as_buffer(dev: read dev, src: src, size: size)
+}

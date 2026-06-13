@@ -1,5 +1,38 @@
-// Source-path marker for tinygrad/runtime/support/compiler_qcom.py. QCOM compiler
-// symbols are covered by the QCOM runtime/support facade batch.
+// Source-shaped QCOM compiler facade over deterministic compile/disassemble
+// helpers.
 features: local
 
+struct QCOMCompilerState derives(Clone) {
+    arch: String,
+    chip_id: Int,
+    cachekey: String,
+}
+
 fn runtime_support_compiler_qcom_package_marker() -> fresh String { return String.copy(value: read "runtime.support.compiler_qcom") }
+
+fn compiler_qcom_read_lib(lib: read List<Int>, off: Int) -> Int {
+    if off < 0 || off >= List.len<Int>(list: read lib) { return 0 }
+    return List.get<Int>(list: read lib, index: off)
+}
+
+fn qcom_compiler_new(arch: read String) -> fresh QCOMCompilerState {
+    return QCOMCompilerState(arch: String.copy(value: read arch), chip_id: 100859905, cachekey: String.concat(left: read "compile_qcomcl_", right: read arch))
+}
+
+fn qcom_compiler_checked(compiler: mut QCOMCompilerState, handle: Int) -> Bool {
+    if handle == 0 {
+        compiler.chip_id = 100859905
+        return false
+    }
+    return true
+}
+
+fn qcom_compile(compiler: read QCOMCompilerState, src: read String) -> fresh List<Int> {
+    local out = compile(src: read src)
+    List.push<Int>(list: mut out, value: read compiler.chip_id)
+    return take out
+}
+
+fn qcom_disassemble(compiler: read QCOMCompilerState, lib: read List<Int>) -> fresh String {
+    return disas_adreno(lib: read lib, gpu_id: compiler.chip_id)
+}

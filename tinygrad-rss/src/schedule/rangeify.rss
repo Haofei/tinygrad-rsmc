@@ -31,10 +31,61 @@ fn add_ranges_to_store(cache: mut UOpCache, ctx: mut IndexingContext, x: Int) ->
     return Some(mk_end(cache: mut cache, id: st, srcs: read ranges))
 }
 
+fn rangeify_last_dim_or_count(cache: read UOpCache, id: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: id)
+    if List.len<Int>(list: read shape) > 0 {
+        return List.get<Int>(list: read shape, index: List.len<Int>(list: read shape) - 1)
+    }
+    let count = node_full_dtype(cache: read cache, id: id).count
+    if count > 0 { return count }
+    return 1
+}
+
+fn rangeify_contract_shaped_wmma_src(cache: mut UOpCache, ctx: mut IndexingContext, id: Int) -> Int {
+    let size = rangeify_last_dim_or_count(cache: read cache, id: id)
+    let axis_id = ctx.next_range
+    let r = mk_range_int(cache: mut cache, end: size, axis_id: axis_id, axis_type: read AXIS_UPCAST, dt: read dt_int32())
+    ctx.next_range = ctx.next_range + 1
+    local idxs = List.new<Int>()
+    List.push<Int>(list: mut idxs, value: read r)
+    let indexed = mk_index(cache: mut cache, base: id, srcs: read idxs, ptr: false)
+    local pairs = List.new<Int>()
+    List.push<Int>(list: mut pairs, value: read axis_id)
+    List.push<Int>(list: mut pairs, value: read size)
+    return mk_contract(cache: mut cache, x: indexed, pairs: read pairs)
+}
+
 fn lower_shaped_wmma(cache: mut UOpCache, ctx: mut IndexingContext, x: Int) -> Option<Int> {
     if node_op(cache: read cache, id: x) != SHAPED_WMMA { return None }
     if ctx.next_range < 0 { return None }
-    return None
+    if node_num_src(cache: read cache, id: x) != 3 { return None }
+    let a_src = node_src_id(cache: read cache, id: x, k: 0)
+    let b_src = node_src_id(cache: read cache, id: x, k: 1)
+    let c_src = node_src_id(cache: read cache, id: x, k: 2)
+    let a_contract = rangeify_contract_shaped_wmma_src(cache: mut cache, ctx: mut ctx, id: a_src)
+    let b_contract = rangeify_contract_shaped_wmma_src(cache: mut cache, ctx: mut ctx, id: b_src)
+    let c_contract = rangeify_contract_shaped_wmma_src(cache: mut cache, ctx: mut ctx, id: c_src)
+    local arg = node_argints(cache: read cache, id: x)
+    let wmma = mk_wmma(cache: mut cache, a_id: a_contract, b_id: b_contract, acc_id: c_contract, dt: read node_full_dtype(cache: read cache, id: x), arg: read arg)
+    let lanes = rangeify_last_dim_or_count(cache: read cache, id: c_src)
+    local reg_shape = List.new<Int>()
+    List.push<Int>(list: mut reg_shape, value: read lanes)
+    let reg = mk_define_reg(cache: mut cache, slot: ctx.next_range, dt: read node_dtype(cache: read cache, id: x), shape: read reg_shape)
+    ctx.next_range = ctx.next_range + 1
+    local deps = List.new<Int>()
+    let mut i = 0
+    while i < lanes {
+        let ci = mk_const_int(cache: mut cache, dt: read dt_int32(), v: i)
+        local idxs = List.new<Int>()
+        List.push<Int>(list: mut idxs, value: read ci)
+        let ptr = mk_index(cache: mut cache, base: reg, srcs: read idxs, ptr: true)
+        local gidxs = List.new<Int>()
+        List.push<Int>(list: mut gidxs, value: read i)
+        let lane = mk_gep(cache: mut cache, x: wmma, idxs: read gidxs)
+        List.push<Int>(list: mut deps, value: read mk_store(cache: mut cache, ptr: ptr, value: lane, gate: read None))
+        i = i + 1
+    }
+    return Some(mk_after(cache: mut cache, id: reg, srcs: read deps))
 }
 
 fn found_after(cache: read UOpCache, after: Int, src: Int) -> Option<Int> {

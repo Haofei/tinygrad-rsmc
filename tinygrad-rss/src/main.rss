@@ -4655,6 +4655,23 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local rfac_wmma_ctx = indexing_context_new()
+    local rfac_wmma_arg = mk_wmma_arg(n: 1, m: 1, k: 1, threads: 1, a_elems: 4, b_elems: 4, c_elems: 4, axis_fields: 0)
+    let rfac_shaped_wmma = mk_shaped_wmma(cache: mut mcache, a_id: mstack4, b_id: mstack4, acc_id: mstack4, dt: read mstack4dt, arg: read rfac_wmma_arg)
+    let mut rfac_shaped_wmma_ok = false
+    match lower_shaped_wmma(cache: mut mcache, ctx: mut rfac_wmma_ctx, x: rfac_shaped_wmma) {
+        Some(r) => {
+            let reg = node_src_id(cache: read mcache, id: r, k: 0)
+            let st0 = node_src_id(cache: read mcache, id: r, k: 1)
+            let ptr0 = node_src_id(cache: read mcache, id: st0, k: 0)
+            let lane0 = node_src_id(cache: read mcache, id: st0, k: 1)
+            let wmma0 = node_src_id(cache: read mcache, id: lane0, k: 0)
+            let a_contract = node_src_id(cache: read mcache, id: wmma0, k: 0)
+            let a_index = node_src_id(cache: read mcache, id: a_contract, k: 0)
+            rfac_shaped_wmma_ok = node_op(cache: read mcache, id: r) == AFTER && node_op(cache: read mcache, id: reg) == DEFINE_REG && node_num_src(cache: read mcache, id: r) == 5 && node_op(cache: read mcache, id: st0) == STORE && node_op(cache: read mcache, id: ptr0) == INDEX && node_src_id(cache: read mcache, id: ptr0, k: 0) == reg && node_op(cache: read mcache, id: lane0) == GEP && node_op(cache: read mcache, id: wmma0) == WMMA && node_op(cache: read mcache, id: a_contract) == CONTRACT && node_op(cache: read mcache, id: a_index) == INDEX && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "schedule.indexing rangeify records movement chain = ", v: idx_rf_contig_rec_i >= 0 && idx_rf_perm_rec_i >= 0 && idx_rf_buf_rec_i >= 0)
     showb(label: read "schedule.indexing rangeify realizes root axes = ", v: List.len<IndexingRealizeAxisRecord>(list: read idx_rf.realize_axes) == 1 && List.len<Int>(list: read idx_rf_contig_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify permute swizzles inputs = ", v: List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1) && List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 1) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0) && List.get<Int>(list: read idx_rf_buf_rec.out_ranges, index: 0) == List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0))
@@ -4668,7 +4685,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_shaped_wmma_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

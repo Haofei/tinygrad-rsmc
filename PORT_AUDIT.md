@@ -597,8 +597,10 @@ Integrated pieces:
   reduce-collapse driver is now present for supported range-scoped subgraphs: it rejects nested
   STORE/REDUCE scopes, replaces non-constant external inputs with bounded DEFINE_VAR placeholders,
   runs the integrated collapse rules, verifies the collapsed sink is range-free, then restores the
-  original inputs. Full parity for broader symbolic composition, multi-shape corner cases, and the
-  exact upstream placeholder policy remains later fidelity work.
+  original inputs. The load-collapse cleanup rule that undoes `(loaded_idx + y) < c` back into
+  `loaded_idx < c - y` is present for weakint loaded indexes with load-free `y` and `c`, matching
+  the upstream overflow-avoidance guard. Full parity for broader symbolic composition, multi-shape
+  corner cases, and the exact upstream placeholder policy remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

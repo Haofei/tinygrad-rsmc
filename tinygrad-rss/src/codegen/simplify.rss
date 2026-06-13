@@ -779,9 +779,42 @@ fn reduce_load_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
-    return reduce_collapse(cache: mut cache, red: red, u: u)
+    match reduce_collapse(cache: mut cache, red: red, u: u) {
+        Some(r) => {
+            match simplify_load_compare_undo(cache: mut cache, cmp: r) {
+                Some(v) => { return Some(v) }
+                None => { return Some(r) }
+            }
+        }
+        None => {}
+    }
+    return None
 }
 
 fn no_load(cache: read UOpCache, u: Int) -> Bool {
     return uop_op_in_backward_slice_with_self(cache: read cache, id: u, op: INDEX) == false
+}
+
+fn simplify_load_compare_undo(cache: mut UOpCache, cmp: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: cmp) != CMPLT || node_num_src(cache: read cache, id: cmp) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: cmp, k: 0)
+    let c = node_src_id(cache: read cache, id: cmp, k: 1)
+    if node_op(cache: read cache, id: lhs) != ADD || node_num_src(cache: read cache, id: lhs) != 2 { return None }
+    if no_load(cache: read cache, u: c) == false { return None }
+    let a = node_src_id(cache: read cache, id: lhs, k: 0)
+    let b = node_src_id(cache: read cache, id: lhs, k: 1)
+    let mut x = a
+    let mut y = b
+    if no_load(cache: read cache, u: x) && no_load(cache: read cache, u: y) == false {
+        x = b
+        y = a
+    }
+    if no_load(cache: read cache, u: x) { return None }
+    if no_load(cache: read cache, u: y) == false { return None }
+    if node_dtype(cache: read cache, id: x).name != "weakint" { return None }
+    let cdt = node_dtype(cache: read cache, id: c)
+    let yc = mk_cast(cache: mut cache, x: y, dt: read cdt)
+    let rhs = mk_alu2(cache: mut cache, op: SUB, dt: read cdt, x: c, y: yc)
+    let out = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: x, y: rhs)
+    return Some(graph_rewrite(cache: mut cache, id: out))
 }

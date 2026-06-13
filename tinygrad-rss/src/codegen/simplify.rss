@@ -329,11 +329,21 @@ fn reduce_unparented(cache: mut UOpCache, red: Int) -> Option<Int> {
 fn reduce_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
     if node_op(cache: read cache, id: red) != REDUCE { return None }
     if no_range(cache: read cache, u: u) { return Some(graph_rewrite(cache: mut cache, id: u)) }
+    match reduce_bound_collapse(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match reduce_unparented(cache: mut cache, red: red) {
         Some(r) => { return Some(r) }
         None => {}
     }
     return None
+}
+
+fn simplify_is_true_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) != CONST { return false }
+    if node_is_const_int(cache: read cache, id: id) { return node_const_int(cache: read cache, id: id) != 0 }
+    return node_const_float(cache: read cache, id: id) != 0.0
 }
 
 fn simplify_reduce_is_add(cache: read UOpCache, red: Int) -> Bool {
@@ -347,6 +357,83 @@ fn simplify_is_zero_const(cache: read UOpCache, id: Int) -> Bool {
     if node_op(cache: read cache, id: id) != CONST { return false }
     if node_is_const_int(cache: read cache, id: id) { return node_const_int(cache: read cache, id: id) == 0 }
     return node_const_float(cache: read cache, id: id) == 0.0
+}
+
+fn simplify_range_lt_cut(cache: read UOpCache, cond: Int, r: Int) -> Int {
+    if node_op(cache: read cache, id: cond) != CMPLT || node_num_src(cache: read cache, id: cond) != 2 { return -1 }
+    if simplify_single_range_expr(cache: read cache, x: node_src_id(cache: read cache, id: cond, k: 0)) != r { return -1 }
+    return node_src_id(cache: read cache, id: cond, k: 1)
+}
+
+fn simplify_not_range_lt_cut(cache: read UOpCache, cond: Int, r: Int) -> Int {
+    if node_op(cache: read cache, id: cond) != CMPNE || node_num_src(cache: read cache, id: cond) != 2 { return -1 }
+    let lhs = node_src_id(cache: read cache, id: cond, k: 0)
+    let rhs = node_src_id(cache: read cache, id: cond, k: 1)
+    if simplify_is_true_const(cache: read cache, id: rhs) { return simplify_range_lt_cut(cache: read cache, cond: lhs, r: r) }
+    if simplify_is_true_const(cache: read cache, id: lhs) { return simplify_range_lt_cut(cache: read cache, cond: rhs, r: r) }
+    return -1
+}
+
+fn simplify_clamp_to_range(cache: mut UOpCache, x: Int, r: Int) -> Int {
+    let dt = node_dtype(cache: read cache, id: x)
+    let zero = mk_const_int(cache: mut cache, dt: read dt, v: 0)
+    let lo = smax(cache: mut cache, a: x, b: zero)
+    let end = mk_cast(cache: mut cache, x: node_src_id(cache: read cache, id: r, k: 0), dt: read dt)
+    return smin(cache: mut cache, a: lo, b: end)
+}
+
+fn simplify_reduce_count_times_value(cache: mut UOpCache, count: Int, r: Int, val: Int) -> Option<Int> {
+    if no_range(cache: read cache, u: val) == false { return None }
+    let clamped = simplify_clamp_to_range(cache: mut cache, x: count, r: r)
+    let cval = mk_cast(cache: mut cache, x: clamped, dt: read node_dtype(cache: read cache, id: val))
+    let mul = mk_alu2(cache: mut cache, op: MUL, dt: read node_full_dtype(cache: read cache, id: val), x: cval, y: val)
+    return Some(graph_rewrite(cache: mut cache, id: mul))
+}
+
+fn reduce_bound_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE || simplify_reduce_is_add(cache: read cache, red: red) == false { return None }
+    if node_num_src(cache: read cache, id: red) < 2 { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    if node_op(cache: read cache, id: value) != WHERE || node_num_src(cache: read cache, id: value) != 3 { return None }
+    let cond = node_src_id(cache: read cache, id: value, k: 0)
+    let tval = node_src_id(cache: read cache, id: value, k: 1)
+    let fval = node_src_id(cache: read cache, id: value, k: 2)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: red) {
+        let r = node_src_id(cache: read cache, id: red, k: i)
+        if node_op(cache: read cache, id: r) == RANGE && node_num_src(cache: read cache, id: r) > 0 {
+            let cut = simplify_range_lt_cut(cache: read cache, cond: cond, r: r)
+            if cut >= 0 && simplify_is_zero_const(cache: read cache, id: fval) {
+                return simplify_reduce_count_times_value(cache: mut cache, count: cut, r: r, val: tval)
+            }
+            if cut >= 0 && simplify_is_zero_const(cache: read cache, id: tval) {
+                let end = mk_cast(cache: mut cache, x: node_src_id(cache: read cache, id: r, k: 0), dt: read node_dtype(cache: read cache, id: cut))
+                let count = mk_alu2(cache: mut cache, op: SUB, dt: read node_dtype(cache: read cache, id: cut), x: end, y: cut)
+                return simplify_reduce_count_times_value(cache: mut cache, count: count, r: r, val: fval)
+            }
+            if node_op(cache: read cache, id: cond) == AND && node_num_src(cache: read cache, id: cond) == 2 && simplify_is_zero_const(cache: read cache, id: fval) {
+                let c0 = node_src_id(cache: read cache, id: cond, k: 0)
+                let c1 = node_src_id(cache: read cache, id: cond, k: 1)
+                let mut lower = simplify_not_range_lt_cut(cache: read cache, cond: c0, r: r)
+                let mut upper = simplify_range_lt_cut(cache: read cache, cond: c1, r: r)
+                if lower < 0 || upper < 0 {
+                    lower = simplify_not_range_lt_cut(cache: read cache, cond: c1, r: r)
+                    upper = simplify_range_lt_cut(cache: read cache, cond: c0, r: r)
+                }
+                if lower >= 0 && upper >= 0 {
+                    let dt = node_dtype(cache: read cache, id: upper)
+                    let end = mk_cast(cache: mut cache, x: node_src_id(cache: read cache, id: r, k: 0), dt: read dt)
+                    let up = smin(cache: mut cache, a: upper, b: end)
+                    let zero = mk_const_int(cache: mut cache, dt: read dt, v: 0)
+                    let lo = smax(cache: mut cache, a: lower, b: zero)
+                    let count = mk_alu2(cache: mut cache, op: SUB, dt: read dt, x: up, y: lo)
+                    return simplify_reduce_count_times_value(cache: mut cache, count: count, r: r, val: tval)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return None
 }
 
 fn simplify_load_index_expr(cache: read UOpCache, cmp: Int, r: Int) -> Int {

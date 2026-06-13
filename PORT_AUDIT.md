@@ -586,8 +586,11 @@ Integrated pieces:
   preserve the original range axis metadata plus the upstream high/low marker axis. The first
   source-shaped load-index collapse is integrated for the upstream gated-ADD pattern
   `REDUCE(WHERE(idx != range, 0, expr), range)`, replacing the reduced range in the payload with a
-  valid bounded index and wrapping the result in the same bounds guard. Full PatternMatcher parity
-  for the broader reduce-collapse algebra remains later fidelity work.
+  valid bounded index and wrapping the result in the same bounds guard. The range-bound
+  reduce-collapse family now covers the upstream upper-bound, lower-bound, and two-sided window
+  folds for range-free values, clamping counts to the reduced range extent before multiplying by the
+  payload. Full PatternMatcher parity for the generic reduce-collapse driver and arithmetic
+  lift/distribution rules remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

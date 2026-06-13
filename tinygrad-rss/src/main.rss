@@ -3014,6 +3014,37 @@ fn main() -> Unit {
     local simp_lc_red_arg = ArgOp(value: ADD)
     let simp_lc_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_lc_red_srcs, arg: take simp_lc_red_arg)
     local simp_lc = reduce_load_index_collapse(cache: mut mcache, red: simp_lc_red)
+    let simp_bc_r = mk_range_int(cache: mut mcache, end: 8, axis_id: 46, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_bc_cut2 = mk_const_int(cache: mut mcache, dt: read i32, v: 2)
+    let simp_bc_cut6 = mk_const_int(cache: mut mcache, dt: read i32, v: 6)
+    let simp_bc_val = mk_const_int(cache: mut mcache, dt: read i32, v: 5)
+    let simp_bc_zero = mk_const_int(cache: mut mcache, dt: read i32, v: 0)
+    let simp_bc_upper_cond = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_bc_r, y: simp_bc_cut6)
+    let simp_bc_upper_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_bc_upper_cond, tval: simp_bc_val, fval: simp_bc_zero)
+    local simp_bc_upper_srcs = List.new<Int>()
+    pushi(l: mut simp_bc_upper_srcs, v: simp_bc_upper_where)
+    pushi(l: mut simp_bc_upper_srcs, v: simp_bc_r)
+    local simp_bc_upper_arg = ArgOp(value: ADD)
+    let simp_bc_upper_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_upper_srcs, arg: take simp_bc_upper_arg)
+    local simp_bc_upper = reduce_bound_collapse(cache: mut mcache, red: simp_bc_upper_red)
+    let simp_bc_lower_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_bc_upper_cond, tval: simp_bc_zero, fval: simp_bc_val)
+    local simp_bc_lower_srcs = List.new<Int>()
+    pushi(l: mut simp_bc_lower_srcs, v: simp_bc_lower_where)
+    pushi(l: mut simp_bc_lower_srcs, v: simp_bc_r)
+    local simp_bc_lower_arg = ArgOp(value: ADD)
+    let simp_bc_lower_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_lower_srcs, arg: take simp_bc_lower_arg)
+    local simp_bc_lower = reduce_bound_collapse(cache: mut mcache, red: simp_bc_lower_red)
+    let simp_bc_lower_lt = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_bc_r, y: simp_bc_cut2)
+    let simp_bc_true = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 1)
+    let simp_bc_not_lower = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: simp_bc_lower_lt, y: simp_bc_true)
+    let simp_bc_two_cond = mk_alu2(cache: mut mcache, op: AND, dt: read dt_bool(), x: simp_bc_not_lower, y: simp_bc_upper_cond)
+    let simp_bc_two_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_bc_two_cond, tval: simp_bc_val, fval: simp_bc_zero)
+    local simp_bc_two_srcs = List.new<Int>()
+    pushi(l: mut simp_bc_two_srcs, v: simp_bc_two_where)
+    pushi(l: mut simp_bc_two_srcs, v: simp_bc_r)
+    local simp_bc_two_arg = ArgOp(value: ADD)
+    let simp_bc_two_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_two_srcs, arg: take simp_bc_two_arg)
+    local simp_bc_two = reduce_bound_collapse(cache: mut mcache, red: simp_bc_two_red)
     showi(label: read "codegen.simplify count divmod = ", v: count_divmod(cache: read mcache, x: simp_divmod))
     match simp_flat {
         Some(v) => { showb(label: read "codegen.simplify flatten range = ", v: node_op(cache: read mcache, id: v) == END && node_num_src(cache: read mcache, id: v) == 3) }
@@ -3063,6 +3094,18 @@ fn main() -> Unit {
             showb(label: read "codegen.simplify load-index collapse = ", v: node_op(cache: read mcache, id: v) == WHERE && node_op(cache: read mcache, id: lc_cond) == AND && node_op(cache: read mcache, id: lc_tval) == ADD && uop_op_in_backward_slice_with_self(cache: read mcache, id: lc_tval, op: RANGE) == false && node_const_int(cache: read mcache, id: lc_alt) == 0 && spec_type_verify(cache: read mcache, id: v))
         }
         None => { showb(label: read "codegen.simplify load-index collapse = ", v: false) }
+    }
+    match simp_bc_upper {
+        Some(v) => { showb(label: read "codegen.simplify bound collapse upper = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify bound collapse upper = ", v: false) }
+    }
+    match simp_bc_lower {
+        Some(v) => { showb(label: read "codegen.simplify bound collapse lower = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify bound collapse lower = ", v: false) }
+    }
+    match simp_bc_two {
+        Some(v) => { showb(label: read "codegen.simplify bound collapse two-sided = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify bound collapse two-sided = ", v: false) }
     }
     let pr_r0 = mk_range_int(cache: mut mcache, end: 4, axis_id: 61, axis_type: read AXIS_LOOP, dt: read i32)
     let pr_r1 = mk_range_int(cache: mut mcache, end: 3, axis_id: 62, axis_type: read AXIS_REDUCE, dt: read i32)

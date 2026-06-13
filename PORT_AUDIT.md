@@ -416,7 +416,8 @@ Integrated pieces:
   pointers while preserving load extras and store gates, along with the `pm_add_loads` rules that insert `LOAD` for
   non-pointer `INDEX` nodes and clean nested `LOAD(LOAD(ptr))` and `STORE(LOAD(ptr), value)`.
   Source-shaped facades also include conservative folded-index/image entry points, scalar
-  DEFINE_LOCAL/DEFINE_REG buffer devectorization, simple CAST-backed index lane expansion,
+  DEFINE_LOCAL/DEFINE_REG buffer devectorization, addrspace-aware `BUFFER(ParamArg)` local/reg
+  buffer devectorization, simple CAST-backed index lane expansion,
   and no-range `reduce_to_acc` delegation. Full ImageDType
   handling, exact folded-index regrouping, and range-backed DEFINE_ACC lowering remain later
   devectorizer slices.
@@ -427,7 +428,9 @@ Integrated pieces:
   derives first `ProgramInfo.from_sink`-style program metadata (`vars`, `globals`, `outs`, `ins`,
   and integer `SPECIAL` launch dimensions for `g*`, `l*`, and `i*` names) for the current lowered
   sink shape, then appends a `SOURCE` child with the rendered kernel text. Source-shaped entry
-  points now cover `full_rewrite_to_sink`, `line_rewrite`, `do_linearize`, `do_estimates`,
+  points now cover `full_rewrite_to_sink`, including upstream-shaped `DEFINE_LOCAL`/`DEFINE_REG`
+  normalization into addrspace-tagged `BUFFER(ParamArg)` nodes and register-load removal,
+  `line_rewrite`, `do_linearize`, `do_estimates`,
   `do_assemble`, `do_render`, `do_compile`, `do_to_program`, and `to_program` for the supported
   C-style path. It also has the first
   host compile/syntax bridge for rendered CStyle source, writing the attached `SOURCE` to a path

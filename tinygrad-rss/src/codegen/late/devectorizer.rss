@@ -655,12 +655,13 @@ fn no_vectorized_alu(cache: mut UOpCache, alu: Int) -> Option<Int> {
 
 fn no_vectorized_buf(cache: mut UOpCache, buf: Int) -> Option<Int> {
     let op = node_op(cache: read cache, id: buf)
-    if op != DEFINE_LOCAL && op != DEFINE_REG { return None }
+    let addrspace = node_addrspace(cache: read cache, id: buf)
+    if op != DEFINE_LOCAL && op != DEFINE_REG && (op != BUFFER || (addrspace != ADDR_LOCAL && addrspace != ADDR_REG)) { return None }
     let dt = node_full_dtype(cache: read cache, id: buf)
     if dt.count <= 1 { return None }
     let scalar = dtype_scalar(d: read dt)
     local shape = uop_shape(cache: read cache, id: buf)
-    if op == DEFINE_LOCAL {
+    if op == DEFINE_LOCAL || addrspace == ADDR_LOCAL {
         let rebuilt = mk_define_local(cache: mut cache, slot: 0, dt: read scalar, shape: read shape)
         return Some(mk_cast(cache: mut cache, x: rebuilt, dt: read dt))
     } else {

@@ -495,9 +495,41 @@ fn codegen_to_program_cstyle(cache: mut UOpCache, prg: Int) -> Int {
 
 fn full_rewrite_to_sink(cache: mut UOpCache, ast: Int, optimize: Bool) -> Int {
     if node_op(cache: read cache, id: ast) == PROGRAM && node_num_src(cache: read cache, id: ast) > 0 {
-        return node_src_id(cache: read cache, id: ast, k: 0)
+        return codegen_normalize_define_buffers(cache: mut cache, id: node_src_id(cache: read cache, id: ast, k: 0))
     }
-    return ast
+    return codegen_normalize_define_buffers(cache: mut cache, id: ast)
+}
+
+fn codegen_normalize_define_buffers(cache: mut UOpCache, id: Int) -> Int {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEFINE_LOCAL || op == DEFINE_REG {
+        local sh = uop_shape(cache: read cache, id: id)
+        let dt = node_full_dtype(cache: read cache, id: id)
+        let slot = node_const_int(cache: read cache, id: id)
+        if op == DEFINE_LOCAL {
+            return mk_buffer_param(cache: mut cache, slot: slot, dt: read dt, shape: read sh, addrspace: read ADDR_LOCAL)
+        }
+        return mk_buffer_param(cache: mut cache, slot: slot, dt: read dt, shape: read sh, addrspace: read ADDR_REG)
+    }
+    local new_src = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let next = codegen_normalize_define_buffers(cache: mut cache, id: child)
+        if next != child { changed = true }
+        List.push<Int>(list: mut new_src, value: read next)
+        i = i + 1
+    }
+    if op == LOAD && List.len<Int>(list: read new_src) > 0 {
+        let ptr = List.get<Int>(list: read new_src, index: 0)
+        if node_addrspace(cache: read cache, id: ptr) == ADDR_REG { return ptr }
+    }
+    if changed {
+        local arg = node_arg(cache: read cache, id: id)
+        return intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: id), src: take new_src, arg: take arg)
+    }
+    return id
 }
 
 fn line_rewrite(cache: mut UOpCache, order: read List<Int>) -> fresh List<Int> {

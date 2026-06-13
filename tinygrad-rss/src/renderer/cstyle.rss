@@ -272,6 +272,16 @@ fn cstyle_prefix_for_op(op: read Ops) -> fresh String {
     return "alu"
 }
 
+fn cstyle_prefix_for_alloc(cache: read UOpCache, id: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEFINE_LOCAL { return "temp" }
+    if op == DEFINE_REG { return "acc" }
+    let addrspace = node_addrspace(cache: read cache, id: id)
+    if addrspace == ADDR_LOCAL { return "temp" }
+    if addrspace == ADDR_REG { return "acc" }
+    return cstyle_prefix_for_op(op: read op)
+}
+
 fn cstyle_next_name(counts: mut Map<String, Int>, prefix: read String) -> fresh String {
     let mut n = 0
     match Map.get<String, Int>(map: read counts, key: read prefix) {
@@ -482,8 +492,8 @@ fn cstyle_render_kernel_order(cache: read UOpCache, order: read List<Int>, funct
                 let alias = cstyle_operand(cache: read cache, names: read names, id: src)
                 Map.insert<Int, String>(map: mut names, key: read id, value: read alias)
             } else {
-            if op == DEFINE_LOCAL || op == DEFINE_REG {
-                let prefix = cstyle_prefix_for_op(op: read op)
+            if op == DEFINE_LOCAL || op == DEFINE_REG || (op == BUFFER && node_arg_is_param(cache: read cache, id: id) && node_addrspace(cache: read cache, id: id) != ADDR_GLOBAL) {
+                let prefix = cstyle_prefix_for_alloc(cache: read cache, id: id)
                 let nm = cstyle_next_name(counts: mut counts, prefix: read prefix)
                 Map.insert<Int, String>(map: mut names, key: read id, value: read nm)
                 let line = cstyle_define_decl(cache: read cache, id: id, name: read nm)

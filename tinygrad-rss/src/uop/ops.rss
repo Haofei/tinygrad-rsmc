@@ -664,6 +664,18 @@ fn mk_define_reg(cache: mut UOpCache, slot: Int, dt: read DType, shape: read Lis
     return intern(cache: mut cache, op: DEFINE_REG, dt: read dt, src: take src, arg: take a)
 }
 
+fn mk_buffer_param(cache: mut UOpCache, slot: Int, dt: read DType, shape: read List<Int>, addrspace: read AddrSpace) -> Int {
+    local src = List.new<Int>()
+    if List.len<Int>(list: read shape) > 0 {
+        let sh = shape_to_shape_arg(cache: mut cache, dims: read shape)
+        List.push<Int>(list: mut src, value: read sh)
+    }
+    local p = mk_param_arg(slot: slot, has_vmin_vmax: false, vmin: 0, vmax: 0, name: read "",
+                           addrspace: read addrspace, has_axis: false, axis: 0, device: read "")
+    local a = ArgParam(value: take p)
+    return intern(cache: mut cache, op: BUFFER, dt: read dt, src: take src, arg: take a)
+}
+
 fn mk_unique(cache: mut UOpCache, num: Int) -> Int {
     local src = List.new<Int>()
     let mut v = num
@@ -2626,7 +2638,10 @@ fn node_addrspace(cache: read UOpCache, id: Int) -> fresh AddrSpace {
     if op == PARAM { return node_param_addrspace(cache: read cache, id: id) }
     if op == DEFINE_LOCAL { return ADDR_LOCAL }
     if op == DEFINE_REG { return ADDR_REG }
-    if op == BUFFER { return ADDR_GLOBAL }
+    if op == BUFFER {
+        if node_arg_is_param(cache: read cache, id: id) { return node_param_addrspace(cache: read cache, id: id) }
+        return ADDR_GLOBAL
+    }
     if op == LOAD { return ADDR_REG }
     if op == INDEX {
         if node_num_src(cache: read cache, id: id) > 0 {

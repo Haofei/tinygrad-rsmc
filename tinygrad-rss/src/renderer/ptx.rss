@@ -13,9 +13,8 @@ fn render_val(x: Float, dtype: read DType) -> fresh String {
 fn mem_type(cache: read UOpCache, x: Int) -> fresh String {
     let op = node_op(cache: read cache, id: x)
     if op == AFTER && node_num_src(cache: read cache, id: x) > 0 { return mem_type(cache: read cache, x: node_src_id(cache: read cache, id: x, k: 0)) }
-    if op == DEFINE_LOCAL { return String.copy(value: read "shared") }
+    if node_addrspace(cache: read cache, id: x) == ADDR_LOCAL { return String.copy(value: read "shared") }
     if op == PARAM {
-        if addr_space_name(a: read node_addrspace(cache: read cache, id: x)) == "LOCAL" { return String.copy(value: read "shared") }
         return String.copy(value: read "global")
     }
     return String.copy(value: read "global")

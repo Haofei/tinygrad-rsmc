@@ -1,0 +1,175 @@
+// Source-shaped tokenizer and OpenAI-compatible LLM server facades for tinygrad/llm/cli.py.
+features: local
+
+struct SimpleTokenizerState derives(Clone) {
+    normal_tokens: List<String>,
+    normal_ids: List<Int>,
+    special_tokens: List<String>,
+    special_ids: List<Int>,
+    preset: String,
+    bos_id: Int,
+    eos_id: Int,
+    eot_id: Int,
+}
+
+struct LLMServerState derives(Clone) {
+    model: LLMTransformerState,
+    model_name: String,
+    tok: SimpleTokenizerState,
+}
+
+fn tokenizer_new(preset: read String, bos_id: Int, eos_id: Int, eot_id: Int) -> fresh SimpleTokenizerState {
+    local nt = List.new<String>()
+    local ni = List.new<Int>()
+    local st = List.new<String>()
+    local si = List.new<Int>()
+    return SimpleTokenizerState(normal_tokens: take nt, normal_ids: take ni, special_tokens: take st, special_ids: take si, preset: String.copy(value: read preset), bos_id: bos_id, eos_id: eos_id, eot_id: eot_id)
+}
+
+fn tokenizer_add_normal(tok: mut SimpleTokenizerState, text: read String, id: Int) -> Unit {
+    List.push<String>(list: mut tok.normal_tokens, value: read String.copy(value: read text))
+    List.push<Int>(list: mut tok.normal_ids, value: read id)
+    return Unit
+}
+
+fn tokenizer_add_special(tok: mut SimpleTokenizerState, text: read String, id: Int) -> Unit {
+    List.push<String>(list: mut tok.special_tokens, value: read String.copy(value: read text))
+    List.push<Int>(list: mut tok.special_ids, value: read id)
+    return Unit
+}
+
+fn from_gguf_kv(kv: read List<GGUFKeyValue>) -> fresh SimpleTokenizerState {
+    let mut tok = tokenizer_new(preset: read "llama3", bos_id: 1, eos_id: 2, eot_id: 2)
+    let mut count = 0
+    let mut i = 0
+    while i < List.len<GGUFKeyValue>(list: read kv) {
+        local item = List.get<GGUFKeyValue>(list: read kv, index: i)
+        if item.key == "tokenizer.ggml.tokens" { count = item.int_value }
+        if item.key == "tokenizer.ggml.bos_token_id" { tok.bos_id = item.int_value }
+        if item.key == "tokenizer.ggml.eos_token_id" { tok.eos_id = item.int_value }
+        if item.key == "tokenizer.ggml.eot_token_id" { tok.eot_id = item.int_value }
+        if item.key == "tokenizer.ggml.pre" && String.len(value: read item.string_value) > 0 { tok.preset = String.copy(value: read item.string_value) }
+        i = i + 1
+    }
+    if count <= 0 { count = 256 }
+    let mut id = 0
+    while id < count {
+        local name = String.concat(left: read "tok", right: read Int.to_string(value: read id))
+        tokenizer_add_normal(tok: mut tok, text: read name, id: id)
+        id = id + 1
+    }
+    let eos = tok.eos_id
+    tokenizer_add_special(tok: mut tok, text: read "<|end|>", id: eos)
+    return tok.clone()
+}
+
+fn tokenizer_find_token(tok: read SimpleTokenizerState, text: read String) -> Int {
+    let mut i = 0
+    while i < List.len<String>(list: read tok.normal_tokens) {
+        if List.get<String>(list: read tok.normal_tokens, index: i) == text { return List.get<Int>(list: read tok.normal_ids, index: i) }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < List.len<String>(list: read tok.special_tokens) {
+        if List.get<String>(list: read tok.special_tokens, index: j) == text { return List.get<Int>(list: read tok.special_ids, index: j) }
+        j = j + 1
+    }
+    return 0
+}
+
+fn _encode_word(tok: read SimpleTokenizerState, word: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let direct = tokenizer_find_token(tok: read tok, text: read word)
+    if direct != 0 || word == "tok0" {
+        List.push<Int>(list: mut out, value: read direct)
+        return take out
+    }
+    let mut i = 0
+    while i < String.len(value: read word) {
+        List.push<Int>(list: mut out, value: read (i & 255))
+        i = i + 1
+    }
+    return take out
+}
+
+fn _encode_sentence(tok: read SimpleTokenizerState, chunk: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let n = String.len(value: read chunk)
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut out, value: read (i & 255))
+        i = i + 1
+    }
+    if n == 0 { List.push<Int>(list: mut out, value: read tok.eos_id) }
+    return take out
+}
+
+fn tokenizer_encode(tok: read SimpleTokenizerState, text: read String) -> fresh List<Int> {
+    return _encode_sentence(tok: read tok, chunk: read text)
+}
+
+fn tokenizer_decode(tok: read SimpleTokenizerState, ids: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read ids) {
+        out = String.concat(left: read out, right: read Int.to_string(value: read List.get<Int>(list: read ids, index: i)))
+        if i + 1 < List.len<Int>(list: read ids) { out = String.concat(left: read out, right: read " ") }
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn stream_decoder(tok: read SimpleTokenizerState, tid: Int) -> fresh String {
+    local ids = List.new<Int>()
+    if tid >= 0 { List.push<Int>(list: mut ids, value: read tid) }
+    return tokenizer_decode(tok: read tok, ids: read ids)
+}
+
+fn role(tok: read SimpleTokenizerState, role: read String) -> fresh List<Int> {
+    if tok.preset == "qwen2" { return tokenizer_encode(tok: read tok, text: read String.concat(left: read "<|im_start|>", right: read role)) }
+    if tok.preset == "glm4" { return tokenizer_encode(tok: read tok, text: read String.concat(left: read "<|", right: read String.concat(left: read role, right: read "|>"))) }
+    return tokenizer_encode(tok: read tok, text: read String.concat(left: read "<|start_header_id|>", right: read role))
+}
+
+fn end_turn(tok: read SimpleTokenizerState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read tok.eos_id)
+    return take out
+}
+
+fn prefix(tok: read SimpleTokenizerState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if tok.bos_id >= 0 { List.push<Int>(list: mut out, value: read tok.bos_id) }
+    return take out
+}
+
+fn is_end(tok: read SimpleTokenizerState, token_id: Int) -> Bool {
+    return token_id == tok.eos_id || token_id == tok.eot_id
+}
+
+fn log_request(code: read String, size: read String) -> Bool {
+    return String.len(value: read code) >= 0 && String.len(value: read size) >= 0
+}
+
+fn do_GET(server: read LLMServerState, path: read String) -> fresh String {
+    if path == "/v1/models" { return String.concat(left: read "model:", right: read server.model_name) }
+    return String.copy(value: read "chat")
+}
+
+fn run_model(cache: mut UOpCache, server: mut LLMServerState, ids: read List<Int>, model_name: read String, include_usage: Bool, max_tokens: Int, temperature: Float) -> fresh List<Int> {
+    local generated = generate(cache: mut cache, model: mut server.model, tokens: read ids, chunk_size: 1, temperature: temperature)
+    local out = List.new<Int>()
+    let next_token = generated.next_token
+    List.push<Int>(list: mut out, value: read next_token)
+    if include_usage { List.push<Int>(list: mut out, value: read List.len<Int>(list: read ids)) }
+    if max_tokens == 0 { return List.new<Int>() }
+    return take out
+}
+
+fn do_POST(cache: mut UOpCache, server: mut LLMServerState, path: read String, body: read String) -> fresh String {
+    local ids = tokenizer_encode(tok: read server.tok, text: read body)
+    local model_name = String.copy(value: read server.model_name)
+    local tok_copy = server.tok.clone()
+    local out = run_model(cache: mut cache, server: mut server, ids: read ids, model_name: read model_name, include_usage: false, max_tokens: 1, temperature: 0.0)
+    return tokenizer_decode(tok: read tok_copy, ids: read out)
+}

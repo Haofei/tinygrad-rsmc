@@ -1,0 +1,304 @@
+// Source-shaped GGUF loader facade for tinygrad/llm/gguf.py.
+features: native, local
+
+struct GGUFReader derives(Clone) {
+    data: List<Int>,
+    position: Int,
+}
+
+struct GGUFKeyValue derives(Clone) {
+    key: String,
+    int_value: Int,
+    string_value: String,
+    array_value: List<Int>,
+}
+
+struct GGUFTensorInfo derives(Clone) {
+    name: String,
+    dims: List<Int>,
+    ggml_type: Int,
+    offset: Int,
+}
+
+struct GGUFLoadResult derives(Clone) {
+    kv: List<GGUFKeyValue>,
+    tensor_names: List<String>,
+    tensors: List<Int>,
+    split_paths: List<String>,
+}
+
+fn gguf_reader_new(data: read List<Int>) -> fresh GGUFReader {
+    return GGUFReader(data: copy_int_list(l: read data), position: 0)
+}
+
+fn gguf_reader_remaining(r: read GGUFReader) -> Int {
+    let remain = List.len<Int>(list: read r.data) - r.position
+    if remain < 0 { return 0 }
+    return remain
+}
+
+fn gguf_read_u8(r: mut GGUFReader) -> Int {
+    if r.position < 0 || r.position >= List.len<Int>(list: read r.data) { return 0 }
+    let out = List.get<Int>(list: read r.data, index: r.position) & 255
+    r.position = r.position + 1
+    return out
+}
+
+fn gguf_read_le(r: mut GGUFReader, n: Int) -> Int {
+    let mut out = 0
+    let mut i = 0
+    while i < n && gguf_reader_remaining(r: read r) > 0 {
+        out = out | (gguf_read_u8(r: mut r) << (i * 8))
+        i = i + 1
+    }
+    return out
+}
+
+fn _ggml_iq_grid(cache: mut UOpCache, device: read String, grid: read List<Int>, rows: Int, cols: Int) -> Int {
+    local values = List.new<Float>()
+    let mut i = 0
+    let grid_len = List.len<Int>(list: read grid)
+    while i < grid_len {
+        let w = List.get<Int>(list: read grid, index: i)
+        let mut j = 0
+        while j < cols {
+            let shift = 8 * j
+            let byte = (w >> shift) & 255
+            let fbyte = Int.to_float(value: read byte)
+            List.push<Float>(list: mut values, value: read fbyte)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: rows)
+    push1(l: mut shape, a: cols)
+    return mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read shape, data: read values)
+}
+
+fn gguf_dtype_for_type(ggml_type: Int) -> fresh DType {
+    if ggml_type == 1 { return dt_float16() }
+    if ggml_type == 24 { return dt_int8() }
+    if ggml_type == 25 { return dt_int16() }
+    if ggml_type == 26 { return dt_int32() }
+    if ggml_type == 27 { return dt_int64() }
+    if ggml_type == 28 { return dt_float64() }
+    if ggml_type == 30 { return dt_bfloat16() }
+    return dt_float32()
+}
+
+fn gguf_quant_block_elems(ggml_type: Int) -> Int {
+    if ggml_type == 12 || ggml_type == 13 || ggml_type == 14 || ggml_type == 18 || ggml_type == 21 || ggml_type == 22 || ggml_type == 23 { return 256 }
+    if ggml_type == 41 { return 128 }
+    return 32
+}
+
+fn gguf_quant_block_bytes(ggml_type: Int) -> Int {
+    if ggml_type == 2 { return 18 }
+    if ggml_type == 3 { return 20 }
+    if ggml_type == 6 { return 22 }
+    if ggml_type == 7 { return 24 }
+    if ggml_type == 8 { return 34 }
+    if ggml_type == 12 { return 144 }
+    if ggml_type == 13 { return 176 }
+    if ggml_type == 14 { return 210 }
+    if ggml_type == 18 { return 98 }
+    if ggml_type == 21 { return 110 }
+    if ggml_type == 22 { return 82 }
+    if ggml_type == 23 { return 136 }
+    if ggml_type == 39 { return 17 }
+    if ggml_type == 41 { return 18 }
+    return 0
+}
+
+fn ggml_data_to_tensor(cache: mut UOpCache, t: Int, n: Int, ggml_type: Int) -> Int {
+    let dt = gguf_dtype_for_type(ggml_type: ggml_type)
+    let block_bytes = gguf_quant_block_bytes(ggml_type: ggml_type)
+    if block_bytes == 0 {
+        let bytes = DType.itemsize(self: read dt) * n
+        local starts = List.new<Int>()
+        local ends = List.new<Int>()
+        push1(l: mut starts, a: 0)
+        push1(l: mut ends, a: bytes)
+        let sliced = tensor_slice(cache: mut cache, x: t, starts: read starts, ends: read ends)
+        return tensor_bitcast(cache: mut cache, x: sliced, dt: read dt)
+    }
+    let elems = gguf_quant_block_elems(ggml_type: ggml_type)
+    let block_count = n / elems
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: block_count * elems)
+    return tensor_zeros(cache: mut cache, dt: read dt_float32(), shape: read shape)
+}
+
+fn _read_unpack(fmt: read String, n: Int, r: mut GGUFReader) -> Int {
+    if fmt == "<f" || fmt == "<d" {
+        return gguf_read_le(r: mut r, n: n)
+    }
+    return gguf_read_le(r: mut r, n: n)
+}
+
+fn read_str(r: mut GGUFReader) -> fresh String {
+    let n = read_uint64(r: mut r)
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < n && gguf_reader_remaining(r: read r) > 0 {
+        let b = gguf_read_u8(r: mut r)
+        out = String.concat(left: read out, right: read Int.to_string(value: read b))
+        if i + 1 < n { out = String.concat(left: read out, right: read ".") }
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn read_arr(r: mut GGUFReader) -> fresh List<Int> {
+    let typ = read_int32(r: mut r)
+    let n = read_uint64(r: mut r)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        if typ == 8 {
+            let s = read_str(r: mut r)
+            List.push<Int>(list: mut out, value: read String.len(value: read s))
+        } else {
+            List.push<Int>(list: mut out, value: read gguf_read_scalar_by_type(r: mut r, typ: typ))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn gguf_read_scalar_by_type(r: mut GGUFReader, typ: Int) -> Int {
+    if typ == 0 || typ == 1 || typ == 7 { return _read_unpack(fmt: read "<b", n: 1, r: mut r) }
+    if typ == 2 || typ == 3 { return _read_unpack(fmt: read "<h", n: 2, r: mut r) }
+    if typ == 4 || typ == 5 || typ == 6 { return _read_unpack(fmt: read "<i", n: 4, r: mut r) }
+    if typ == 10 || typ == 11 || typ == 12 { return _read_unpack(fmt: read "<q", n: 8, r: mut r) }
+    if typ == 8 {
+        let s = read_str(r: mut r)
+        return String.len(value: read s)
+    }
+    if typ == 9 {
+        let arr = read_arr(r: mut r)
+        return List.len<Int>(list: read arr)
+    }
+    return 0
+}
+
+fn read_uint32(r: mut GGUFReader) -> Int { return _read_unpack(fmt: read "<I", n: 4, r: mut r) }
+fn read_int32(r: mut GGUFReader) -> Int { return _read_unpack(fmt: read "<i", n: 4, r: mut r) }
+fn read_uint64(r: mut GGUFReader) -> Int { return _read_unpack(fmt: read "<Q", n: 8, r: mut r) }
+fn gguf_read_int64(r: mut GGUFReader) -> Int { return _read_unpack(fmt: read "<q", n: 8, r: mut r) }
+
+fn gguf_kv_new(key: read String, int_value: Int, string_value: read String, array_value: read List<Int>) -> fresh GGUFKeyValue {
+    return GGUFKeyValue(key: String.copy(value: read key), int_value: int_value, string_value: String.copy(value: read string_value), array_value: copy_int_list(l: read array_value))
+}
+
+fn gguf_copy_kv(values: read List<GGUFKeyValue>) -> fresh List<GGUFKeyValue> {
+    local out = List.new<GGUFKeyValue>()
+    let mut i = 0
+    while i < List.len<GGUFKeyValue>(list: read values) {
+        local item = List.get<GGUFKeyValue>(list: read values, index: i)
+        local copied = gguf_kv_new(key: read item.key, int_value: item.int_value, string_value: read item.string_value, array_value: read item.array_value)
+        List.push<GGUFKeyValue>(list: mut out, value: read (manage copied))
+        i = i + 1
+    }
+    return take out
+}
+
+fn gguf_find_int(kv: read List<GGUFKeyValue>, key: read String, default_value: Int) -> Int {
+    let mut i = 0
+    while i < List.len<GGUFKeyValue>(list: read kv) {
+        local item = List.get<GGUFKeyValue>(list: read kv, index: i)
+        if item.key == key { return item.int_value }
+        i = i + 1
+    }
+    return default_value
+}
+
+fn _gguf_parse(cache: mut UOpCache, tensor: Int) -> fresh GGUFLoadResult {
+    local bytes = Bytes.to_uints(value: read tensor_to_bytes(cache: read cache, x: tensor))
+    local r = gguf_reader_new(data: read bytes)
+    local kv = List.new<GGUFKeyValue>()
+    local tensor_names = List.new<String>()
+    local tensors = List.new<Int>()
+    local paths = List.new<String>()
+    let m0 = gguf_read_u8(r: mut r)
+    let m1 = gguf_read_u8(r: mut r)
+    let m2 = gguf_read_u8(r: mut r)
+    let m3 = gguf_read_u8(r: mut r)
+    let version = read_int32(r: mut r)
+    let n_tensors = gguf_read_int64(r: mut r)
+    let n_kv = gguf_read_int64(r: mut r)
+    if m0 != 71 || m1 != 71 || m2 != 85 || m3 != 70 || (version != 2 && version != 3) {
+        return GGUFLoadResult(kv: take kv, tensor_names: take tensor_names, tensors: take tensors, split_paths: take paths)
+    }
+    let mut i = 0
+    while i < n_kv {
+        local key = read_str(r: mut r)
+        let typ = read_int32(r: mut r)
+        let mut arr = List.new<Int>()
+        let mut iv = 0
+        let mut sv = String.copy(value: read "")
+        if typ == 8 {
+            sv = read_str(r: mut r)
+        } else if typ == 9 {
+            arr = read_arr(r: mut r)
+            iv = List.len<Int>(list: read arr)
+        } else {
+            iv = gguf_read_scalar_by_type(r: mut r, typ: typ)
+        }
+        local entry = gguf_kv_new(key: read key, int_value: iv, string_value: read sv, array_value: read arr)
+        List.push<GGUFKeyValue>(list: mut kv, value: read (manage entry))
+        i = i + 1
+    }
+    let mut tinfo = 0
+    while tinfo < n_tensors {
+        local nm = read_str(r: mut r)
+        let nd = read_uint32(r: mut r)
+        local dims = List.new<Int>()
+        let mut d = 0
+        while d < nd {
+            List.push<Int>(list: mut dims, value: read read_uint64(r: mut r))
+            d = d + 1
+        }
+        let typ = read_int32(r: mut r)
+        let off = read_uint64(r: mut r)
+        let n = prod(x: read dims)
+        let data_tensor = ggml_data_to_tensor(cache: mut cache, t: tensor, n: n, ggml_type: typ)
+        List.push<String>(list: mut tensor_names, value: read String.copy(value: read nm))
+        List.push<Int>(list: mut tensors, value: read data_tensor)
+        if off < 0 { List.push<Int>(list: mut tensors, value: read data_tensor) }
+        tinfo = tinfo + 1
+    }
+    return GGUFLoadResult(kv: take kv, tensor_names: take tensor_names, tensors: take tensors, split_paths: take paths)
+}
+
+fn gguf_path_stem(path: read String) -> fresh String {
+    let n = String.len(value: read path)
+    if n > 11 && String.slice(value: read path, start: n - 11, len: 6) == "-00001" {
+        return String.slice(value: read path, start: 0, len: n - 17)
+    }
+    return String.copy(value: read path)
+}
+
+fn _gguf_split_paths(path: read String, kv: read List<GGUFKeyValue>) -> fresh List<String> {
+    local out = List.new<String>()
+    let total = gguf_find_int(kv: read kv, key: read "split.count", default_value: 1)
+    if total <= 1 {
+        List.push<String>(list: mut out, value: read String.copy(value: read path))
+        return take out
+    }
+    local stem = gguf_path_stem(path: read path)
+    let mut i = 1
+    while i <= total {
+        local p = String.concat(left: read stem, right: read String.concat(left: read "-", right: read Int.to_string(value: read i)))
+        List.push<String>(list: mut out, value: read (manage p))
+        i = i + 1
+    }
+    return take out
+}
+
+fn gguf_load(cache: mut UOpCache, tensor: Int, path: read String) -> fresh GGUFLoadResult {
+    let mut result = _gguf_parse(cache: mut cache, tensor: tensor)
+    result.split_paths = _gguf_split_paths(path: read path, kv: read result.kv)
+    return result.clone()
+}

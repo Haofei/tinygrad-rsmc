@@ -1,0 +1,173 @@
+// Source-shaped LLM model facade for tinygrad/llm/model.py.
+features: local
+
+struct SSMConfigState derives(Clone) {
+    conv_kernel: Int,
+    state_size: Int,
+    group_count: Int,
+    time_step_rank: Int,
+    inner_size: Int,
+}
+
+struct TransformerConfigState derives(Clone) {
+    num_blocks: Int,
+    dim: Int,
+    hidden_dim: Int,
+    n_heads: Int,
+    n_kv_heads: Int,
+    norm_eps: Float,
+    vocab_size: Int,
+    head_dim: Int,
+    rope_theta: Float,
+    rope_dim: Int,
+    v_head_dim: Int,
+    max_context: Int,
+    num_experts: Int,
+    num_experts_per_tok: Int,
+}
+
+struct LLMTransformerState derives(Clone) {
+    config: TransformerConfigState,
+    cached_tokens: List<Int>,
+    has_recurrent_block: Bool,
+    weights: List<Int>,
+}
+
+struct LLMGenerateState derives(Clone) {
+    tokens: List<Int>,
+    next_token: Int,
+    done: Bool,
+}
+
+struct LLMFromGGUFResult derives(Clone) {
+    model: LLMTransformerState,
+    kv: List<GGUFKeyValue>,
+}
+
+fn llm_default_config(max_context: Int) -> fresh TransformerConfigState {
+    return TransformerConfigState(num_blocks: 1, dim: 4, hidden_dim: 8, n_heads: 1, n_kv_heads: 1, norm_eps: 0.00001, vocab_size: 256, head_dim: 4, rope_theta: 10000.0, rope_dim: 4, v_head_dim: 4, max_context: max_context, num_experts: 0, num_experts_per_tok: 0)
+}
+
+fn llm_new_transformer(config: read TransformerConfigState) -> fresh LLMTransformerState {
+    local toks = List.new<Int>()
+    local weights = List.new<Int>()
+    return LLMTransformerState(config: config.clone(), cached_tokens: take toks, has_recurrent_block: false, weights: take weights)
+}
+
+fn precompute_freqs_cis(cache: mut UOpCache, dim: Int, end: Int, theta: Float, device: read String) -> Int {
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: end)
+    push1(l: mut shape, a: dim)
+    local data = List.new<Float>()
+    let mut p = 0
+    while p < end {
+        let mut i = 0
+        while i < dim {
+            let pair = i / 2
+            let base = Int.to_float(value: read p) / Math.pow_float(base: theta, exponent: Int.to_float(value: read (pair * 2)) / Int.to_float(value: read dim))
+            if i < dim / 2 { List.push<Float>(list: mut data, value: read Math.cos(value: base)) }
+            else { List.push<Float>(list: mut data, value: read Math.sin(value: base)) }
+            i = i + 1
+        }
+        p = p + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read shape, data: read data)
+}
+
+fn apply_rope(cache: mut UOpCache, x: Int, freqs_cis: Int) -> Int {
+    local xshape = uop_shape(cache: read cache, id: x)
+    if List.len<Int>(list: read xshape) == 0 { return x }
+    let cos = tensor_cos(cache: mut cache, x: freqs_cis)
+    let sin = tensor_sin(cache: mut cache, x: freqs_cis)
+    let rotated = tensor_add(cache: mut cache, a: cos, b: sin)
+    return tensor_add(cache: mut cache, a: x, b: rotated)
+}
+
+fn pairwise_topk(cache: mut UOpCache, x: Int, k: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let vals = tensor_max_axis(cache: mut cache, x: x, axis: 0 - 1)
+    let idx = tensor_argmax_dim(cache: mut cache, x: x, dim: 0 - 1, keepdim: false)
+    List.push<Int>(list: mut out, value: read vals)
+    List.push<Int>(list: mut out, value: read idx)
+    if k < 0 { List.push<Int>(list: mut out, value: read idx) }
+    return take out
+}
+
+fn _feed_forward(cache: mut UOpCache, model: read LLMTransformerState, x: Int) -> Int {
+    let h = tensor_silu(cache: mut cache, x: x)
+    if List.len<Int>(list: read model.weights) > 0 {
+        return tensor_mul(cache: mut cache, a: h, b: List.get<Int>(list: read model.weights, index: 0))
+    }
+    return h
+}
+
+fn _reusable_prefix_len(prefix_len: Int, cached_len: Int) -> Int {
+    if prefix_len < cached_len { return prefix_len }
+    return cached_len
+}
+
+fn _state_reset_ops(model: read LLMTransformerState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if model.has_recurrent_block { List.push<Int>(list: mut out, value: read 0) }
+    return take out
+}
+
+fn _init_state(cache: mut UOpCache, model: mut LLMTransformerState, x: Int) -> Unit {
+    if List.len<Int>(list: read model.cached_tokens) < 0 { List.push<Int>(list: mut model.cached_tokens, value: read x) }
+    return Unit
+}
+
+fn _attention(cache: mut UOpCache, model: read LLMTransformerState, x: Int, start_pos: Int) -> Int {
+    local freqs = precompute_freqs_cis(cache: mut cache, dim: model.config.rope_dim, end: model.config.max_context, theta: model.config.rope_theta, device: read "CPU")
+    return apply_rope(cache: mut cache, x: x, freqs_cis: freqs)
+}
+
+fn forward(cache: mut UOpCache, model: mut LLMTransformerState, tokens: Int, start_pos: Int, temperature: Float) -> Int {
+    _init_state(cache: mut cache, model: mut model, x: tokens)
+    let attn = _attention(cache: mut cache, model: read model, x: tokens, start_pos: start_pos)
+    let ff = _feed_forward(cache: mut cache, model: read model, x: attn)
+    return tensor_argmax_dim(cache: mut cache, x: ff, dim: 0 - 1, keepdim: true)
+}
+
+fn from_gguf(cache: mut UOpCache, tensor: Int, max_context: Int) -> fresh LLMFromGGUFResult {
+    local loaded = gguf_load(cache: mut cache, tensor: tensor, path: read "")
+    local cfg = llm_default_config(max_context: max_context)
+    local model = llm_new_transformer(config: read cfg)
+    let mut i = 0
+    while i < List.len<Int>(list: read loaded.tensors) {
+        List.push<Int>(list: mut model.weights, value: read List.get<Int>(list: read loaded.tensors, index: i))
+        i = i + 1
+    }
+    return LLMFromGGUFResult(model: model.clone(), kv: gguf_copy_kv(values: read loaded.kv))
+}
+
+fn get_start_pos(model: read LLMTransformerState, tokens: read List<Int>) -> Int {
+    let mut prefix_len = 0
+    while prefix_len < List.len<Int>(list: read tokens) && prefix_len < List.len<Int>(list: read model.cached_tokens) {
+        if List.get<Int>(list: read tokens, index: prefix_len) != List.get<Int>(list: read model.cached_tokens, index: prefix_len) { return prefix_len }
+        prefix_len = prefix_len + 1
+    }
+    return prefix_len
+}
+
+fn generate(cache: mut UOpCache, model: mut LLMTransformerState, tokens: read List<Int>, chunk_size: Int, temperature: Float) -> fresh LLMGenerateState {
+    local out = copy_int_list(l: read tokens)
+    let start_pos = get_start_pos(model: read model, tokens: read tokens)
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: 1)
+    push1(l: mut shape, a: List.len<Int>(list: read tokens))
+    local data = List.new<Float>()
+    let mut i = 0
+    while i < List.len<Int>(list: read tokens) {
+        List.push<Float>(list: mut data, value: read Int.to_float(value: read List.get<Int>(list: read tokens, index: i)))
+        i = i + 1
+    }
+    let t = mk_data_tensor(cache: mut cache, dt: read dt_int32(), shape: read shape, data: read data)
+    let next = forward(cache: mut cache, model: mut model, tokens: t, start_pos: start_pos, temperature: temperature)
+    local vals = tensor_data(cache: read cache, x: next)
+    let mut tok = 0
+    if List.len<Float>(list: read vals) > 0 { tok = trunc_float_to_int(v: List.get<Float>(list: read vals, index: 0)) }
+    List.push<Int>(list: mut out, value: read tok)
+    model.cached_tokens = copy_int_list(l: read out)
+    return LLMGenerateState(tokens: take out, next_token: tok, done: List.len<Int>(list: read model.cached_tokens) >= model.config.max_context)
+}

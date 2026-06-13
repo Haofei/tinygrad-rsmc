@@ -5078,6 +5078,24 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let rfac_lim_cpu_p0 = mk_param_device(cache: mut mcache, slot: 80, dt: read dt_float32(), shape: read idx_rf_shape, name: read "limcpu0", device: read "CPU")
+    let rfac_lim_cpu_p1 = mk_param_device(cache: mut mcache, slot: 81, dt: read dt_float32(), shape: read idx_rf_shape, name: read "limcpu1", device: read "CPU")
+    let rfac_lim_cpu_p2 = mk_param_device(cache: mut mcache, slot: 82, dt: read dt_float32(), shape: read idx_rf_shape, name: read "limcpu2", device: read "CPU")
+    let rfac_lim_cpu_i0 = mk_index(cache: mut mcache, base: rfac_lim_cpu_p0, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    let rfac_lim_cpu_i1 = mk_index(cache: mut mcache, base: rfac_lim_cpu_p1, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    let rfac_lim_cpu_i2 = mk_index(cache: mut mcache, base: rfac_lim_cpu_p2, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    let rfac_lim_cpu_child = mk_alu2(cache: mut mcache, op: ADD, dt: read dt_float32(), x: rfac_lim_cpu_i0, y: rfac_lim_cpu_i1)
+    let rfac_lim_cpu_root = mk_alu2(cache: mut mcache, op: ADD, dt: read dt_float32(), x: rfac_lim_cpu_child, y: rfac_lim_cpu_i2)
+    local rfac_lim_cpu_ctx = indexing_context_new()
+    let mut rfac_limit_override_ok = false
+    match limit_bufs_with_max(cache: mut mcache, ctx: mut rfac_lim_cpu_ctx, root: rfac_lim_cpu_root, max_kernel_buffers: 2) {
+        Some(r) => {
+            let lim_src0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let lim_stage = node_src_id(cache: read mcache, id: lim_src0, k: 0)
+            rfac_limit_override_ok = node_op(cache: read mcache, id: r) == ADD && node_op(cache: read mcache, id: lim_src0) == INDEX && node_op(cache: read mcache, id: lim_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: lim_stage) && node_bufferize_device_name(cache: read mcache, id: lim_stage) == "CPU" && rfac_lim_cpu_ctx.next_range == 2 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "schedule.indexing rangeify records movement chain = ", v: idx_rf_contig_rec_i >= 0 && idx_rf_perm_rec_i >= 0 && idx_rf_buf_rec_i >= 0)
     showb(label: read "schedule.indexing rangeify realizes root axes = ", v: List.len<IndexingRealizeAxisRecord>(list: read idx_rf.realize_axes) == 1 && List.len<Int>(list: read idx_rf_contig_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify permute swizzles inputs = ", v: List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1) && List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 1) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0) && List.get<Int>(list: read idx_rf_buf_rec.out_ranges, index: 0) == List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0))
@@ -5091,7 +5109,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_special_split_ok && rfac_assign_ok && rfac_cycle_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_pcontig_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_special_split_ok && rfac_assign_ok && rfac_cycle_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_pcontig_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok && rfac_limit_override_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

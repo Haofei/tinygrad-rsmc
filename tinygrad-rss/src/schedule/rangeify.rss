@@ -758,6 +758,15 @@ fn rangeify_limit_device_cap(device: read String) -> Int {
     return 0
 }
 
+fn rangeify_max_kernel_buffers_value() -> Int {
+    return getenv(name: read "MAX_KERNEL_BUFFERS", default_value: 0)
+}
+
+fn rangeify_limit_max_buffers(device: read String, max_kernel_buffers: Int) -> Int {
+    if max_kernel_buffers > 0 { return max_kernel_buffers }
+    return rangeify_limit_device_cap(device: read device)
+}
+
 fn rangeify_limit_is_load_leaf(op: read Ops) -> Bool {
     if op == STAGE { return true }
     if op == AFTER { return true }
@@ -813,12 +822,12 @@ fn rangeify_limit_stage_child(cache: mut UOpCache, ctx: mut IndexingContext, chi
     return Some(mk_index(cache: mut cache, base: staged, srcs: read orig_ranges, ptr: false))
 }
 
-fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Option<Int> {
+fn limit_bufs_with_max(cache: mut UOpCache, ctx: mut IndexingContext, root: Int, max_kernel_buffers: Int) -> Option<Int> {
     let op = node_op(cache: read cache, id: root)
     if group_binary(op: read op) == false && group_ternary(op: read op) == false { return None }
     local device = node_effective_device_name(cache: read cache, id: root, index: 0)
     if String.len(value: read device) == 0 { return None }
-    let max_bufs = rangeify_limit_device_cap(device: read device)
+    let max_bufs = rangeify_limit_max_buffers(device: read device, max_kernel_buffers: max_kernel_buffers)
     if max_bufs <= 0 { return None }
     local bufs = List.new<Int>()
     rangeify_limit_collect_bufs(cache: read cache, id: root, bufs: mut bufs)
@@ -841,6 +850,10 @@ fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Optio
     if changed == false { return None }
     local arg = node_arg(cache: read cache, id: root)
     return Some(intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: root), src: take srcs, arg: take arg))
+}
+
+fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Option<Int> {
+    return limit_bufs_with_max(cache: mut cache, ctx: mut ctx, root: root, max_kernel_buffers: rangeify_max_kernel_buffers_value())
 }
 
 fn rangeify_union_ranges(cache: read UOpCache, target: Int, idx_ranges: read List<Int>) -> fresh List<Int> {

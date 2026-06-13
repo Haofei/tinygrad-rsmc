@@ -525,8 +525,10 @@ Integrated pieces:
   index through the upstream RESHAPE movement mapping and reshapes the staged result back to the
   original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
   expressions touching more than three accessed buffers and for reduce subtrees that read
-  bufferized/param data; the later PCONTIG local-buffer fallback, exact symbolic max-shape shrink
-  in split kernels, COPY/SLICE special kernel bodies, and full WAR assign dependency repair are
+  bufferized/param data. A first post-split WAR assign repair now appends reader `AFTER` deps to
+  later writer assigns when a split kernel reads a buffer written by another assign; exact upstream
+  circular-dependency diagnostics are still pending. The later PCONTIG local-buffer fallback,
+  exact symbolic max-shape shrink in split kernels, and COPY/SLICE special kernel bodies are
   still intentionally unported.
   The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
   stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,

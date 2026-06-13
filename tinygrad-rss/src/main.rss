@@ -4624,6 +4624,34 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let rfac_war_a = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    let rfac_war_b = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    let rfac_war_c = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    local rfac_war_body_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_body_srcs, value: read idx_store)
+    let rfac_war_body = mk_sink(cache: mut mcache, ids: read rfac_war_body_srcs)
+    local rfac_war_read_args = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_read_args, value: read rfac_war_b)
+    List.push<Int>(list: mut rfac_war_read_args, value: read rfac_war_a)
+    local rfac_war_call_arg = mk_call_arg(name: read "war", has_name: true, precompile: false, precompile_backward: false)
+    let rfac_war_read_call = mk_call(cache: mut mcache, body: rfac_war_body, args: read rfac_war_read_args, call: read rfac_war_call_arg)
+    local rfac_war_write_args = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_write_args, value: read rfac_war_a)
+    List.push<Int>(list: mut rfac_war_write_args, value: read rfac_war_c)
+    let rfac_war_write_call = mk_call(cache: mut mcache, body: rfac_war_body, args: read rfac_war_write_args, call: read rfac_war_call_arg)
+    local rfac_war_read_deps = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_read_deps, value: read rfac_war_read_call)
+    let rfac_war_read_after = mk_after(cache: mut mcache, id: rfac_war_b, srcs: read rfac_war_read_deps)
+    local rfac_war_write_deps = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_write_deps, value: read rfac_war_write_call)
+    let rfac_war_write_after = mk_after(cache: mut mcache, id: rfac_war_a, srcs: read rfac_war_write_deps)
+    local rfac_war_root_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_war_root_srcs, value: read rfac_war_read_after)
+    List.push<Int>(list: mut rfac_war_root_srcs, value: read rfac_war_write_after)
+    let rfac_war_root = mk_sink(cache: mut mcache, ids: read rfac_war_root_srcs)
+    let rfac_war_fixed = rangeify_fix_assign(cache: mut mcache, root: rfac_war_root)
+    let rfac_war_fixed_write = node_src_id(cache: read mcache, id: rfac_war_fixed, k: 1)
+    let rfac_assign_ok = node_op(cache: read mcache, id: rfac_war_fixed) == SINK && node_op(cache: read mcache, id: rfac_war_fixed_write) == AFTER && node_num_src(cache: read mcache, id: rfac_war_fixed_write) == 3 && node_src_id(cache: read mcache, id: rfac_war_fixed_write, k: 2) == rfac_war_read_after
     local rfac_stage_ctx = rangeify_local_context_new()
     let mut rfac_stage_store_ok = false
     match bufferize_to_store(cache: mut mcache, ctx: mut rfac_stage_ctx, x: idx_rf_stage_stage, idx: idx_rf_stage_index, allow_locals: false) {
@@ -4985,7 +5013,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_assign_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

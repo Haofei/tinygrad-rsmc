@@ -1226,6 +1226,110 @@ fn rangeify_apply_split_pass(cache: mut UOpCache, root: Int) -> Int {
     return rangeify_apply_split_pass_node(cache: mut cache, id: root, olds: mut olds, news: mut news)
 }
 
+fn rangeify_after_kernel(cache: read UOpCache, after: Int) -> Int {
+    if node_op(cache: read cache, id: after) != AFTER { return 0 - 1 }
+    if node_num_src(cache: read cache, id: after) < 2 { return 0 - 1 }
+    return node_src_id(cache: read cache, id: after, k: 1)
+}
+
+fn rangeify_after_buf(cache: mut UOpCache, after: Int) -> Int {
+    if node_op(cache: read cache, id: after) != AFTER { return 0 - 1 }
+    if node_num_src(cache: read cache, id: after) == 0 { return 0 - 1 }
+    return uop_buf_uop(cache: mut cache, id: node_src_id(cache: read cache, id: after, k: 0))
+}
+
+fn rangeify_collect_after_nodes(cache: read UOpCache, root: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local order = uop_toposort_enter_calls(cache: read cache, id: root, enter_calls: false)
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: id) == AFTER && node_num_src(cache: read cache, id: id) >= 2 {
+            List.push<Int>(list: mut out, value: read id)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn rangeify_kernel_arg_reads_buf(cache: mut UOpCache, kernel: Int, buf: Int) -> Bool {
+    if node_op(cache: read cache, id: kernel) != CALL && node_op(cache: read cache, id: kernel) != FUNCTION { return false }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: kernel) {
+        let arg = node_src_id(cache: read cache, id: kernel, k: i)
+        let abuf = uop_buf_uop(cache: mut cache, id: arg)
+        if abuf == buf { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn rangeify_after_dep_contains(cache: read UOpCache, after: Int, dep: Int) -> Bool {
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: after) {
+        if node_src_id(cache: read cache, id: after, k: i) == dep { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn rangeify_append_after_dep(cache: mut UOpCache, after: Int, dep: Int) -> Int {
+    if node_op(cache: read cache, id: after) != AFTER { return after }
+    if dep < 0 { return after }
+    if rangeify_after_dep_contains(cache: read cache, after: after, dep: dep) { return after }
+    local deps = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: after) {
+        List.push<Int>(list: mut deps, value: read node_src_id(cache: read cache, id: after, k: i))
+        i = i + 1
+    }
+    List.push<Int>(list: mut deps, value: read dep)
+    return mk_after(cache: mut cache, id: node_src_id(cache: read cache, id: after, k: 0), srcs: read deps)
+}
+
+fn rangeify_fix_assign(cache: mut UOpCache, root: Int) -> Int {
+    local afters = rangeify_collect_after_nodes(cache: read cache, root: root)
+    if List.len<Int>(list: read afters) <= 1 { return root }
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    let mut ui = 0
+    while ui < List.len<Int>(list: read afters) {
+        let reader_after = List.get<Int>(list: read afters, index: ui)
+        let reader_kernel = rangeify_after_kernel(cache: read cache, after: reader_after)
+        let reader_buf = rangeify_after_buf(cache: mut cache, after: reader_after)
+        if reader_kernel >= 0 {
+            let mut ai = 0
+            while ai < List.len<Int>(list: read afters) {
+                let writer_after = List.get<Int>(list: read afters, index: ai)
+                if writer_after != reader_after {
+                    let writer_buf = rangeify_after_buf(cache: mut cache, after: writer_after)
+                    let writer_kernel = rangeify_after_kernel(cache: read cache, after: writer_after)
+                    if writer_buf >= 0 && writer_buf != reader_buf && writer_kernel != reader_kernel {
+                        if rangeify_kernel_arg_reads_buf(cache: mut cache, kernel: reader_kernel, buf: writer_buf) {
+                            let cur_pos = rangeify_pos(ids: read olds, id: writer_after)
+                            let mut cur_after = writer_after
+                            if cur_pos >= 0 { cur_after = List.get<Int>(list: read news, index: cur_pos) }
+                            let new_after = rangeify_append_after_dep(cache: mut cache, after: cur_after, dep: reader_after)
+                            if new_after != cur_after {
+                                if cur_pos >= 0 {
+                                    List.set<Int>(list: mut news, index: cur_pos, value: read new_after)
+                                } else {
+                                    List.push<Int>(list: mut olds, value: read writer_after)
+                                    List.push<Int>(list: mut news, value: read new_after)
+                                }
+                            }
+                        }
+                    }
+                }
+                ai = ai + 1
+            }
+        }
+        ui = ui + 1
+    }
+    if List.len<Int>(list: read olds) == 0 { return root }
+    return uop_substitute_many(cache: mut cache, id: root, old_ids: read olds, new_ids: read news)
+}
+
 fn get_kernel_graph(cache: mut UOpCache, sink: Int) -> Int {
     let cleaned = rangeify_apply_syntactic_sugar(cache: mut cache, root: sink)
     local analysis = indexing_run_rangeify_analysis(cache: mut cache, root: cleaned)
@@ -1239,5 +1343,6 @@ fn get_kernel_graph(cache: mut UOpCache, sink: Int) -> Int {
         buffered = rangeify_apply_bufferize_pass(cache: mut cache, root: buffered, ctx: mut lctx)
         i = i + 1
     }
-    return rangeify_apply_split_pass(cache: mut cache, root: buffered)
+    let split = rangeify_apply_split_pass(cache: mut cache, root: buffered)
+    return rangeify_fix_assign(cache: mut cache, root: split)
 }

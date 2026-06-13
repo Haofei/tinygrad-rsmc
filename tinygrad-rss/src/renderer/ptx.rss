@@ -1,0 +1,42 @@
+// Source-shaped facade slice for tinygrad/renderer/ptx.py.
+features: local
+
+fn render_val(x: Float, dtype: read DType) -> fresh String {
+    if dtype_is_float(d: read dtype) {
+        return Float.to_string(value: read x)
+    }
+    let mut out = Int.to_string(value: read trunc_float_to_int(v: x))
+    if dtype_is_unsigned(d: read dtype) { out = cstyle_cat(a: read out, b: read "U") }
+    return String.copy(value: read out)
+}
+
+fn mem_type(cache: read UOpCache, x: Int) -> fresh String {
+    let op = node_op(cache: read cache, id: x)
+    if op == AFTER && node_num_src(cache: read cache, id: x) > 0 { return mem_type(cache: read cache, x: node_src_id(cache: read cache, id: x, k: 0)) }
+    if op == DEFINE_LOCAL { return String.copy(value: read "shared") }
+    if op == PARAM {
+        if addr_space_name(a: read node_addrspace(cache: read cache, id: x)) == "LOCAL" { return String.copy(value: read "shared") }
+        return String.copy(value: read "global")
+    }
+    return String.copy(value: read "global")
+}
+
+fn render_wmma(cache: read UOpCache, wmma: Int) -> fresh String {
+    local vals = node_argints(cache: read cache, id: wmma)
+    let mut out = String.copy(value: read "mma.sync.aligned")
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) && i < 3 {
+        out = cstyle_cat(a: read out, b: read ".")
+        out = cstyle_cat(a: read out, b: read Int.to_string(value: read List.get<Int>(list: read vals, index: i)))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn modifier(a: read DType, b: read DType) -> fresh String {
+    if dtype_is_int(d: read a) && dtype_is_float(d: read b) { return String.copy(value: read ".rzi") }
+    if dtype_is_float(d: read a) {
+        if a.bitsize < b.bitsize || dtype_is_int(d: read b) || dtype_is_bool(d: read b) { return String.copy(value: read ".rn") }
+    }
+    return String.copy(value: read "")
+}

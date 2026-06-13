@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 46 RSS files, about 35.8k LOC.
+  - integrated `tinygrad-rss/src`: 50 RSS files, about 36.2k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -41,6 +41,10 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused nn batch: `nn/__init__.py`, `nn/optim.py`, `nn/state.py`, and `nn/datasets.py`:
     68/68 rough symbols covered. This is source-surface coverage with lightweight RSS facades,
     not full training semantics.
+  - focused renderer backend batch: `renderer/llvmir.py`, `renderer/ptx.py`, `renderer/wgsl.py`,
+    and `renderer/nir.py`: 70/70 rough symbols covered. Across the focused renderer/runtime
+    backend set (`renderer/*` plus CPU/disk/null/python runtime stubs), coverage is now
+    109/133 rough symbols.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -225,6 +229,14 @@ Integrated pieces:
   supported dtype sets, OpenCL `aux`, CUDA/HIP fp8/OCML helpers, CDNA arch predicates, and an
   assembly facade for HIP. It still lacks upstream's full inline heuristics, exact target-specific
   parameter effects, real target compiler objects, full WMMA prefix emission, and schedule integration.
+- `renderer/llvmir.rss`, `renderer/ptx.rss`, `renderer/wgsl.rss`, and `renderer/nir.rss`: first
+  source-shaped backend renderer facade batch. The integrated names cover LLVM dtype/constant/cast
+  spelling and WMMA/footer/function shells; PTX value, memory-space, WMMA, and cast-modifier
+  helpers; WGSL packed load/store/rewrite support helpers and buffer type spelling; and NIR helper
+  names for Mesa symbol lookup, def/source/type text, ALU/cast/channel/immediate/index/vector/image
+  facades, parameter/prerender/postrender shells, and float-type spelling. These are deterministic
+  RSS facades over the current UOp graph and string metadata, not real LLVM/PTX/WGSL/NIR backend
+  emitters or native Mesa/LLVM/CUDA compiler integrations yet.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
   scoring from active ranges, upstream op priorities for `PARAM`/`DEFINE_VAR`/`DEFINE_REG`/
@@ -811,6 +823,10 @@ Current integrated demo:
   supported dtype lists, aux parameter metadata, non-native float pattern hooks, bf16 cast node
   construction, WMMA metadata collection, fp8 index selection, OCML call rendering, CDNA arch
   predicates, and the HIP assembly facade.
+- validates source-shaped LLVM/PTX/WGSL/NIR renderer backend facade names through the active smoke:
+  LLVM dtype/constant/cast/WMMA/function/footer helpers, PTX value/memory/WMMA/modifier helpers,
+  WGSL packed mask/load/type/nan helpers, and NIR symbol/type/ALU/cast/channel/immediate/param/
+  vector/postrender helpers.
 - validates first integrated codegen linearizer priority ordering over the same real kernel graph,
   producing a dependency-valid linear op stream from `CONST`/`PARAM`/`DEFINE_*` through
   `RANGE`/`INDEX`/`LOAD`/ALU/`STORE`/`END`/`IF`/`ENDIF`/`SINK`.
@@ -1161,8 +1177,9 @@ Major missing integrated work:
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
   IF rejection, remaining late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
-- `renderer/cstyle.py`: exact target-specific compiler integration, full prefix emission, and
-  renderer policy beyond the source-shaped facade names now in `renderer/cstyle.rss`.
+- `renderer/*`: exact target-specific compiler integration, full prefix emission, real LLVM/PTX/
+  WGSL/NIR emission, Mesa/LLVM/CUDA native bindings, and renderer policy beyond the source-shaped
+  facade names now in `renderer/*.rss`.
 - target-specific `runtime/*`, `runtime/support/*`, native device backends, and full JIT graph
   execution: handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be

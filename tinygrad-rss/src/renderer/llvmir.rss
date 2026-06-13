@@ -1,0 +1,83 @@
+// Source-shaped facade slice for tinygrad/renderer/llvmir.py.
+features: local
+
+fn ldt(dt: read DType) -> fresh String {
+    if dt.count > 1 {
+        return cstyle_cat(a: read "<", b: read cstyle_cat(a: read Int.to_string(value: read dt.count), b: read cstyle_cat(a: read " x ", b: read cstyle_cat(a: read ldt(dt: read dtype_scalar(d: read dt)), b: read ">"))))
+    }
+    if dt.name == "void" { return String.copy(value: read "void") }
+    if dt.name == "bool" { return String.copy(value: read "i1") }
+    if dt.name == "signed char" || dt.name == "unsigned char" || dt.name == "float8_e4m3" || dt.name == "float8_e5m2" { return String.copy(value: read "i8") }
+    if dt.name == "short" || dt.name == "unsigned short" { return String.copy(value: read "i16") }
+    if dt.name == "int" || dt.name == "unsigned int" { return String.copy(value: read "i32") }
+    if dt.name == "long" || dt.name == "unsigned long" { return String.copy(value: read "i64") }
+    if dt.name == "half" { return String.copy(value: read "half") }
+    if dt.name == "__bf16" { return String.copy(value: read "bfloat") }
+    if dt.name == "float" { return String.copy(value: read "float") }
+    if dt.name == "double" { return String.copy(value: read "double") }
+    return cstyle_dtype_name(dt: read dt)
+}
+
+fn lconst(x: Float, dtype: read DType) -> fresh String {
+    if dtype_is_float(d: read dtype) {
+        let mut s = Float.to_string(value: read x)
+        if String.contains(value: read s, needle: read ".") == false { s = cstyle_cat(a: read s, b: read ".0") }
+        return String.copy(value: read s)
+    }
+    return Int.to_string(value: read trunc_float_to_int(v: x))
+}
+
+fn lcast(input_type: read DType, output_type: read DType) -> fresh String {
+    if dtype_is_float(d: read input_type) {
+        if dtype_is_float(d: read output_type) {
+            if output_type.bitsize > input_type.bitsize { return String.copy(value: read "fpext") }
+            return String.copy(value: read "fptrunc")
+        }
+        if dtype_is_int(d: read output_type) {
+            if dtype_is_unsigned(d: read output_type) { return String.copy(value: read "fptoui") }
+            return String.copy(value: read "fptosi")
+        }
+    }
+    if dtype_is_unsigned(d: read input_type) || dtype_is_bool(d: read input_type) {
+        if dtype_is_float(d: read output_type) { return String.copy(value: read "uitofp") }
+        if output_type.bitsize < input_type.bitsize { return String.copy(value: read "trunc") }
+        return String.copy(value: read "zext")
+    }
+    if dtype_is_int(d: read input_type) {
+        if dtype_is_float(d: read output_type) { return String.copy(value: read "sitofp") }
+        if output_type.bitsize < input_type.bitsize { return String.copy(value: read "trunc") }
+        return String.copy(value: read "sext")
+    }
+    return String.copy(value: read "bitcast")
+}
+
+fn render_wmma_amd(cache: read UOpCache, wmma: Int, cdna: Bool) -> fresh String {
+    let dt = ldt(dt: read node_full_dtype(cache: read cache, id: wmma))
+    let mut out = cstyle_cat(a: read "call ", b: read dt)
+    if cdna { out = cstyle_cat(a: read out, b: read " @llvm.amdgcn.mfma") }
+    else { out = cstyle_cat(a: read out, b: read " @llvm.amdgcn.wmma") }
+    return String.copy(value: read out)
+}
+
+fn _render_fn(name: read String, args: read List<Int>, kernel: read List<String>, prefix: read List<String>) -> fresh String {
+    local lines = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read prefix) {
+        List.push<String>(list: mut lines, value: read List.get<String>(list: read prefix, index: i))
+        i = i + 1
+    }
+    List.push<String>(list: mut lines, value: read cstyle_cat(a: read "define void @", b: read cstyle_cat(a: read name, b: read "() {")))
+    let mut j = 0
+    while j < List.len<String>(list: read kernel) {
+        List.push<String>(list: mut lines, value: read List.get<String>(list: read kernel, index: j))
+        j = j + 1
+    }
+    List.push<String>(list: mut lines, value: read "  ret void")
+    List.push<String>(list: mut lines, value: read "}")
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn _render_footer(uops: read List<Int>) -> fresh String {
+    if List.len<Int>(list: read uops) < 0 { return String.copy(value: read "") }
+    return String.copy(value: read "attributes #0 = { alwaysinline nounwind \"no-builtins\" \"no-trapping-math\"=\"true\" }")
+}

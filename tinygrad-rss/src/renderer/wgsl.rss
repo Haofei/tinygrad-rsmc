@@ -1,0 +1,57 @@
+// Source-shaped facade slice for tinygrad/renderer/wgsl.py.
+features: local
+
+fn _mask(dt: read DType) -> Int {
+    if DType.itemsize(self: read dt) == 1 { return 255 }
+    return 65535
+}
+
+fn sign_extend(cache: mut UOpCache, val: Int, sext_am: Int) -> Int {
+    if sext_am <= 0 { return val }
+    return mk_cast(cache: mut cache, x: val, dt: read dt_int32())
+}
+
+fn packed_store(cache: mut UOpCache, bidx: Int, var: Int, gate: read Option<Int>) -> Int {
+    if node_op(cache: read cache, id: bidx) == INDEX {
+        return mk_store(cache: mut cache, ptr: bidx, value: var, gate: read gate)
+    }
+    return var
+}
+
+fn packed_load(cache: mut UOpCache, root: Int, bidx: Int, dtype: read DType, var: read Option<Int>, gate: read Option<Int>) -> Int {
+    if node_op(cache: read cache, id: bidx) == INDEX && dtype.bitsize >= 0 { return root }
+    return root
+}
+
+fn is_packed(dt: read DType, odt: read DType) -> Bool {
+    if DType.itemsize(self: read dt) >= 4 { return false }
+    if dtype_scalar(d: read dt).name == "half" { return false }
+    return true
+}
+
+fn _packed_size(dt: read DType) -> Int {
+    if is_packed(dt: read dt, odt: read dt) {
+        let elems = 4 / DType.itemsize(self: read dt)
+        if elems <= 0 { return dt.count }
+        return dt.count / elems
+    }
+    return dt.count
+}
+
+fn is_nan(cache: mut UOpCache, a: Int) -> Int {
+    return mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: a, y: a)
+}
+
+fn render_load(x: read String, dt: read DType) -> fresh String {
+    if is_packed(dt: read dt, odt: read dt) { return cstyle_cat(a: read "atomicLoad(&", b: read cstyle_cat(a: read x, b: read ")")) }
+    return String.copy(value: read x)
+}
+
+fn buf_map(dt: read DType) -> fresh String {
+    if is_packed(dt: read dt, odt: read dt) { return String.copy(value: read "atomic<u32>") }
+    if dt.name == "float" { return String.copy(value: read "f32") }
+    if dt.name == "half" { return String.copy(value: read "f16") }
+    if dt.name == "bool" { return String.copy(value: read "bool") }
+    if dtype_is_unsigned(d: read dt) { return String.copy(value: read "u32") }
+    return String.copy(value: read "i32")
+}

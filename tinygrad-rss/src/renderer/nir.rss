@@ -1,0 +1,145 @@
+// Source-shaped facade slice for tinygrad/renderer/nir.py.
+features: local
+
+struct NIRDef derives(Clone) {
+    id: Int,
+    text: String,
+}
+
+struct NIRInstrState derives(Clone) {
+    name: String,
+    components: Int,
+    bits: Int,
+}
+
+fn nir_def(id: Int, text: read String) -> fresh NIRDef {
+    return NIRDef(id: id, text: String.copy(value: read text))
+}
+
+fn g(s: read String) -> fresh String {
+    return cstyle_cat(a: read "mesa.", b: read s)
+}
+
+fn nsrc(d: read NIRDef) -> fresh String {
+    return cstyle_cat(a: read "src(", b: read cstyle_cat(a: read d.text, b: read ")"))
+}
+
+fn glsl_type(t: read DType) -> fresh String {
+    if t.count > 1 {
+        return cstyle_cat(a: read "array<", b: read cstyle_cat(a: read glsl_type(t: read dtype_scalar(d: read t)), b: read cstyle_cat(a: read ",", b: read cstyle_cat(a: read Int.to_string(value: read t.count), b: read ">"))))
+    }
+    if t.name == "float" { return String.copy(value: read "float") }
+    if t.name == "double" { return String.copy(value: read "double") }
+    if t.name == "half" { return String.copy(value: read "float16_t") }
+    if t.name == "bool" { return String.copy(value: read "uint8_t") }
+    if dtype_is_unsigned(d: read t) { return cstyle_cat(a: read "uint", b: read Int.to_string(value: read t.bitsize)) }
+    if dtype_is_int(d: read t) { return cstyle_cat(a: read "int", b: read Int.to_string(value: read t.bitsize)) }
+    return cstyle_dtype_name(dt: read t)
+}
+
+fn c(t: read DType, u: Bool) -> fresh String {
+    if dtype_is_unsigned(d: read t) && u { return String.copy(value: read "u") }
+    if dtype_is_int(d: read t) { return String.copy(value: read "i") }
+    if dtype_is_float(d: read t) { return String.copy(value: read "f") }
+    return String.copy(value: read "b")
+}
+
+fn nalu(cache: mut UOpCache, op: read String, a: Int, b: Int, csrc: Int) -> Int {
+    if op == "fadd" || op == "iadd" { return mk_alu2(cache: mut cache, op: ADD, dt: read node_dtype(cache: read cache, id: a), x: a, y: b) }
+    if op == "fmul" || op == "imul" { return mk_alu2(cache: mut cache, op: MUL, dt: read node_dtype(cache: read cache, id: a), x: a, y: b) }
+    if op == "bcsel" { return mk_alu3(cache: mut cache, op: WHERE, dt: read node_dtype(cache: read cache, id: b), x: a, y: b, z: csrc) }
+    return a
+}
+
+fn ncast(cache: mut UOpCache, src: Int, it: read DType, ot: read DType) -> Int {
+    if it.name == ot.name && it.count == ot.count { return src }
+    return mk_cast(cache: mut cache, x: src, dt: read ot)
+}
+
+fn nif(cache: mut UOpCache, cond: Int, then_value: Int, else_value: Int) -> fresh TensorPair {
+    if cond < 0 { return TensorPair(first: then_value, second: else_value) }
+    return TensorPair(first: then_value, second: else_value)
+}
+
+fn nir_instr(name: read String, nc: Int, bits: Int) -> fresh NIRInstrState {
+    return NIRInstrState(name: String.copy(value: read name), components: nc, bits: bits)
+}
+
+fn nchannel(cache: mut UOpCache, src: Int, cidx: Int) -> Int {
+    local idx = List.new<Int>()
+    List.push<Int>(list: mut idx, value: read cidx)
+    return mk_gep(cache: mut cache, x: src, idxs: read idx)
+}
+
+fn nimm_set(imm: mut NIRDef, x: Float, dtype: read DType) -> Unit {
+    imm.text = lconst(x: x, dtype: read dtype)
+    return Unit
+}
+
+fn nimm(cache: mut UOpCache, x: Float, dtype: read DType) -> Int {
+    return mk_const_float(cache: mut cache, dt: read dtype, v: x)
+}
+
+fn nundef(cache: mut UOpCache, dtype: read DType) -> Int {
+    return mk_const_int(cache: mut cache, dt: read dtype, v: 0)
+}
+
+fn scope(space: read String) -> fresh String {
+    if space == "GLOBAL" { return String.copy(value: read "global") }
+    if space == "LOCAL" { return String.copy(value: read "shared") }
+    return String.copy(value: read "deref")
+}
+
+fn nid(cache: mut UOpCache, gid: Int, gsz: Int, lid: Int) -> Int {
+    let prod_id = mk_alu2(cache: mut cache, op: MUL, dt: read dt_int32(), x: gid, y: gsz)
+    return mk_alu2(cache: mut cache, op: ADD, dt: read dt_int32(), x: prod_id, y: lid)
+}
+
+fn njump(kind: read String) -> fresh String {
+    return cstyle_cat(a: read "jump:", b: read kind)
+}
+
+fn if_phi(cache: mut UOpCache, cond: Int, then_value: Int, else_value: Int) -> Int {
+    return mk_alu3(cache: mut cache, op: WHERE, dt: read node_dtype(cache: read cache, id: then_value), x: cond, y: then_value, z: else_value)
+}
+
+fn nidx(cache: mut UOpCache, buf: Int, off: Int, dtype: read DType, gate: read Option<Int>) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read off)
+    return mk_index(cache: mut cache, base: buf, srcs: read srcs, ptr: true)
+}
+
+fn param(cache: mut UOpCache, slot: Int, dtype: read DType) -> Int {
+    local shape = List.new<Int>()
+    return mk_param(cache: mut cache, slot: slot, dt: read dtype, shape: read shape, name: read "")
+}
+
+fn prerender(uops: read List<Int>) -> fresh NIRInstrState {
+    return NIRInstrState(name: String.copy(value: read "nir"), components: List.len<Int>(list: read uops), bits: 32)
+}
+
+fn postrender(uops: read List<Int>) -> fresh String {
+    return cstyle_cat(a: read "nir_post:", b: read Int.to_string(value: read List.len<Int>(list: read uops)))
+}
+
+fn tovec(cache: mut UOpCache, idx_y: Int, idx_x: Int) -> Int {
+    local srcs = List.new<Int>()
+    List.push<Int>(list: mut srcs, value: read idx_x)
+    List.push<Int>(list: mut srcs, value: read idx_y)
+    return uop_stack(cache: mut cache, dt: read dtype_vec(base: read dt_int32(), sz: 2), srcs: read srcs)
+}
+
+fn nfloat(dtype: read DType) -> fresh String {
+    if dtype.name == "half" { return String.copy(value: read "nir_type_float16") }
+    return String.copy(value: read "nir_type_float32")
+}
+
+fn nload_img(cache: mut UOpCache, img: Int, idx_y: Int, idx_x: Int, dtype: read DType) -> Int {
+    let idx = tovec(cache: mut cache, idx_y: idx_y, idx_x: idx_x)
+    local extra = List.new<Int>()
+    return mk_load(cache: mut cache, ptr: idx, srcs: read extra, dt: read dtype)
+}
+
+fn _param_img(x: Int) -> Int {
+    return x
+}

@@ -336,7 +336,78 @@ fn reduce_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
     return None
 }
 
+fn simplify_reduce_is_add(cache: read UOpCache, red: Int) -> Bool {
+    let rop = node_arg_op(cache: read cache, id: red)
+    if rop == ADD { return true }
+    if rop != NOOP { return false }
+    return node_reduce_kind(cache: read cache, id: red) == 0
+}
+
+fn simplify_is_zero_const(cache: read UOpCache, id: Int) -> Bool {
+    if node_op(cache: read cache, id: id) != CONST { return false }
+    if node_is_const_int(cache: read cache, id: id) { return node_const_int(cache: read cache, id: id) == 0 }
+    return node_const_float(cache: read cache, id: id) == 0.0
+}
+
+fn simplify_load_index_expr(cache: read UOpCache, cmp: Int, r: Int) -> Int {
+    if node_op(cache: read cache, id: cmp) != CMPNE || node_num_src(cache: read cache, id: cmp) != 2 { return -1 }
+    let lhs = node_src_id(cache: read cache, id: cmp, k: 0)
+    let rhs = node_src_id(cache: read cache, id: cmp, k: 1)
+    if simplify_single_range_expr(cache: read cache, x: lhs) == r { return rhs }
+    if simplify_single_range_expr(cache: read cache, x: rhs) == r { return lhs }
+    return -1
+}
+
+fn simplify_reduce_load_collapse_one(cache: mut UOpCache, r: Int, idx: Int, expr: Int) -> Option<Int> {
+    if node_num_src(cache: read cache, id: r) == 0 { return None }
+    let rdt = node_dtype(cache: read cache, id: r)
+    let edt = node_dtype(cache: read cache, id: expr)
+    let idx_cast = mk_cast(cache: mut cache, x: idx, dt: read rdt)
+    let zero_r = mk_const_int(cache: mut cache, dt: read rdt, v: 0)
+    let lt_zero = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: idx_cast, y: zero_r)
+    let btrue = mk_const_int(cache: mut cache, dt: read dt_bool(), v: 1)
+    let ge_zero = mk_alu2(cache: mut cache, op: CMPNE, dt: read dt_bool(), x: lt_zero, y: btrue)
+    let lt_end = mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: idx_cast, y: node_src_id(cache: read cache, id: r, k: 0))
+    let valid = mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: ge_zero, y: lt_end)
+    let vidx = uop_valid(cache: mut cache, id: idx_cast, cond: valid)
+    local ctx = simplify_empty_subst()
+    simplify_subst_put(ctx: mut ctx, old_id: r, new_id: vidx)
+    local replaced = do_substitute(cache: mut cache, ctx: mut ctx, x: expr)
+    let mut new_expr = expr
+    match replaced {
+        Some(v) => { new_expr = v }
+        None => { new_expr = expr }
+    }
+    let zero_expr = mk_const_int(cache: mut cache, dt: read edt, v: 0)
+    return Some(mk_where(cache: mut cache, dt: read edt, cond: valid, tval: new_expr, fval: zero_expr))
+}
+
+fn reduce_load_index_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE || simplify_reduce_is_add(cache: read cache, red: red) == false { return None }
+    if node_num_src(cache: read cache, id: red) < 2 { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    if node_op(cache: read cache, id: value) != WHERE || node_num_src(cache: read cache, id: value) != 3 { return None }
+    let cond = node_src_id(cache: read cache, id: value, k: 0)
+    let tval = node_src_id(cache: read cache, id: value, k: 1)
+    let fval = node_src_id(cache: read cache, id: value, k: 2)
+    if simplify_is_zero_const(cache: read cache, id: tval) == false { return None }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: red) {
+        let r = node_src_id(cache: read cache, id: red, k: i)
+        let idx = simplify_load_index_expr(cache: read cache, cmp: cond, r: r)
+        if idx >= 0 {
+            return simplify_reduce_load_collapse_one(cache: mut cache, r: r, idx: idx, expr: fval)
+        }
+        i = i + 1
+    }
+    return None
+}
+
 fn reduce_load_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
+    match reduce_load_index_collapse(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     return reduce_collapse(cache: mut cache, red: red, u: u)
 }
 

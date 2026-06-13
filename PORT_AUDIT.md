@@ -583,8 +583,11 @@ Integrated pieces:
   validity guards, and substitutes guarded ranges with the tighter bound while leaving ungated
   index ranges at their full end. The split-range pass now uses the upstream divisibility rule for
   `RANGE % const` and substitutes splittable ranges with `hi * const + lo` replacement ranges that
-  preserve the original range axis metadata plus the upstream high/low marker axis. Full
-  PatternMatcher parity for load-index collapse remains later fidelity work.
+  preserve the original range axis metadata plus the upstream high/low marker axis. The first
+  source-shaped load-index collapse is integrated for the upstream gated-ADD pattern
+  `REDUCE(WHERE(idx != range, 0, expr), range)`, replacing the reduced range in the payload with a
+  valid bounded index and wrapping the result in the same bounds guard. Full PatternMatcher parity
+  for the broader reduce-collapse algebra remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

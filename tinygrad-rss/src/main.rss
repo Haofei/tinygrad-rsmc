@@ -3002,6 +3002,18 @@ fn main() -> Unit {
     local simp_red_unparented = reduce_unparented(cache: mut mcache, red: simp_red)
     local simp_red_collapse = reduce_collapse(cache: mut mcache, red: simp_red, u: m2)
     local simp_red_load_collapse = reduce_load_collapse(cache: mut mcache, red: simp_red, u: m2)
+    let simp_lc_r = mk_range_int(cache: mut mcache, end: 4, axis_id: 45, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_lc_c10 = mk_const_int(cache: mut mcache, dt: read i32, v: 10)
+    let simp_lc_expr = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_lc_r, y: simp_lc_c10)
+    let simp_lc_ne = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: m2, y: simp_lc_r)
+    let simp_lc_zero = mk_const_int(cache: mut mcache, dt: read i32, v: 0)
+    let simp_lc_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_lc_ne, tval: simp_lc_zero, fval: simp_lc_expr)
+    local simp_lc_red_srcs = List.new<Int>()
+    pushi(l: mut simp_lc_red_srcs, v: simp_lc_where)
+    pushi(l: mut simp_lc_red_srcs, v: simp_lc_r)
+    local simp_lc_red_arg = ArgOp(value: ADD)
+    let simp_lc_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_lc_red_srcs, arg: take simp_lc_red_arg)
+    local simp_lc = reduce_load_index_collapse(cache: mut mcache, red: simp_lc_red)
     showi(label: read "codegen.simplify count divmod = ", v: count_divmod(cache: read mcache, x: simp_divmod))
     match simp_flat {
         Some(v) => { showb(label: read "codegen.simplify flatten range = ", v: node_op(cache: read mcache, id: v) == END && node_num_src(cache: read mcache, id: v) == 3) }
@@ -3042,6 +3054,15 @@ fn main() -> Unit {
     match simp_red_load_collapse {
         Some(v) => { showb(label: read "codegen.simplify reduce load collapse = ", v: v == m2) }
         None => { showb(label: read "codegen.simplify reduce load collapse = ", v: false) }
+    }
+    match simp_lc {
+        Some(v) => {
+            let lc_cond = node_src_id(cache: read mcache, id: v, k: 0)
+            let lc_tval = node_src_id(cache: read mcache, id: v, k: 1)
+            let lc_alt = node_src_id(cache: read mcache, id: v, k: 2)
+            showb(label: read "codegen.simplify load-index collapse = ", v: node_op(cache: read mcache, id: v) == WHERE && node_op(cache: read mcache, id: lc_cond) == AND && node_op(cache: read mcache, id: lc_tval) == ADD && uop_op_in_backward_slice_with_self(cache: read mcache, id: lc_tval, op: RANGE) == false && node_const_int(cache: read mcache, id: lc_alt) == 0 && spec_type_verify(cache: read mcache, id: v))
+        }
+        None => { showb(label: read "codegen.simplify load-index collapse = ", v: false) }
     }
     let pr_r0 = mk_range_int(cache: mut mcache, end: 4, axis_id: 61, axis_type: read AXIS_LOOP, dt: read i32)
     let pr_r1 = mk_range_int(cache: mut mcache, end: 3, axis_id: 62, axis_type: read AXIS_REDUCE, dt: read i32)

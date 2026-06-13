@@ -172,3 +172,27 @@ fn gater_move_gate_from_index(cache: mut UOpCache, id: Int) -> Option<Int> {
     }
     return None
 }
+
+fn gater_graph_rewrite(cache: mut UOpCache, id: Int) -> Int {
+    local new_src = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let old = node_src_id(cache: read cache, id: id, k: i)
+        let repl = gater_graph_rewrite(cache: mut cache, id: old)
+        if repl != old { changed = true }
+        List.push<Int>(list: mut new_src, value: read repl)
+        i = i + 1
+    }
+    let mut rebuilt = id
+    if changed {
+        let op = node_op(cache: read cache, id: id)
+        let dt = node_full_dtype(cache: read cache, id: id)
+        local arg = node_arg(cache: read cache, id: id)
+        rebuilt = intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+    }
+    match gater_move_gate_from_index(cache: mut cache, id: rebuilt) {
+        Some(r) => { return r }
+        None => { return rebuilt }
+    }
+}

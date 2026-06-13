@@ -596,12 +596,22 @@ fn linearizer_do_linearize(cache: mut UOpCache, prg: Int) -> Int {
     }
     let sink = node_src_id(cache: read cache, id: prg, k: 0)
     if node_op(cache: read cache, id: sink) != SINK { return prg }
-    local order = linearizer_cleaned_order(cache: mut cache, sink: sink)
+    let mut linear_sink = sink
+    match pm_add_gpudims(cache: mut cache, s: linear_sink) {
+        Some(with_dims) => { linear_sink = with_dims }
+        None => {}
+    }
+    linear_sink = gater_graph_rewrite(cache: mut cache, id: linear_sink)
+    local order = linearizer_cleaned_order(cache: mut cache, sink: linear_sink)
     let lin = mk_linear(cache: mut cache, srcs: read order)
     local src = List.new<Int>()
     let mut i = 0
     while i < node_num_src(cache: read cache, id: prg) {
-        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: i))
+        if i == 0 {
+            List.push<Int>(list: mut src, value: read linear_sink)
+        } else {
+            List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: prg, k: i))
+        }
         i = i + 1
     }
     List.push<Int>(list: mut src, value: read lin)

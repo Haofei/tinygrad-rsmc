@@ -2657,6 +2657,10 @@ fn main() -> Unit {
     pushi(l: mut gpudims_guard_sink_srcs, v: gpudims_guard_store)
     let gpudims_guard_sink = mk_sink(cache: mut mcache, ids: read gpudims_guard_sink_srcs)
     local gpudims_guarded = add_gpudims(cache: mut mcache, ctx: read gpudims_ctx, s: gpudims_guard_sink)
+    let gpudims_guard_prog = do_to_program(cache: mut mcache, ast: gpudims_guard_sink)
+    let gpudims_guard_prog_linear = node_src_id(cache: read mcache, id: gpudims_guard_prog, k: 2)
+    local gpudims_guard_prog_order = codegen_linear_order(cache: read mcache, linear: gpudims_guard_prog_linear)
+    let gpudims_guard_prog_compile = codegen_host_compile_check_c(cache: read mcache, prg: gpudims_guard_prog, path_text: read "/tmp/tinygrad-rss-gpudims-guard.c")
     local gpudims_group_dims = get_grouped_dims(cache: mut mcache, prefix: read "idx", dims: read gpudims_shape, max_sizes: read gpudims_ctx.global_max, has_max: true, reverse: true)
     local gpudims_group_raw = _group_dims(dims: read shp4(a: 2, b: 2, c: 2, d: 2), max_sizes: read shp3(a: 4, b: 4, c: 4))
     local gpudims_split_raw = _split_dims(dims: read shp1(a: 16), max_sizes: read shp3(a: 4, b: 4, c: 4))
@@ -2686,6 +2690,7 @@ fn main() -> Unit {
         }
         None => { showb(label: read "codegen.gpudims guards missing local stores = ", v: false) }
     }
+    showb(label: read "codegen.gpudims cstyle path guards stores = ", v: node_op(cache: read mcache, id: gpudims_guard_prog) == PROGRAM && node_num_src(cache: read mcache, id: gpudims_guard_prog) > 3 && node_op(cache: read mcache, id: gpudims_guard_prog_linear) == LINEAR && linearizer_count_op(cache: read mcache, order: read gpudims_guard_prog_order, want: IF) == 1 && linearizer_count_op(cache: read mcache, order: read gpudims_guard_prog_order, want: ENDIF) == 1 && linearizer_has_gated_store(cache: read mcache, order: read gpudims_guard_prog_order) == false && gpudims_guard_prog_compile.ok)
     match gpudims_group_raw {
         Some(v) => { showb(label: read "codegen.gpudims group helper = ", v: List.len<Int>(list: read v) == 3) }
         None => { showb(label: read "codegen.gpudims group helper = ", v: false) }

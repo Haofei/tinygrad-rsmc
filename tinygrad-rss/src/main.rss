@@ -4423,7 +4423,40 @@ fn main() -> Unit {
     }
     let mut rfac_split_ok = true
     match split_store(cache: mut mcache, x: idx_store) {
-        Some(r) => { rfac_split_ok = node_op(cache: read mcache, id: r) == CALL }
+        Some(r) => { rfac_split_ok = node_op(cache: read mcache, id: r) == CALL && node_num_src(cache: read mcache, id: r) > 1 }
+        None => {}
+    }
+    local rfac_stage_ctx = rangeify_local_context_new()
+    let mut rfac_stage_store_ok = false
+    match bufferize_to_store(cache: mut mcache, ctx: mut rfac_stage_ctx, x: idx_rf_stage_stage, idx: idx_rf_stage_index, allow_locals: false) {
+        Some(r) => {
+            let out_buf = node_src_id(cache: read mcache, id: r, k: 0)
+            let out_end = node_src_id(cache: read mcache, id: r, k: 1)
+            let out_store = node_src_id(cache: read mcache, id: out_end, k: 0)
+            let out_ptr = node_src_id(cache: read mcache, id: out_store, k: 0)
+            rfac_stage_store_ok = node_op(cache: read mcache, id: r) == AFTER && node_op(cache: read mcache, id: out_buf) == BUFFER && node_op(cache: read mcache, id: out_end) == END && node_op(cache: read mcache, id: out_store) == STORE && node_src_id(cache: read mcache, id: out_ptr, k: 0) == out_buf
+        }
+        None => {}
+    }
+    let rfac_reuse_buf = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    let rfac_reuse_ptr = mk_index(cache: mut mcache, base: rfac_reuse_buf, srcs: read idx_rf_contig_rec.out_ranges, ptr: true)
+    let rfac_reuse_store = mk_store(cache: mut mcache, ptr: rfac_reuse_ptr, value: idx_rf_buf, gate: read None)
+    local rfac_reuse_deps = List.new<Int>()
+    List.push<Int>(list: mut rfac_reuse_deps, value: read rfac_reuse_store)
+    let rfac_reuse_after = mk_after(cache: mut mcache, id: rfac_reuse_buf, srcs: read rfac_reuse_deps)
+    local rfac_reuse_opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: false)
+    let rfac_reuse_stage = mk_stage(cache: mut mcache, x: rfac_reuse_after, ranges: read idx_rf_contig_rec.out_ranges, opts: read rfac_reuse_opts)
+    let rfac_reuse_idx = mk_index(cache: mut mcache, base: rfac_reuse_stage, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    local rfac_reuse_ctx = rangeify_local_context_new()
+    let mut rfac_reuse_ok = false
+    match bufferize_to_store(cache: mut mcache, ctx: mut rfac_reuse_ctx, x: rfac_reuse_stage, idx: rfac_reuse_idx, allow_locals: false) {
+        Some(r) => { rfac_reuse_ok = node_op(cache: read mcache, id: r) == AFTER && node_src_id(cache: read mcache, id: r, k: 0) == rfac_reuse_buf && node_op(cache: read mcache, id: node_src_id(cache: read mcache, id: r, k: 1)) == END }
+        None => {}
+    }
+    let rfac_noop_idx = mk_index(cache: mut mcache, base: idx_rf_stage_stage, srcs: read idx_rf_stage_result.records[0].out_ranges, ptr: false)
+    let mut rfac_noop_ok = false
+    match remove_noop_bufferize(cache: mut mcache, idx: rfac_noop_idx, b2: idx_rf_stage_stage) {
+        Some(r) => { rfac_noop_ok = node_op(cache: read mcache, id: r) == SHRINK || r == idx_rf_stage_stage }
         None => {}
     }
     showb(label: read "schedule.indexing rangeify records movement chain = ", v: idx_rf_contig_rec_i >= 0 && idx_rf_perm_rec_i >= 0 && idx_rf_buf_rec_i >= 0)
@@ -4439,7 +4472,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

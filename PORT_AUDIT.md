@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 43,595 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 43,719 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -496,10 +496,13 @@ Integrated pieces:
   `unbind_kernel`, `handle_after`, `renumber_range`, `find_bufs`, `get_contiguous`,
   `split_store`, and `get_kernel_graph`. It delegates `get_kernel_graph` to the integrated
   indexing rangeify analysis/rewrite, implements practical movement-index lowering, store range
-  injection, simple hazard contiguity, noop/dead-axis staging cleanup, buffer-to-param
-  placeholder conversion, range renumbering, and a conservative call wrapper for kernel split.
-  Exact upstream kernel graph repair, buffer-cost modeling, all local bufferize forms,
-  SHAPED_WMMA lowering, and full assign-dependency repair remain later rangeify slices.
+  injection, simple hazard contiguity, noop/dead-axis staging cleanup with shrink/reshape/expand
+  preservation, disk/tinyfs late buffer views as `SLICE`, global stage-to-buffer store lowering
+  through `AFTER(buffer, END(STORE(INDEX(buffer,...), value)))`, reuse of existing `AFTER` buffers,
+  buffer-to-param placeholder conversion, range renumbering, and `split_store` call wrappers that
+  expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
+  modeling, all local bufferize forms, SHAPED_WMMA lowering, and full assign-dependency repair
+  remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,
@@ -818,8 +821,9 @@ Current integrated demo:
 - validates scheduler indexing rangeify `STAGE` option selection for full global staging,
   partial local staging, and upstream removable rules for always-contiguous vs non-contiguous children.
 - validates the first scheduler rangeify facade slice by calling `get_kernel_graph`,
-  `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, and `split_store` against the
-  integrated rangeify smoke graph.
+  `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, `bufferize_to_store`,
+  `remove_noop_bufferize`, and `split_store` against the integrated rangeify smoke graph,
+  including global stage-to-store, `AFTER` buffer reuse, and CALL argument exposure.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

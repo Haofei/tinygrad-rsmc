@@ -75,6 +75,12 @@ struct TensorBoolResult derives(Clone) {
     message: String,
 }
 
+struct TensorFloatResult derives(Clone) {
+    ok: Bool,
+    value: Float,
+    message: String,
+}
+
 struct TensorNodeResult derives(Clone) {
     ok: Bool,
     value: Int,
@@ -875,6 +881,8 @@ fn tensor_numpy(cache: read UOpCache, x: Int) -> fresh List<Float> {
 }
 
 fn tensor_data(cache: read UOpCache, x: Int) -> fresh List<Float> {
+    local shape = uop_shape(cache: read cache, id: x)
+    if prod(x: read shape) == 0 { return List.new<Float>() }
     return eval_tensor(cache: read cache, id: x)
 }
 
@@ -883,9 +891,20 @@ fn tensor_tolist(cache: read UOpCache, x: Int) -> fresh List<Float> {
 }
 
 fn tensor_item(cache: read UOpCache, x: Int) -> Float {
+    local result = tensor_item_result(cache: read cache, x: x)
+    return result.value
+}
+
+fn tensor_item_result(cache: read UOpCache, x: Int) -> fresh TensorFloatResult {
+    local shape = uop_shape(cache: read cache, id: x)
+    if prod(x: read shape) != 1 {
+        return TensorFloatResult(ok: false, value: 0.0, message: String.copy(value: read "must have one element for item"))
+    }
     local vals = tensor_data(cache: read cache, x: x)
-    if List.len<Float>(list: read vals) == 0 { return 0.0 }
-    return List.get<Float>(list: read vals, index: 0)
+    if List.len<Float>(list: read vals) == 0 {
+        return TensorFloatResult(ok: false, value: 0.0, message: String.copy(value: read "must have one element for item"))
+    }
+    return TensorFloatResult(ok: true, value: List.get<Float>(list: read vals, index: 0), message: String.copy(value: read ""))
 }
 
 fn tensor_realize(cache: mut UOpCache, ctx: mut RealizeExecContext, x: Int) -> fresh RealizeScheduledRun {

@@ -793,7 +793,8 @@ Integrated pieces:
   wrappers that update explicit RSS `TensorState` lists,
   `empty`/`empty_like` over UOp buffer construction, no-op-aware same-device `to`, single-tensor
   `realize` through the integrated scheduler/runtime path, and narrow evaluator-backed
-  `data`/`item`/`tolist` helpers for supported CPU/value graphs,
+  `data`/`item`/`tolist` helpers for supported CPU/value graphs, including zero-size `data`
+  materialization and upstream-shaped singleton validation for `item`,
   graph-level `call`, `callify`, `linear_with_vars`, and `schedule_linear` wrappers over the
   existing `FUNCTION`/`CALL` and scheduler primitives, simple `assign` as STORE+AFTER with
   broadcast-to-target-shape, `clone` preserving param/grad state, `shard`/`shard_`/`shard_like`

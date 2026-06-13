@@ -192,8 +192,52 @@ fn mark_range_mod(cache: mut UOpCache, ctx: mut SimplifySubst, r: Int, c: Int) -
     if node_is_const_int(cache: read cache, id: c) == false { return Unit }
     let rv = node_const_int(cache: read cache, id: rend)
     let cv = node_const_int(cache: read cache, id: c)
-    if rv != 0 && cv % rv == 0 { simplify_subst_put(ctx: mut ctx, old_id: r, new_id: c) }
+    if cv != 0 && rv % cv == 0 { simplify_subst_put(ctx: mut ctx, old_id: r, new_id: c) }
     return Unit
+}
+
+fn simplify_range_extra_with_marker(cache: read UOpCache, r: Int, marker: Int) -> fresh List<Int> {
+    local axes = node_range_axes(cache: read cache, id: r)
+    local extra = List.new<Int>()
+    let mut i = 1
+    while i < List.len<Int>(list: read axes) {
+        List.push<Int>(list: mut extra, value: read List.get<Int>(list: read axes, index: i))
+        i = i + 1
+    }
+    List.push<Int>(list: mut extra, value: read marker)
+    return take extra
+}
+
+fn simplify_split_range_replacement(cache: mut UOpCache, r: Int, c: Int) -> Int {
+    if node_op(cache: read cache, id: r) != RANGE || node_num_src(cache: read cache, id: r) == 0 { return c }
+    let rend = node_src_id(cache: read cache, id: r, k: 0)
+    let dt = node_dtype(cache: read cache, id: r)
+    let hi_end_raw = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read dt, x: rend, y: c)
+    let hi_end = graph_rewrite(cache: mut cache, id: hi_end_raw)
+    let axis_id = node_range_axis_id(cache: read cache, id: r)
+    local hi_extra = simplify_range_extra_with_marker(cache: read cache, r: r, marker: 0)
+    local lo_extra = simplify_range_extra_with_marker(cache: read cache, r: r, marker: 1)
+    let hi = mk_range(cache: mut cache, end: hi_end, axis_id: axis_id, axis_type: read node_range_type(cache: read cache, id: r), extra_axes: read hi_extra, dt: read dt)
+    let lo = mk_range(cache: mut cache, end: c, axis_id: axis_id, axis_type: read node_range_type(cache: read cache, id: r), extra_axes: read lo_extra, dt: read dt)
+    let scaled_hi = mk_alu2(cache: mut cache, op: MUL, dt: read dt, x: hi, y: c)
+    return mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: scaled_hi, y: lo)
+}
+
+fn do_split_ranges(cache: mut UOpCache, ctx: mut SimplifySubst, x: Int) -> Option<Int> {
+    if List.len<Int>(list: read ctx.olds) == 0 { return None }
+    local replacements = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read ctx.olds) {
+        let old_id = List.get<Int>(list: read ctx.olds, index: i)
+        let new_id = List.get<Int>(list: read ctx.news, index: i)
+        List.push<Int>(list: mut replacements, value: read simplify_split_range_replacement(cache: mut cache, r: old_id, c: new_id))
+        i = i + 1
+    }
+    let ret = memory_replace_many(cache: mut cache, id: x, olds: read ctx.olds, news: read replacements)
+    ctx.olds = List.new<Int>()
+    ctx.news = List.new<Int>()
+    if ret == x { return None }
+    return Some(graph_rewrite(cache: mut cache, id: ret))
 }
 
 fn do_substitute(cache: mut UOpCache, ctx: mut SimplifySubst, x: Int) -> Option<Int> {

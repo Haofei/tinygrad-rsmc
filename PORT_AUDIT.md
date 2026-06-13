@@ -581,8 +581,10 @@ Integrated pieces:
   conservative collapse hooks for pattern-heavy upstream cases. `mark_gated` now recognizes
   `WHERE(valid, idx, INVALID)` index operands, extracts `range < const` clauses from `AND`-split
   validity guards, and substitutes guarded ranges with the tighter bound while leaving ungated
-  index ranges at their full end. Full PatternMatcher parity for load-index collapse remains later
-  fidelity work.
+  index ranges at their full end. The split-range pass now uses the upstream divisibility rule for
+  `RANGE % const` and substitutes splittable ranges with `hi * const + lo` replacement ranges that
+  preserve the original range axis metadata plus the upstream high/low marker axis. Full
+  PatternMatcher parity for load-index collapse remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

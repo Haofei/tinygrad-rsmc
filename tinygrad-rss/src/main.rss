@@ -2989,6 +2989,11 @@ fn main() -> Unit {
     local simp_gctx = simplify_empty_subst()
     mark_gated(cache: mut mcache, ctx: mut simp_gctx, idx: simp_gidx)
     local simp_gsub = do_substitute(cache: mut mcache, ctx: mut simp_gctx, x: simp_gr)
+    let simp_c4 = mk_const_int(cache: mut mcache, dt: read i32, v: 4)
+    let simp_sr = mk_range_int(cache: mut mcache, end: 8, axis_id: 44, axis_type: read AXIS_LOOP, dt: read i32)
+    local simp_split_ctx = simplify_empty_subst()
+    mark_range_mod(cache: mut mcache, ctx: mut simp_split_ctx, r: simp_sr, c: simp_c4)
+    local simp_split = do_split_ranges(cache: mut mcache, ctx: mut simp_split_ctx, x: simp_sr)
     local simp_red_srcs = List.new<Int>()
     pushi(l: mut simp_red_srcs, v: m2)
     pushi(l: mut simp_red_srcs, v: simp_r1)
@@ -3013,6 +3018,17 @@ fn main() -> Unit {
     match simp_gsub {
         Some(v) => { showb(label: read "codegen.simplify guarded range bound = ", v: v == simp_c2) }
         None => { showb(label: read "codegen.simplify guarded range bound = ", v: false) }
+    }
+    match simp_split {
+        Some(v) => {
+            let split_hi_scaled = node_src_id(cache: read mcache, id: v, k: 0)
+            let split_lo = node_src_id(cache: read mcache, id: v, k: 1)
+            let split_hi = node_src_id(cache: read mcache, id: split_hi_scaled, k: 0)
+            local split_hi_axes = node_range_axes(cache: read mcache, id: split_hi)
+            local split_lo_axes = node_range_axes(cache: read mcache, id: split_lo)
+            showb(label: read "codegen.simplify split range = ", v: node_op(cache: read mcache, id: v) == ADD && node_op(cache: read mcache, id: split_hi_scaled) == MUL && node_op(cache: read mcache, id: split_hi) == RANGE && node_op(cache: read mcache, id: split_lo) == RANGE && node_src_id(cache: read mcache, id: split_lo, k: 0) == simp_c4 && List.get<Int>(list: read split_hi_axes, index: List.len<Int>(list: read split_hi_axes) - 1) == 0 && List.get<Int>(list: read split_lo_axes, index: List.len<Int>(list: read split_lo_axes) - 1) == 1)
+        }
+        None => { showb(label: read "codegen.simplify split range = ", v: false) }
     }
     showb(label: read "codegen.simplify no range/load = ", v: no_range(cache: read mcache, u: m2) && no_range(cache: read mcache, u: simp_nested) == false && no_load(cache: read mcache, u: m2) && no_load(cache: read mcache, u: simp_idx) == false)
     match simp_red_unparented {

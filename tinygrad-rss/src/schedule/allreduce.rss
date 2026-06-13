@@ -1,8 +1,8 @@
 // First integrated slice of tinygrad/schedule/allreduce.py.
 //
-// This ports the simple naive allreduce graph shape: first make the multi-device input contiguous,
-// select each shard, copy it to the target device, then reduce the copied shards with the requested ALU op.
-// Ring/all2all chunking remains a future scheduler slice.
+// This ports the simple naive allreduce graph shape and the first source-shaped chunked
+// all2all/ring graph builders. The default handler still uses naive allreduce until the upstream
+// runtime knobs and thresholds are wired through the RSS scheduler.
 features: local
 
 struct AllreduceBuild derives(Clone) {
@@ -36,6 +36,123 @@ fn allreduce_select_shard(cache: mut UOpCache, buf: Int, index: Int) -> Int {
         return node_src_id(cache: read cache, id: buf, k: index)
     }
     return mk_mselect(cache: mut cache, x: buf, index: index)
+}
+
+fn allreduce_chunk_factor(numel: Int) -> Int {
+    if numel % 32 == 0 { return 32 }
+    if numel % 16 == 0 { return 16 }
+    if numel % 8 == 0 { return 8 }
+    if numel % 4 == 0 { return 4 }
+    if numel % 2 == 0 { return 2 }
+    return 1
+}
+
+fn allreduce_reduce_append(cache: mut UOpCache, accum: Int, x: Int, op: read Ops, has_accum: Bool) -> Int {
+    if has_accum == false { return x }
+    let rop = allreduce_op_copy(op: read op)
+    return mk_alu2(cache: mut cache, op: rop, dt: read node_full_dtype(cache: read cache, id: accum), x: accum, y: x)
+}
+
+fn allreduce_flat_chunk(cache: mut UOpCache, x: Int, start: Int, end: Int, numel: Int) -> Int {
+    local flat_shape = List.new<Int>()
+    List.push<Int>(list: mut flat_shape, value: read numel)
+    let flat = mk_reshape(cache: mut cache, x: x, new_shape: read flat_shape)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    List.push<Int>(list: mut starts, value: read start)
+    List.push<Int>(list: mut ends, value: read end)
+    return mk_shrink(cache: mut cache, x: flat, starts: read starts, ends: read ends)
+}
+
+fn allreduce_pad_chunk(cache: mut UOpCache, x: Int, start: Int, end: Int, numel: Int) -> Int {
+    local before = List.new<Int>()
+    local after = List.new<Int>()
+    List.push<Int>(list: mut before, value: read start)
+    List.push<Int>(list: mut after, value: read (numel - end))
+    return mk_pad(cache: mut cache, x: x, before: read before, after: read after)
+}
+
+fn allreduce_chunked(cache: mut UOpCache, red: Int, use_all2all: Bool) -> fresh AllreduceBuild {
+    local empty = List.new<Int>()
+    let fallback = mk_sink(cache: mut cache, ids: read empty)
+    if node_op(cache: read cache, id: red) != ALLREDUCE || node_num_src(cache: read cache, id: red) < 2 {
+        return AllreduceBuild(result: fallback, copies: 0, ok: false)
+    }
+    let buf = node_src_id(cache: read cache, id: red, k: 0)
+    let ndev = node_effective_device_count(cache: read cache, id: buf)
+    let op = node_arg_op(cache: read cache, id: red)
+    local target = allreduce_target_device(cache: read cache, red: red)
+    local shape = uop_shape(cache: read cache, id: buf)
+    let numel = prod(x: read shape)
+    if ndev <= 1 || numel <= 0 || String.len(value: read target) == 0 || allreduce_supported_op(op: read op) == false {
+        return AllreduceBuild(result: fallback, copies: 0, ok: false)
+    }
+    let contig_buf = mk_contiguous(cache: mut cache, x: buf)
+    let factor = allreduce_chunk_factor(numel: numel)
+    let base = (numel / factor) / ndev
+    let left = (numel / factor) % ndev
+    local padded_chunks = List.new<Int>()
+    let mut copies = 0
+    let mut start = 0
+    let mut i = 0
+    while i < ndev {
+        let mut chunk_units = base
+        if i < left { chunk_units = chunk_units + 1 }
+        let end = start + chunk_units * factor
+        let mut reduced = fallback
+        let mut has_reduced = false
+        if use_all2all {
+            let dest = node_effective_device_name(cache: read cache, id: buf, index: i)
+            let mut j = 0
+            while j < ndev {
+                let shard = allreduce_select_shard(cache: mut cache, buf: contig_buf, index: j)
+                let chunk = allreduce_flat_chunk(cache: mut cache, x: shard, start: start, end: end, numel: numel)
+                let copied = mk_copy_to_device(cache: mut cache, x: chunk, device: read dest)
+                copies = copies + 1
+                reduced = allreduce_reduce_append(cache: mut cache, accum: reduced, x: copied, op: read op, has_accum: has_reduced)
+                has_reduced = true
+                j = j + 1
+            }
+        } else {
+            let first_shard = allreduce_select_shard(cache: mut cache, buf: contig_buf, index: i)
+            reduced = allreduce_flat_chunk(cache: mut cache, x: first_shard, start: start, end: end, numel: numel)
+            has_reduced = true
+            let mut step = 0
+            while step < ndev - 1 {
+                let src_idx = (i + step + 1) % ndev
+                let dest_idx = (i + step + 1) % ndev
+                let dest = node_effective_device_name(cache: read cache, id: buf, index: dest_idx)
+                let shard = allreduce_select_shard(cache: mut cache, buf: contig_buf, index: src_idx)
+                let chunk = allreduce_flat_chunk(cache: mut cache, x: shard, start: start, end: end, numel: numel)
+                let copied = mk_copy_to_device(cache: mut cache, x: chunk, device: read dest)
+                copies = copies + 1
+                reduced = allreduce_reduce_append(cache: mut cache, accum: reduced, x: copied, op: read op, has_accum: has_reduced)
+                step = step + 1
+            }
+        }
+        let gathered = mk_copy_to_device(cache: mut cache, x: reduced, device: read target)
+        copies = copies + 1
+        let padded = allreduce_pad_chunk(cache: mut cache, x: gathered, start: start, end: end, numel: numel)
+        List.push<Int>(list: mut padded_chunks, value: read padded)
+        start = end
+        i = i + 1
+    }
+    let mut result = List.get<Int>(list: read padded_chunks, index: 0)
+    let mut pi = 1
+    while pi < List.len<Int>(list: read padded_chunks) {
+        result = mk_alu2(cache: mut cache, op: ADD, dt: read node_full_dtype(cache: read cache, id: result), x: result, y: List.get<Int>(list: read padded_chunks, index: pi))
+        pi = pi + 1
+    }
+    result = mk_reshape(cache: mut cache, x: result, new_shape: read shape)
+    return AllreduceBuild(result: result, copies: copies, ok: true)
+}
+
+fn allreduce_handle_all2all(cache: mut UOpCache, red: Int) -> fresh AllreduceBuild {
+    return allreduce_chunked(cache: mut cache, red: red, use_all2all: true)
+}
+
+fn allreduce_handle_ring(cache: mut UOpCache, red: Int) -> fresh AllreduceBuild {
+    return allreduce_chunked(cache: mut cache, red: red, use_all2all: false)
 }
 
 fn allreduce_handle_naive(cache: mut UOpCache, red: Int) -> fresh AllreduceBuild {

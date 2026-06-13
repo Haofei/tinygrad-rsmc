@@ -507,10 +507,13 @@ Integrated pieces:
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,
-  and reducing copied shards with `ADD`/`MUL`/`MAX`. Source-shaped `handle_allreduce` now delegates
-  to the naive path, and `create_allreduce_function` provides the current cache-backed store/after
-  wrapper while full Python `call(..., precompile=True)` lowering remains tied to later function-call
-  scheduler/runtime work. Ring/all2all chunking remains unported.
+  and reducing copied shards with `ADD`/`MUL`/`MAX`. It also has first source-shaped chunked
+  all2all/ring graph builders: flatten/chunk shards, reduce copied chunks, gather to the target,
+  pad chunks back into place, and reshape to the original shape. Source-shaped `handle_allreduce`
+  still delegates to the naive path until upstream `RING`/`ALL2ALL` knobs, thresholds, and exact ring
+  source-copy metadata are wired through; `create_allreduce_function` provides the current
+  cache-backed store/after wrapper while full Python `call(..., precompile=True)` lowering remains
+  tied to later function-call scheduler/runtime work.
 - `codegen/gpudims.rss`: first integrated source-shaped `tinygrad/codegen/gpudims.py` slice for
   the current all-integer RSS IR: `_dim_max`, `_group_dims`, `_split_dims`, `get_grouped_dims`,
   and `add_gpudims`. It covers max-size grouping, factor splitting, grouped `SPECIAL` index
@@ -855,7 +858,7 @@ Current integrated demo:
   preservation through `COPY`, `CONTIGUOUS`, and `DETACH`.
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
   `MULTI` and `MSTACK` inputs emits verifier-accepted `CONTIGUOUS -> MSELECT -> COPY` shard
-  graphs reduced with `ADD`.
+  graphs reduced with `ADD`, plus explicit all2all/ring chunked graph builders.
 - validates the first source-shaped scheduler multi rewrite slice: tuple-device COPY broadcast,
   axis-tagged tuple-device `PARAM -> MULTI`, multi-device COPY-to-one concatenation, multi-device
   COPY-to-tuple unshard/allreduce, `MSELECT(MSTACK)` elimination, `MSELECT` movement pushdown,

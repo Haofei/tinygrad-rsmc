@@ -464,9 +464,10 @@ Integrated pieces:
 - `schedule/memory.rss`: first integrated source-shaped `tinygrad/schedule/memory.py` slice:
   buffer collection through `BUFFER`/`MSELECT`/`MSTACK`, held-buffer and disk/tinyfs rejection,
   first/last lifetime tracking, copy-vs-compute lane separation, per-device/per-lane int8 arenas,
-  and buffer-to-`SLICE` rewrite for planned `LINEAR` calls. Exact TLSF lifetime reuse remains
-  unported; the current integrated planner uses monotonic lane offsets. Source-shaped `_collect_bufs`
-  and `_can_plan` delegate to the integrated planner checks.
+  first-fit lifetime reuse for expired same-lane allocations, and buffer-to-`SLICE` rewrite for
+  planned `LINEAR` calls. Exact TLSF split/coalesce behavior and upstream allocator edge cases
+  remain unported. Source-shaped `_collect_bufs` and `_can_plan` delegate to the integrated planner
+  checks.
 - `schedule/indexing.rss`: integrated source-shaped `tinygrad/schedule/indexing.py` slice:
   exposes the upstream entry point names `realize`, `realize_srcs`, `realize_store_after_src`,
   `new_range`, `create_bufferize_and_index_based_on_ranges`,
@@ -795,7 +796,7 @@ Current integrated demo:
   conflicting duplicate values reject the extraction.
 - validates the first supported `create_linear_with_vars` wrapper over a direct `LINEAR` root:
   used binds are returned, unused binds are ignored, and a concrete buffer argument is rewritten
-  through the current monotonic-offset memory planner. It also validates the `CALL(LINEAR, arg)`
+  through the current memory planner. It also validates the `CALL(LINEAR, arg)`
   root path: slot-0 `PARAM` is resolved to the outer call argument and the held concrete buffer is
   not rewritten by memory planning.
 - validates the first scheduler-to-realize bridge: supported scheduled `CALL(LINEAR, ...)` roots
@@ -803,7 +804,8 @@ Current integrated demo:
   hosted PROGRAM calls with expected `TGBuffer` bytes. It also validates PROGRAM `var_vals`
   accounting for direct host execution and scheduled PROGRAM execution with a `BIND`.
 - validates the first source-shaped scheduler memory planner slice: compute/copy lane separation,
-  int8 arena `SLICE` rewrites that pass the integrated spec verifier, and held-buffer exclusion.
+  int8 arena `SLICE` rewrites that pass the integrated spec verifier, held-buffer exclusion, and
+  same-lane slice-offset reuse after a buffer lifetime expires.
 - validates the source-shaped scheduler indexing slice: upstream facade names are callable,
   `ALWAYS_CONTIGUOUS` classification, unconditional realize ops, non-contiguous copy-source
   realization, direct copy-store cleanup, and self-store source realization.
@@ -1327,13 +1329,13 @@ Major missing integrated work:
   representation, real upstream `Buffer`/`MultiBuffer` realization semantics, complete render/pyrender
   behavior, full spec validation, full Z3-backed bounds validation, and exact upstream semantics are still incomplete.
 - `schedule/*`: source-shaped scheduler remains partial. The first dependency-ordering slice in
-  `schedule/__init__.rss` and first monotonic-offset memory planner slice in `schedule/memory.rss`
+  `schedule/__init__.rss` and first lifetime-reusing memory planner slice in `schedule/memory.rss`
   are integrated, and `schedule/indexing.rss` has realize-map generation, first range/movement
   helpers including PAD and RESHAPE, first RESHAPE identity/per-coordinate symbolic
   simplification, first rangeify analysis records including same-index multi-consumer merging,
   first EXPAND-origin ending-range realization,
   first device-aware full-global staging options, and first rangeify graph
-  rewrite to `STAGE`/`INDEX`. Exact TLSF reuse, full upstream sink-level RESHAPE simplification,
+  rewrite to `STAGE`/`INDEX`. Exact TLSF split/coalesce semantics, full upstream sink-level RESHAPE simplification,
   multi-kernel behavior, schedule caching, linear-call resolution, variable binding extraction,
   and JIT capture plumbing remain.
 - `codegen/*`: full lowerer and late passes aligned to tinygrad. The first linearizer priority

@@ -2,8 +2,9 @@
 //
 // This ports the memory planner structure over interned UOp ids: collect buffers from LINEAR
 // calls, reject held/disk/tinyfs buffers, track first/last appearances, split copy buffers into
-// a separate lane, create per-device/per-lane int8 arenas, and rewrite planned buffers to SLICEs.
-// It intentionally uses monotonic lane offsets for now; TLSF lifetime reuse remains future work.
+// a separate lane, reuse same-lane allocations after their last use, create per-device/per-lane
+// int8 arenas, and rewrite planned buffers to SLICEs. It intentionally uses a simple first-fit
+// free list for now; exact upstream TLSF split/coalesce behavior remains future work.
 features: local
 
 struct MemoryPlanResult derives(Clone) {
@@ -157,8 +158,27 @@ fn memory_plan_rewrite(cache: mut UOpCache, linear: Int, held: read List<Int>) -
     local lane_sizes = List.new<Int>()
     local buf_lane = List.new<Int>()
     local buf_offset = List.new<Int>()
+    local active_lane = List.new<Int>()
+    local active_offset = List.new<Int>()
+    local active_size = List.new<Int>()
+    local active_last = List.new<Int>()
+    local free_lane = List.new<Int>()
+    local free_offset = List.new<Int>()
+    local free_size = List.new<Int>()
     let mut bi = 0
     while bi < List.len<Int>(list: read buffers) {
+        let first = List.get<Int>(list: read firsts, index: bi)
+        let mut ai = 0
+        while ai < List.len<Int>(list: read active_size) {
+            let asz = List.get<Int>(list: read active_size, index: ai)
+            if asz > 0 && List.get<Int>(list: read active_last, index: ai) < first {
+                List.push<Int>(list: mut free_lane, value: read List.get<Int>(list: read active_lane, index: ai))
+                List.push<Int>(list: mut free_offset, value: read List.get<Int>(list: read active_offset, index: ai))
+                List.push<Int>(list: mut free_size, value: read asz)
+                List.set<Int>(list: mut active_size, index: ai, value: read 0)
+            }
+            ai = ai + 1
+        }
         let b = List.get<Int>(list: read buffers, index: bi)
         let mut dev = node_effective_device_name(cache: read cache, id: b, index: 0)
         if String.len(value: read dev) == 0 { dev = "CPU" }
@@ -170,11 +190,29 @@ fn memory_plan_rewrite(cache: mut UOpCache, linear: Int, held: read List<Int>) -
             List.push<Int>(list: mut lane_sizes, value: read 0)
             li = List.len<String>(list: read lane_devices) - 1
         }
-        let off = List.get<Int>(list: read lane_sizes, index: li)
         let nb = memory_buffer_nbytes(cache: read cache, b: b, block_size: block_size)
-        List.set<Int>(list: mut lane_sizes, index: li, value: read (off + nb))
+        let mut off = 0
+        let mut reused = false
+        let mut fi = 0
+        while fi < List.len<Int>(list: read free_size) {
+            let fsz = List.get<Int>(list: read free_size, index: fi)
+            if reused == false && fsz >= nb && List.get<Int>(list: read free_lane, index: fi) == li {
+                off = List.get<Int>(list: read free_offset, index: fi)
+                List.set<Int>(list: mut free_size, index: fi, value: read 0)
+                reused = true
+            }
+            fi = fi + 1
+        }
+        if reused == false {
+            off = List.get<Int>(list: read lane_sizes, index: li)
+            List.set<Int>(list: mut lane_sizes, index: li, value: read (off + nb))
+        }
         List.push<Int>(list: mut buf_lane, value: read li)
         List.push<Int>(list: mut buf_offset, value: read off)
+        List.push<Int>(list: mut active_lane, value: read li)
+        List.push<Int>(list: mut active_offset, value: read off)
+        List.push<Int>(list: mut active_size, value: read nb)
+        List.push<Int>(list: mut active_last, value: read List.get<Int>(list: read lasts, index: bi))
         bi = bi + 1
     }
 

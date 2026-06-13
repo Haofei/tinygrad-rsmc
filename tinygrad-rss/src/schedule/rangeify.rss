@@ -1309,6 +1309,25 @@ fn rangeify_after_dep_contains(cache: read UOpCache, after: Int, dep: Int) -> Bo
     return false
 }
 
+fn rangeify_after_depends_on_buf(cache: mut UOpCache, after: Int, buf: Int) -> Bool {
+    if node_op(cache: read cache, id: after) != AFTER { return false }
+    local nodes = uop_backward_slice(cache: read cache, id: after)
+    let mut i = 0
+    while i < List.len<Int>(list: read nodes) {
+        let node = List.get<Int>(list: read nodes, index: i)
+        if node_op(cache: read cache, id: node) == AFTER {
+            if rangeify_after_buf(cache: mut cache, after: node) == buf { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn rangeify_assign_would_cycle(cache: mut UOpCache, reader_after: Int, writer_buf: Int) -> Bool {
+    if writer_buf < 0 { return false }
+    return rangeify_after_depends_on_buf(cache: mut cache, after: reader_after, buf: writer_buf)
+}
+
 fn rangeify_append_after_dep(cache: mut UOpCache, after: Int, dep: Int) -> Int {
     if node_op(cache: read cache, id: after) != AFTER { return after }
     if dep < 0 { return after }
@@ -1342,16 +1361,18 @@ fn rangeify_fix_assign(cache: mut UOpCache, root: Int) -> Int {
                     let writer_kernel = rangeify_after_kernel(cache: read cache, after: writer_after)
                     if writer_buf >= 0 && writer_buf != reader_buf && writer_kernel != reader_kernel {
                         if rangeify_kernel_arg_reads_buf(cache: mut cache, kernel: reader_kernel, buf: writer_buf) {
-                            let cur_pos = rangeify_pos(ids: read olds, id: writer_after)
-                            let mut cur_after = writer_after
-                            if cur_pos >= 0 { cur_after = List.get<Int>(list: read news, index: cur_pos) }
-                            let new_after = rangeify_append_after_dep(cache: mut cache, after: cur_after, dep: reader_after)
-                            if new_after != cur_after {
-                                if cur_pos >= 0 {
-                                    List.set<Int>(list: mut news, index: cur_pos, value: read new_after)
-                                } else {
-                                    List.push<Int>(list: mut olds, value: read writer_after)
-                                    List.push<Int>(list: mut news, value: read new_after)
+                            if rangeify_assign_would_cycle(cache: mut cache, reader_after: reader_after, writer_buf: writer_buf) == false {
+                                let cur_pos = rangeify_pos(ids: read olds, id: writer_after)
+                                let mut cur_after = writer_after
+                                if cur_pos >= 0 { cur_after = List.get<Int>(list: read news, index: cur_pos) }
+                                let new_after = rangeify_append_after_dep(cache: mut cache, after: cur_after, dep: reader_after)
+                                if new_after != cur_after {
+                                    if cur_pos >= 0 {
+                                        List.set<Int>(list: mut news, index: cur_pos, value: read new_after)
+                                    } else {
+                                        List.push<Int>(list: mut olds, value: read writer_after)
+                                        List.push<Int>(list: mut news, value: read new_after)
+                                    }
                                 }
                             }
                         }

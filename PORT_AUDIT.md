@@ -529,8 +529,10 @@ Integrated pieces:
   later writer assigns when a split kernel reads a buffer written by another assign. `split_store`
   now preserves `COPY`/`SLICE` as special call bodies with ended ranges instead of wrapping them in
   `SINK`, and debuf now emits the upstream max-shape param plus shrink-back path for symbolic
-  shapes. Exact upstream circular-dependency diagnostics are still pending. The later PCONTIG
-  local-buffer fallback and richer symbolic max-shape inference are still intentionally unported.
+  shapes. Assign repair now carries the upstream circular-dependency predicate and avoids adding
+  the dependency edge that would create a cycle; exact Python-style exception propagation for this
+  diagnostic remains pending. The later PCONTIG local-buffer fallback and richer symbolic max-shape
+  inference are still intentionally unported.
   The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
   stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,
   self-stores, `END(NOOP)`, invalid writes, `AFTER(..., NOOP)`, reshape-through-`MSELECT`/

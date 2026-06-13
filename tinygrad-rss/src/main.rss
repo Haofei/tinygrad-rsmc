@@ -4652,6 +4652,107 @@ fn main() -> Unit {
     }
     let rfac_syn_r0 = List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0)
     let rfac_syn_r1 = List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1)
+    let rfac_const7 = mk_const_int(cache: mut mcache, dt: read dt_int32(), v: 7)
+    local rfac_const_ranges = List.new<Int>()
+    List.push<Int>(list: mut rfac_const_ranges, value: read rfac_syn_r0)
+    local rfac_const_opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: true)
+    let rfac_const_stage = mk_stage(cache: mut mcache, x: rfac_const7, ranges: read rfac_const_ranges, opts: read rfac_const_opts)
+    let rfac_const_index = mk_index(cache: mut mcache, base: rfac_const7, srcs: read rfac_const_ranges, ptr: false)
+    let rfac_const_copy = mk_copy_to_device(cache: mut mcache, x: rfac_const7, device: read "CPU")
+    let rfac_const_noop = rangeify_mk_noop(cache: mut mcache, src: rfac_const7)
+    local rfac_const_stack_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_const_stack_srcs, value: read rfac_const7)
+    List.push<Int>(list: mut rfac_const_stack_srcs, value: read rfac_const7)
+    let rfac_const_mstack = mk_mstack(cache: mut mcache, dt: read dt_int32(), srcs: read rfac_const_stack_srcs)
+    let rfac_const_mstack_index = mk_index(cache: mut mcache, base: rfac_const_mstack, srcs: read rfac_const_ranges, ptr: false)
+    let mut rfac_const_fold_ok = false
+    match fold_const_stage(cache: mut mcache, b: rfac_const_stage) {
+        Some(a) => {
+            match fold_index_const(cache: read mcache, idx: rfac_const_index) {
+                Some(b) => {
+                    match fold_copy_const(cache: mut mcache, copy: rfac_const_copy) {
+                        Some(c) => {
+                            match fold_noop_const(cache: read mcache, noop: rfac_const_noop) {
+                                Some(d) => {
+                                    match fold_mstack_index_const(cache: mut mcache, idx: rfac_const_mstack_index) {
+                                        Some(e) => {
+                                            rfac_const_fold_ok = node_is_const_int(cache: read mcache, id: a) && node_const_int(cache: read mcache, id: a) == 7 && b == rfac_const7 && node_is_const_int(cache: read mcache, id: c) && node_const_int(cache: read mcache, id: c) == 7 && d == rfac_const7 && node_is_const_int(cache: read mcache, id: e) && node_const_int(cache: read mcache, id: e) == 7
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
+    let rfac_self_store = mk_store(cache: mut mcache, ptr: rfac_const_index, value: rfac_const_index, gate: read None)
+    let rfac_self_noop = rangeify_mk_noop(cache: mut mcache, src: 0 - 1)
+    let rfac_self_end = mk_end(cache: mut mcache, id: rfac_self_noop, srcs: read rfac_const_ranges)
+    let rfac_invalid = uop_invalid(cache: mut mcache, count: 1)
+    let rfac_invalid_store = mk_store(cache: mut mcache, ptr: rfac_const_index, value: rfac_invalid, gate: read None)
+    local rfac_after_noop_deps = List.new<Int>()
+    List.push<Int>(list: mut rfac_after_noop_deps, value: read rfac_self_noop)
+    let rfac_after_noop = mk_after(cache: mut mcache, id: idx_rf_buf, srcs: read rfac_after_noop_deps)
+    let mut rfac_noop_cleanup_ok = false
+    match store_self_to_noop(cache: mut mcache, store: rfac_self_store) {
+        Some(a) => {
+            match end_noop_to_noop(cache: read mcache, x: rfac_self_end) {
+                Some(b) => {
+                    match invalid_store_to_noop(cache: mut mcache, store: rfac_invalid_store) {
+                        Some(c) => {
+                            match after_noop_to_value(cache: read mcache, after: rfac_after_noop) {
+                                Some(d) => { rfac_noop_cleanup_ok = node_op(cache: read mcache, id: a) == NOOP && b == rfac_self_noop && node_op(cache: read mcache, id: c) == NOOP && d == idx_rf_buf }
+                                None => {}
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
+    local rfac_flat_shape = List.new<Int>()
+    List.push<Int>(list: mut rfac_flat_shape, value: read 6)
+    let rfac_mbase0 = mk_reshape(cache: mut mcache, x: idx_rf_stage_buf0, new_shape: read rfac_flat_shape)
+    let rfac_mbase1 = mk_reshape(cache: mut mcache, x: idx_rf_stage_buf1, new_shape: read rfac_flat_shape)
+    let rfac_mreshape0 = mk_reshape(cache: mut mcache, x: rfac_mbase0, new_shape: read idx_rf_shape)
+    let rfac_mreshape1 = mk_reshape(cache: mut mcache, x: rfac_mbase1, new_shape: read idx_rf_shape)
+    local rfac_mreshape_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_mreshape_srcs, value: read rfac_mreshape0)
+    List.push<Int>(list: mut rfac_mreshape_srcs, value: read rfac_mreshape1)
+    let rfac_mreshape_stack = mk_mstack(cache: mut mcache, dt: read dt_float32(), srcs: read rfac_mreshape_srcs)
+    let rfac_mreshape_select = mk_mselect(cache: mut mcache, x: rfac_mreshape0, index: 0)
+    local rfac_call_args = List.new<Int>()
+    List.push<Int>(list: mut rfac_call_args, value: read rfac_mreshape0)
+    let rfac_call_reshape = mk_call(cache: mut mcache, body: rfac_graph, args: read rfac_call_args, call: read mcall_arg)
+    let mut rfac_reshape_cleanup_ok = false
+    match move_reshape_through_multi(cache: mut mcache, m: rfac_mreshape_stack) {
+        Some(a) => {
+            match move_reshape_through_multi(cache: mut mcache, m: rfac_mreshape_select) {
+                Some(b) => {
+                    match call_strip_reshape_args(cache: mut mcache, call: rfac_call_reshape) {
+                        Some(c) => {
+                            let astack = node_src_id(cache: read mcache, id: a, k: 0)
+                            let bsel = node_src_id(cache: read mcache, id: b, k: 0)
+                            rfac_reshape_cleanup_ok = node_op(cache: read mcache, id: a) == RESHAPE && node_op(cache: read mcache, id: astack) == MSTACK && node_src_id(cache: read mcache, id: astack, k: 0) == idx_rf_stage_buf0 && node_op(cache: read mcache, id: b) == RESHAPE && node_op(cache: read mcache, id: bsel) == MSELECT && node_src_id(cache: read mcache, id: bsel, k: 0) == idx_rf_stage_buf0 && node_op(cache: read mcache, id: c) == CALL && node_src_id(cache: read mcache, id: c, k: 1) == rfac_mbase0
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
     local rfac_inner_srcs = List.new<Int>()
     List.push<Int>(list: mut rfac_inner_srcs, value: read rfac_syn_r0)
     let rfac_inner_index = mk_index(cache: mut mcache, base: idx_rf_buf, srcs: read rfac_inner_srcs, ptr: true)
@@ -4813,7 +4914,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

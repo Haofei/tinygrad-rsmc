@@ -517,6 +517,10 @@ Integrated pieces:
   original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
   expressions touching more than three accessed buffers and for reduce subtrees that read
   bufferized/param data; the later PCONTIG local-buffer fallback is still intentionally unported.
+  The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
+  stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,
+  self-stores, `END(NOOP)`, invalid writes, `AFTER(..., NOOP)`, reshape-through-`MSELECT`/
+  `MSTACK`, and reshape argument stripping on `CALL`.
   It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
   modeling beyond these guards, partial-PCONTIG/local bufferize cost forms, env-configured buffer

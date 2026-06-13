@@ -504,6 +504,133 @@ fn remove_noop_bufferize(cache: mut UOpCache, idx: Int, b2: Int) -> Option<Int> 
     return Some(mk_shrink(cache: mut cache, x: base, starts: read starts, ends: read ends))
 }
 
+fn rangeify_mk_noop(cache: mut UOpCache, src: Int) -> Int {
+    local srcs = List.new<Int>()
+    if src >= 0 { List.push<Int>(list: mut srcs, value: read src) }
+    local arg = ArgNone
+    let vdt = dt_void()
+    return intern(cache: mut cache, op: NOOP, dt: read vdt, src: take srcs, arg: take arg)
+}
+
+fn fold_const_stage(cache: mut UOpCache, b: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: b) != STAGE || node_num_src(cache: read cache, id: b) == 0 { return None }
+    let c = node_src_id(cache: read cache, id: b, k: 0)
+    if node_op(cache: read cache, id: c) != CONST { return None }
+    if uop_is_invalid(cache: read cache, id: c) { return Some(c) }
+    if node_is_const_int(cache: read cache, id: c) { return Some(uop_const_like(cache: mut cache, id: b, v: node_const_int(cache: read cache, id: c))) }
+    local srcs = List.new<Int>()
+    local arg = node_arg(cache: read cache, id: c)
+    return Some(intern(cache: mut cache, op: CONST, dt: read node_full_dtype(cache: read cache, id: b), src: take srcs, arg: take arg))
+}
+
+fn fold_index_const(cache: read UOpCache, idx: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: idx) != INDEX || node_num_src(cache: read cache, id: idx) == 0 { return None }
+    let c = node_src_id(cache: read cache, id: idx, k: 0)
+    if node_op(cache: read cache, id: c) != CONST { return None }
+    return Some(c)
+}
+
+fn fold_copy_const(cache: mut UOpCache, copy: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: copy) != COPY || node_num_src(cache: read cache, id: copy) == 0 { return None }
+    let c = node_src_id(cache: read cache, id: copy, k: 0)
+    if node_op(cache: read cache, id: c) != CONST { return None }
+    if uop_is_invalid(cache: read cache, id: c) { return Some(c) }
+    if node_is_const_int(cache: read cache, id: c) { return Some(uop_const_like(cache: mut cache, id: copy, v: node_const_int(cache: read cache, id: c))) }
+    local srcs = List.new<Int>()
+    local arg = node_arg(cache: read cache, id: c)
+    return Some(intern(cache: mut cache, op: CONST, dt: read node_full_dtype(cache: read cache, id: copy), src: take srcs, arg: take arg))
+}
+
+fn fold_noop_const(cache: read UOpCache, noop: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: noop) != NOOP || node_num_src(cache: read cache, id: noop) != 1 { return None }
+    let c = node_src_id(cache: read cache, id: noop, k: 0)
+    if node_op(cache: read cache, id: c) != CONST { return None }
+    return Some(c)
+}
+
+fn fold_mstack_index_const(cache: mut UOpCache, idx: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: idx) != INDEX || node_num_src(cache: read cache, id: idx) == 0 { return None }
+    let ms = node_src_id(cache: read cache, id: idx, k: 0)
+    if node_op(cache: read cache, id: ms) != MSTACK || node_num_src(cache: read cache, id: ms) == 0 { return None }
+    let c = node_src_id(cache: read cache, id: ms, k: 0)
+    if node_op(cache: read cache, id: uop_base(cache: read cache, id: c)) != CONST { return None }
+    local arg = node_arg(cache: read cache, id: uop_base(cache: read cache, id: c))
+    local srcs = List.new<Int>()
+    return Some(intern(cache: mut cache, op: CONST, dt: read node_full_dtype(cache: read cache, id: idx), src: take srcs, arg: take arg))
+}
+
+fn store_self_to_noop(cache: mut UOpCache, store: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: store) != STORE || node_num_src(cache: read cache, id: store) < 2 { return None }
+    let ptr = node_src_id(cache: read cache, id: store, k: 0)
+    let val = node_src_id(cache: read cache, id: store, k: 1)
+    if ptr != val { return None }
+    return Some(rangeify_mk_noop(cache: mut cache, src: 0 - 1))
+}
+
+fn end_noop_to_noop(cache: read UOpCache, x: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: x) != END || node_num_src(cache: read cache, id: x) == 0 { return None }
+    let n = node_src_id(cache: read cache, id: x, k: 0)
+    if node_op(cache: read cache, id: n) != NOOP { return None }
+    return Some(n)
+}
+
+fn move_reshape_through_multi(cache: mut UOpCache, m: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: m)
+    if op != MSELECT && op != MSTACK { return None }
+    if node_num_src(cache: read cache, id: m) == 0 { return None }
+    local srcs = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: m) {
+        let child = node_src_id(cache: read cache, id: m, k: i)
+        if node_op(cache: read cache, id: child) != RESHAPE || node_num_src(cache: read cache, id: child) == 0 { return None }
+        List.push<Int>(list: mut srcs, value: read uop_base(cache: read cache, id: node_src_id(cache: read cache, id: child, k: 0)))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: m)
+    let inner = intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: m), src: take srcs, arg: take arg)
+    return Some(mk_reshape(cache: mut cache, x: inner, new_shape: read uop_shape(cache: read cache, id: m)))
+}
+
+fn call_strip_reshape_args(cache: mut UOpCache, call: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: call) != CALL || node_num_src(cache: read cache, id: call) == 0 { return None }
+    local args = List.new<Int>()
+    let mut changed = false
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: call) {
+        let child = node_src_id(cache: read cache, id: call, k: i)
+        if node_op(cache: read cache, id: child) == RESHAPE && node_num_src(cache: read cache, id: child) > 0 {
+            List.push<Int>(list: mut args, value: read node_src_id(cache: read cache, id: child, k: 0))
+            changed = true
+        } else {
+            List.push<Int>(list: mut args, value: read child)
+        }
+        i = i + 1
+    }
+    if changed == false { return None }
+    return Some(mk_call(cache: mut cache, body: node_src_id(cache: read cache, id: call, k: 0), args: read args, call: read node_call_arg(cache: read cache, id: call)))
+}
+
+fn invalid_store_to_noop(cache: mut UOpCache, store: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: store) != STORE || node_num_src(cache: read cache, id: store) < 2 { return None }
+    let mut val = node_src_id(cache: read cache, id: store, k: 1)
+    if node_op(cache: read cache, id: val) == CONTIGUOUS && node_num_src(cache: read cache, id: val) > 0 {
+        val = node_src_id(cache: read cache, id: val, k: 0)
+    }
+    if uop_is_invalid(cache: read cache, id: val) == false { return None }
+    return Some(rangeify_mk_noop(cache: mut cache, src: 0 - 1))
+}
+
+fn after_noop_to_value(cache: read UOpCache, after: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: after) != AFTER || node_num_src(cache: read cache, id: after) < 2 { return None }
+    let dep = node_src_id(cache: read cache, id: after, k: 1)
+    if node_op(cache: read cache, id: dep) == NOOP { return Some(node_src_id(cache: read cache, id: after, k: 0)) }
+    if node_op(cache: read cache, id: dep) == END && node_num_src(cache: read cache, id: dep) > 0 {
+        let inner = node_src_id(cache: read cache, id: dep, k: 0)
+        if node_op(cache: read cache, id: inner) == NOOP { return Some(node_src_id(cache: read cache, id: after, k: 0)) }
+    }
+    return None
+}
+
 fn late_buffer_view(cache: mut UOpCache, t: Int, b: Int) -> Option<Int> {
     if node_op(cache: read cache, id: b) != STAGE { return None }
     let dev = node_bufferize_device_name(cache: read cache, id: b)

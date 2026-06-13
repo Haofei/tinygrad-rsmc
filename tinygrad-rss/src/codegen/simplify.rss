@@ -359,6 +359,75 @@ fn simplify_is_zero_const(cache: read UOpCache, id: Int) -> Bool {
     return node_const_float(cache: read cache, id: id) == 0.0
 }
 
+fn simplify_strip_cast(cache: read UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) == CAST && node_num_src(cache: read cache, id: id) == 1 {
+        return node_src_id(cache: read cache, id: id, k: 0)
+    }
+    return id
+}
+
+fn simplify_lift_add_compare(cache: mut UOpCache, cmp: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: cmp)
+    if (op != CMPLT && op != CMPNE) || node_num_src(cache: read cache, id: cmp) != 2 { return None }
+    let lhs0 = simplify_strip_cast(cache: read cache, id: node_src_id(cache: read cache, id: cmp, k: 0))
+    let c = node_src_id(cache: read cache, id: cmp, k: 1)
+    if node_op(cache: read cache, id: lhs0) != ADD || node_num_src(cache: read cache, id: lhs0) != 2 { return None }
+    if no_range(cache: read cache, u: c) == false { return None }
+    let a = node_src_id(cache: read cache, id: lhs0, k: 0)
+    let b = node_src_id(cache: read cache, id: lhs0, k: 1)
+    if no_range(cache: read cache, u: b) {
+        let cdt = node_dtype(cache: read cache, id: c)
+        let bc = mk_cast(cache: mut cache, x: b, dt: read cdt)
+        let rhs = mk_alu2(cache: mut cache, op: SUB, dt: read cdt, x: c, y: bc)
+        return Some(mk_alu2(cache: mut cache, op: op, dt: read dt_bool(), x: a, y: rhs))
+    }
+    if no_range(cache: read cache, u: a) {
+        let cdt = node_dtype(cache: read cache, id: c)
+        let ac = mk_cast(cache: mut cache, x: a, dt: read cdt)
+        let rhs = mk_alu2(cache: mut cache, op: SUB, dt: read cdt, x: c, y: ac)
+        return Some(mk_alu2(cache: mut cache, op: op, dt: read dt_bool(), x: b, y: rhs))
+    }
+    return None
+}
+
+fn simplify_lift_mul_lt(cache: mut UOpCache, cmp: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: cmp) != CMPLT || node_num_src(cache: read cache, id: cmp) != 2 { return None }
+    let lhs0 = simplify_strip_cast(cache: read cache, id: node_src_id(cache: read cache, id: cmp, k: 0))
+    let c = node_src_id(cache: read cache, id: cmp, k: 1)
+    if node_op(cache: read cache, id: lhs0) != MUL || node_num_src(cache: read cache, id: lhs0) != 2 { return None }
+    if no_range(cache: read cache, u: c) == false { return None }
+    let a = node_src_id(cache: read cache, id: lhs0, k: 0)
+    let b = node_src_id(cache: read cache, id: lhs0, k: 1)
+    let mut x = a
+    let mut y = b
+    if no_range(cache: read cache, u: y) == false && no_range(cache: read cache, u: x) {
+        x = b
+        y = a
+    }
+    if no_range(cache: read cache, u: y) == false { return None }
+    if dtype_is_int(d: read node_dtype(cache: read cache, id: y)) == false { return None }
+    if uop_vmin(cache: read cache, id: y) <= 0 { return None }
+    let cdt = node_dtype(cache: read cache, id: c)
+    let yc = mk_cast(cache: mut cache, x: y, dt: read cdt)
+    let c_plus_y = mk_alu2(cache: mut cache, op: ADD, dt: read cdt, x: c, y: yc)
+    let one = mk_const_int(cache: mut cache, dt: read cdt, v: 1)
+    let numerator = mk_alu2(cache: mut cache, op: SUB, dt: read cdt, x: c_plus_y, y: one)
+    let rhs = mk_alu2(cache: mut cache, op: FLOORDIV, dt: read cdt, x: numerator, y: yc)
+    return Some(mk_alu2(cache: mut cache, op: CMPLT, dt: read dt_bool(), x: x, y: rhs))
+}
+
+fn simplify_lift_compare(cache: mut UOpCache, cmp: Int) -> Int {
+    match simplify_lift_add_compare(cache: mut cache, cmp: cmp) {
+        Some(v) => { return graph_rewrite(cache: mut cache, id: v) }
+        None => {}
+    }
+    match simplify_lift_mul_lt(cache: mut cache, cmp: cmp) {
+        Some(v) => { return graph_rewrite(cache: mut cache, id: v) }
+        None => {}
+    }
+    return cmp
+}
+
 fn simplify_range_lt_cut(cache: read UOpCache, cond: Int, r: Int) -> Int {
     if node_op(cache: read cache, id: cond) != CMPLT || node_num_src(cache: read cache, id: cond) != 2 { return -1 }
     if simplify_single_range_expr(cache: read cache, x: node_src_id(cache: read cache, id: cond, k: 0)) != r { return -1 }
@@ -398,11 +467,12 @@ fn reduce_bound_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {
     let cond = node_src_id(cache: read cache, id: value, k: 0)
     let tval = node_src_id(cache: read cache, id: value, k: 1)
     let fval = node_src_id(cache: read cache, id: value, k: 2)
+    let norm_cond = simplify_lift_compare(cache: mut cache, cmp: cond)
     let mut i = 1
     while i < node_num_src(cache: read cache, id: red) {
         let r = node_src_id(cache: read cache, id: red, k: i)
         if node_op(cache: read cache, id: r) == RANGE && node_num_src(cache: read cache, id: r) > 0 {
-            let cut = simplify_range_lt_cut(cache: read cache, cond: cond, r: r)
+            let cut = simplify_range_lt_cut(cache: read cache, cond: norm_cond, r: r)
             if cut >= 0 && simplify_is_zero_const(cache: read cache, id: fval) {
                 return simplify_reduce_count_times_value(cache: mut cache, count: cut, r: r, val: tval)
             }
@@ -411,9 +481,9 @@ fn reduce_bound_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {
                 let count = mk_alu2(cache: mut cache, op: SUB, dt: read node_dtype(cache: read cache, id: cut), x: end, y: cut)
                 return simplify_reduce_count_times_value(cache: mut cache, count: count, r: r, val: fval)
             }
-            if node_op(cache: read cache, id: cond) == AND && node_num_src(cache: read cache, id: cond) == 2 && simplify_is_zero_const(cache: read cache, id: fval) {
-                let c0 = node_src_id(cache: read cache, id: cond, k: 0)
-                let c1 = node_src_id(cache: read cache, id: cond, k: 1)
+            if node_op(cache: read cache, id: norm_cond) == AND && node_num_src(cache: read cache, id: norm_cond) == 2 && simplify_is_zero_const(cache: read cache, id: fval) {
+                let c0 = node_src_id(cache: read cache, id: norm_cond, k: 0)
+                let c1 = node_src_id(cache: read cache, id: norm_cond, k: 1)
                 let mut lower = simplify_not_range_lt_cut(cache: read cache, cond: c0, r: r)
                 let mut upper = simplify_range_lt_cut(cache: read cache, cond: c1, r: r)
                 if lower < 0 || upper < 0 {
@@ -478,10 +548,11 @@ fn reduce_load_index_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {
     let tval = node_src_id(cache: read cache, id: value, k: 1)
     let fval = node_src_id(cache: read cache, id: value, k: 2)
     if simplify_is_zero_const(cache: read cache, id: tval) == false { return None }
+    let norm_cond = simplify_lift_compare(cache: mut cache, cmp: cond)
     let mut i = 1
     while i < node_num_src(cache: read cache, id: red) {
         let r = node_src_id(cache: read cache, id: red, k: i)
-        let idx = simplify_load_index_expr(cache: read cache, cmp: cond, r: r)
+        let idx = simplify_load_index_expr(cache: read cache, cmp: norm_cond, r: r)
         if idx >= 0 {
             return simplify_reduce_load_collapse_one(cache: mut cache, r: r, idx: idx, expr: fval)
         }

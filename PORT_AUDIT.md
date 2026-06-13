@@ -589,8 +589,11 @@ Integrated pieces:
   valid bounded index and wrapping the result in the same bounds guard. The range-bound
   reduce-collapse family now covers the upstream upper-bound, lower-bound, and two-sided window
   folds for range-free values, clamping counts to the reduced range extent before multiplying by the
-  payload. Full PatternMatcher parity for the generic reduce-collapse driver and arithmetic
-  lift/distribution rules remains later fidelity work.
+  payload. The first arithmetic comparison lift batch is also integrated: `(x + y) < c` and
+  `(x * y) < c` feed range-bound collapse when the lifted operand and bound are range-free, and
+  `(x + y) != c` feeds load-index collapse. Full PatternMatcher parity for the generic
+  reduce-collapse driver, REDUCE-on-ADD distribution, AND-on-WHERE simplification, MUL-casted-bool
+  simplification, and exact placeholder substitution remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

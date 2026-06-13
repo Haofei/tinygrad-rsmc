@@ -3045,6 +3045,43 @@ fn main() -> Unit {
     local simp_bc_two_arg = ArgOp(value: ADD)
     let simp_bc_two_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_two_srcs, arg: take simp_bc_two_arg)
     local simp_bc_two = reduce_bound_collapse(cache: mut mcache, red: simp_bc_two_red)
+    let simp_bc_add_r = mk_range_int(cache: mut mcache, end: 8, axis_id: 47, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_bc_add_y = mk_const_int(cache: mut mcache, dt: read i32, v: 3)
+    let simp_bc_add_c = mk_const_int(cache: mut mcache, dt: read i32, v: 7)
+    let simp_bc_add_lhs = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_bc_add_r, y: simp_bc_add_y)
+    let simp_bc_add_cond = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_bc_add_lhs, y: simp_bc_add_c)
+    let simp_bc_add_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_bc_add_cond, tval: simp_bc_val, fval: simp_bc_zero)
+    local simp_bc_add_srcs = List.new<Int>()
+    pushi(l: mut simp_bc_add_srcs, v: simp_bc_add_where)
+    pushi(l: mut simp_bc_add_srcs, v: simp_bc_add_r)
+    local simp_bc_add_arg = ArgOp(value: ADD)
+    let simp_bc_add_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_add_srcs, arg: take simp_bc_add_arg)
+    local simp_bc_add = reduce_bound_collapse(cache: mut mcache, red: simp_bc_add_red)
+    let simp_bc_mul_r = mk_range_int(cache: mut mcache, end: 8, axis_id: 48, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_bc_mul_y = mk_const_int(cache: mut mcache, dt: read i32, v: 2)
+    let simp_bc_mul_c = mk_const_int(cache: mut mcache, dt: read i32, v: 7)
+    let simp_bc_mul_lhs = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: simp_bc_mul_r, y: simp_bc_mul_y)
+    let simp_bc_mul_cond = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_bc_mul_lhs, y: simp_bc_mul_c)
+    let simp_bc_mul_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_bc_mul_cond, tval: simp_bc_val, fval: simp_bc_zero)
+    local simp_bc_mul_srcs = List.new<Int>()
+    pushi(l: mut simp_bc_mul_srcs, v: simp_bc_mul_where)
+    pushi(l: mut simp_bc_mul_srcs, v: simp_bc_mul_r)
+    local simp_bc_mul_arg = ArgOp(value: ADD)
+    let simp_bc_mul_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_bc_mul_srcs, arg: take simp_bc_mul_arg)
+    local simp_bc_mul = reduce_bound_collapse(cache: mut mcache, red: simp_bc_mul_red)
+    let simp_lc_add_r = mk_range_int(cache: mut mcache, end: 4, axis_id: 49, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_lc_add_y = mk_const_int(cache: mut mcache, dt: read i32, v: 3)
+    let simp_lc_add_c = mk_const_int(cache: mut mcache, dt: read i32, v: 5)
+    let simp_lc_add_expr = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_lc_add_r, y: simp_lc_c10)
+    let simp_lc_add_lhs = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_lc_add_r, y: simp_lc_add_y)
+    let simp_lc_add_ne = mk_alu2(cache: mut mcache, op: CMPNE, dt: read dt_bool(), x: simp_lc_add_lhs, y: simp_lc_add_c)
+    let simp_lc_add_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_lc_add_ne, tval: simp_lc_zero, fval: simp_lc_add_expr)
+    local simp_lc_add_srcs = List.new<Int>()
+    pushi(l: mut simp_lc_add_srcs, v: simp_lc_add_where)
+    pushi(l: mut simp_lc_add_srcs, v: simp_lc_add_r)
+    local simp_lc_add_arg = ArgOp(value: ADD)
+    let simp_lc_add_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_lc_add_srcs, arg: take simp_lc_add_arg)
+    local simp_lc_add = reduce_load_index_collapse(cache: mut mcache, red: simp_lc_add_red)
     showi(label: read "codegen.simplify count divmod = ", v: count_divmod(cache: read mcache, x: simp_divmod))
     match simp_flat {
         Some(v) => { showb(label: read "codegen.simplify flatten range = ", v: node_op(cache: read mcache, id: v) == END && node_num_src(cache: read mcache, id: v) == 3) }
@@ -3106,6 +3143,22 @@ fn main() -> Unit {
     match simp_bc_two {
         Some(v) => { showb(label: read "codegen.simplify bound collapse two-sided = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
         None => { showb(label: read "codegen.simplify bound collapse two-sided = ", v: false) }
+    }
+    match simp_bc_add {
+        Some(v) => { showb(label: read "codegen.simplify bound collapse add lift = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify bound collapse add lift = ", v: false) }
+    }
+    match simp_bc_mul {
+        Some(v) => { showb(label: read "codegen.simplify bound collapse mul lift = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify bound collapse mul lift = ", v: false) }
+    }
+    match simp_lc_add {
+        Some(v) => {
+            let lc_add_cond = node_src_id(cache: read mcache, id: v, k: 0)
+            let lc_add_tval = node_src_id(cache: read mcache, id: v, k: 1)
+            showb(label: read "codegen.simplify load-index add lift = ", v: node_op(cache: read mcache, id: v) == WHERE && node_op(cache: read mcache, id: lc_add_cond) == AND && no_range(cache: read mcache, u: lc_add_tval) && spec_type_verify(cache: read mcache, id: v))
+        }
+        None => { showb(label: read "codegen.simplify load-index add lift = ", v: false) }
     }
     let pr_r0 = mk_range_int(cache: mut mcache, end: 4, axis_id: 61, axis_type: read AXIS_LOOP, dt: read i32)
     let pr_r1 = mk_range_int(cache: mut mcache, end: 3, axis_id: 62, axis_type: read AXIS_REDUCE, dt: read i32)

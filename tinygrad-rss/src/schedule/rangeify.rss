@@ -756,6 +756,25 @@ fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Optio
     return Some(intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: root), src: take srcs, arg: take arg))
 }
 
+fn rangeify_union_ranges(cache: read UOpCache, target: Int, idx_ranges: read List<Int>) -> fresh List<Int> {
+    local out = uop_ranges(cache: read cache, id: target)
+    let mut i = 0
+    while i < List.len<Int>(list: read idx_ranges) {
+        indexing_add_unique(items: mut out, value: List.get<Int>(list: read idx_ranges, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn rangeify_unwrap_bufferized_store_target(cache: read UOpCache, target: Int) -> Int {
+    if node_op(cache: read cache, id: target) != INDEX || node_num_src(cache: read cache, id: target) == 0 { return target }
+    let base = node_src_id(cache: read cache, id: target, k: 0)
+    if node_op(cache: read cache, id: base) != STAGE || node_num_src(cache: read cache, id: base) == 0 { return target }
+    let staged_value = node_src_id(cache: read cache, id: base, k: 0)
+    if node_op(cache: read cache, id: staged_value) == INDEX { return staged_value }
+    return target
+}
+
 fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int, idx: Int, allow_locals: Bool) -> Option<Int> {
     if node_op(cache: read cache, id: x) != STAGE { return None }
     if node_op(cache: read cache, id: idx) != INDEX { return None }
@@ -774,10 +793,16 @@ fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int
         while ai < node_num_src(cache: read cache, id: value) {
             let dep = node_src_id(cache: read cache, id: value, k: ai)
             if node_op(cache: read cache, id: dep) == STORE {
-                let target = node_src_id(cache: read cache, id: dep, k: 0)
+                let raw_target = node_src_id(cache: read cache, id: dep, k: 0)
+                let target = rangeify_unwrap_bufferized_store_target(cache: read cache, target: raw_target)
                 let stored = node_src_id(cache: read cache, id: dep, k: 1)
                 if target != stored {
-                    let ended = mk_end(cache: mut cache, id: dep, srcs: read idx_ranges)
+                    let mut rewritten_store = dep
+                    if target != raw_target {
+                        rewritten_store = mk_store(cache: mut cache, ptr: target, value: stored, gate: read None)
+                    }
+                    local end_ranges = rangeify_union_ranges(cache: read cache, target: target, idx_ranges: read idx_ranges)
+                    let ended = mk_end(cache: mut cache, id: rewritten_store, srcs: read end_ranges)
                     List.push<Int>(list: mut deps, value: read ended)
                 }
             }

@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 77 RSS files, about 38.7k LOC.
+  - integrated `tinygrad-rss/src`: 78 RSS files, about 39.4k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -55,6 +55,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     `runtime/ops_qcom.py`, `runtime/ops_dsp.py`, `runtime/ops_rdma.py`,
     `runtime/ops_tinyfs.py`, and `runtime/ops_cl.py`: 331/331 rough symbols covered.
   - focused graph-transform batch: `callify.py` and `gradient.py`: 17/17 rough symbols covered.
+  - focused ONNX importer batch: `nn/onnx.py`: 41/41 rough symbols covered. This is a
+    protobuf/importer/runner surface facade; full ONNX operator execution is not yet implemented.
+  - current uncovered audit slice for next work: `llm/gguf.py`, `llm/model.py`, `llm/cli.py`,
+    `viz/cli.py`, `viz/serve.py`, plus already-covered `callify.py`, `gradient.py`,
+    `runtime/ops_hip.py`, `runtime/ops_npy.py`, and `nn/onnx.py`: 89/176 rough symbols covered
+    (50.6%). The remaining high-count areas are LLM GGUF/model/CLI and viz server/profile tooling.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:

@@ -1,0 +1,645 @@
+// Source-shaped ONNX importer facade for tinygrad/nn/onnx.py.
+//
+// This keeps the protobuf reader, parser, and runner entry points available in RSScript. It is
+// intentionally deterministic and side-effect free; later executor batches can replace the runner
+// selection stubs with real tensor op lowering without changing callers.
+features: native, local
+
+struct OnnxReader derives(Clone) {
+    data: List<Int>,
+    position: Int,
+}
+
+struct OnnxParseField derives(Clone) {
+    field: Int,
+    wire_type: Int,
+    int_value: Int,
+    raw: List<Int>,
+}
+
+struct OnnxValueInfoProto derives(Clone) {
+    name: String,
+    shape: List<Int>,
+    dtype: DType,
+}
+
+struct OnnxTensorProto derives(Clone) {
+    name: String,
+    data_type: Int,
+    dims: List<Int>,
+    int64_data: List<Int>,
+    float_data: List<Float>,
+    raw_data: List<Int>,
+}
+
+struct OnnxAttributeProto derives(Clone) {
+    name: String,
+    attr_type: Int,
+    ints: List<Int>,
+    floats: List<Float>,
+    strings: List<String>,
+    tensor: OnnxTensorProto,
+    graph: List<Int>,
+}
+
+struct OnnxNodeProto derives(Clone) {
+    name: String,
+    op_type: String,
+    domain: String,
+    inputs: List<String>,
+    outputs: List<String>,
+    attributes: List<OnnxAttributeProto>,
+}
+
+struct OnnxOperatorSetIdProto derives(Clone) {
+    domain: String,
+    version: Int,
+}
+
+struct OnnxGraphProto derives(Clone) {
+    name: String,
+    inputs: List<OnnxValueInfoProto>,
+    outputs: List<OnnxValueInfoProto>,
+    initializers: List<OnnxTensorProto>,
+    nodes: List<OnnxNodeProto>,
+}
+
+struct OnnxModelProto derives(Clone) {
+    ir_version: Int,
+    graph: OnnxGraphProto,
+    opsets: List<OnnxOperatorSetIdProto>,
+}
+
+struct OnnxRunnerState derives(Clone) {
+    graph: OnnxGraphProto,
+    is_subgraph: Bool,
+    const_names: List<String>,
+    const_values: List<OnnxTensorProto>,
+}
+
+fn onnx_reader_new(data: read List<Int>) -> fresh OnnxReader {
+    local copied = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read data) {
+        List.push<Int>(list: mut copied, value: read List.get<Int>(list: read data, index: i))
+        i = i + 1
+    }
+    return OnnxReader(data: take copied, position: 0)
+}
+
+fn onnx_copy_ints(values: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        let v = List.get<Int>(list: read values, index: i)
+        List.push<Int>(list: mut out, value: read v)
+        i = i + 1
+    }
+    return take out
+}
+
+fn onnx_empty_tensor() -> fresh OnnxTensorProto {
+    local dims = List.new<Int>()
+    local ints = List.new<Int>()
+    local floats = List.new<Float>()
+    local raw = List.new<Int>()
+    return OnnxTensorProto(name: String.copy(value: read ""), data_type: 1, dims: take dims, int64_data: take ints, float_data: take floats, raw_data: take raw)
+}
+
+fn onnx_empty_value(name: read String) -> fresh OnnxValueInfoProto {
+    local shape = List.new<Int>()
+    return OnnxValueInfoProto(name: String.copy(value: read name), shape: take shape, dtype: dt_float32())
+}
+
+fn onnx_empty_node() -> fresh OnnxNodeProto {
+    local inputs = List.new<String>()
+    local outputs = List.new<String>()
+    local attrs = List.new<OnnxAttributeProto>()
+    return OnnxNodeProto(name: String.copy(value: read ""), op_type: String.copy(value: read ""), domain: String.copy(value: read ""), inputs: take inputs, outputs: take outputs, attributes: take attrs)
+}
+
+fn onnx_empty_graph() -> fresh OnnxGraphProto {
+    local inputs = List.new<OnnxValueInfoProto>()
+    local outputs = List.new<OnnxValueInfoProto>()
+    local inits = List.new<OnnxTensorProto>()
+    local nodes = List.new<OnnxNodeProto>()
+    return OnnxGraphProto(name: String.copy(value: read ""), inputs: take inputs, outputs: take outputs, initializers: take inits, nodes: take nodes)
+}
+
+fn onnx_reader_remaining(reader: read OnnxReader) -> Int {
+    let remain = List.len<Int>(list: read reader.data) - reader.position
+    if remain < 0 { return 0 }
+    return remain
+}
+
+fn onnx_read_u8(reader: mut OnnxReader) -> Int {
+    if reader.position < 0 || reader.position >= List.len<Int>(list: read reader.data) { return 0 }
+    let b = List.get<Int>(list: read reader.data, index: reader.position) & 255
+    reader.position = reader.position + 1
+    return b
+}
+
+fn to_field_name(attr_type: Int) -> fresh String {
+    if attr_type == 1 { return String.copy(value: read "f") }
+    if attr_type == 2 { return String.copy(value: read "i") }
+    if attr_type == 3 { return String.copy(value: read "s") }
+    if attr_type == 4 { return String.copy(value: read "t") }
+    if attr_type == 5 { return String.copy(value: read "g") }
+    if attr_type == 6 { return String.copy(value: read "floats") }
+    if attr_type == 7 { return String.copy(value: read "ints") }
+    if attr_type == 8 { return String.copy(value: read "strings") }
+    return String.copy(value: read "")
+}
+
+fn to_dtype(data_type: Int) -> fresh DType {
+    if data_type == 2 { return dt_uint8() }
+    if data_type == 3 { return dt_int8() }
+    if data_type == 4 { return dt_uint16() }
+    if data_type == 5 { return dt_int16() }
+    if data_type == 6 { return dt_int32() }
+    if data_type == 7 { return dt_int64() }
+    if data_type == 9 { return dt_bool() }
+    if data_type == 10 { return dt_float16() }
+    if data_type == 11 { return dt_float64() }
+    if data_type == 12 { return dt_uint32() }
+    if data_type == 13 { return dt_uint64() }
+    if data_type == 16 { return dt_bfloat16() }
+    return dt_float32()
+}
+
+fn from_onnx(domain: read String) -> fresh String {
+    if String.len(value: read domain) == 0 { return String.copy(value: read "ONNX") }
+    return String.copy(value: read domain)
+}
+
+fn decode_varint(reader: mut OnnxReader) -> Int {
+    let mut value = 0
+    let mut shift = 0
+    let mut keep = true
+    while keep && onnx_reader_remaining(reader: read reader) > 0 && shift < 64 {
+        let b = onnx_read_u8(reader: mut reader)
+        value = value | ((b & 127) << shift)
+        keep = (b & 128) != 0
+        shift = shift + 7
+    }
+    return value
+}
+
+fn read_delimited(reader: mut OnnxReader, use_tensor: Bool) -> fresh Bytes {
+    let n = decode_varint(reader: mut reader)
+    local raw = List.new<Int>()
+    let mut i = 0
+    while i < n && onnx_reader_remaining(reader: read reader) > 0 {
+        List.push<Int>(list: mut raw, value: read onnx_read_u8(reader: mut reader))
+        i = i + 1
+    }
+    return Bytes.from_uints(values: read raw)
+}
+
+fn read_string(reader: mut OnnxReader) -> fresh String {
+    let n = decode_varint(reader: mut reader)
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < n && onnx_reader_remaining(reader: read reader) > 0 {
+        let b = onnx_read_u8(reader: mut reader)
+        out = String.concat(left: read out, right: read Int.to_string(value: read b))
+        if i + 1 < n { out = String.concat(left: read out, right: read ",") }
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn read_bytes(reader: mut OnnxReader) -> fresh Bytes {
+    return read_delimited(reader: mut reader, use_tensor: false)
+}
+
+fn read_float(reader: mut OnnxReader) -> Float {
+    let mut raw = 0
+    let mut i = 0
+    while i < 4 && onnx_reader_remaining(reader: read reader) > 0 {
+        raw = raw | (onnx_read_u8(reader: mut reader) << (i * 8))
+        i = i + 1
+    }
+    return Int.to_float(value: read raw)
+}
+
+fn read_packed_floats(reader: mut OnnxReader) -> fresh List<Float> {
+    let n = decode_varint(reader: mut reader)
+    let end_pos = reader.position + n
+    local out = List.new<Float>()
+    while reader.position + 4 <= end_pos && onnx_reader_remaining(reader: read reader) >= 4 {
+        List.push<Float>(list: mut out, value: read read_float(reader: mut reader))
+    }
+    if reader.position < end_pos { reader.position = end_pos }
+    return take out
+}
+
+fn read_int64(reader: mut OnnxReader) -> Int {
+    return decode_varint(reader: mut reader)
+}
+
+fn read_packed_int64s(reader: mut OnnxReader) -> fresh List<Int> {
+    let n = decode_varint(reader: mut reader)
+    let end_pos = reader.position + n
+    local out = List.new<Int>()
+    while reader.position < end_pos && onnx_reader_remaining(reader: read reader) > 0 {
+        List.push<Int>(list: mut out, value: read read_int64(reader: mut reader))
+    }
+    if reader.position < end_pos { reader.position = end_pos }
+    return take out
+}
+
+fn skip_field(reader: mut OnnxReader, wire_type: Int) -> Unit {
+    if wire_type == 0 {
+        let _ = decode_varint(reader: mut reader)
+    } else if wire_type == 1 {
+        reader.position = reader.position + 8
+    } else if wire_type == 2 {
+        let n = decode_varint(reader: mut reader)
+        reader.position = reader.position + n
+    } else if wire_type == 5 {
+        reader.position = reader.position + 4
+    } else {
+        reader.position = List.len<Int>(list: read reader.data)
+    }
+    if reader.position > List.len<Int>(list: read reader.data) { reader.position = List.len<Int>(list: read reader.data) }
+    return Unit
+}
+
+fn _decode_end_pos(reader: mut OnnxReader) -> Int {
+    let n = decode_varint(reader: mut reader)
+    let end_pos = reader.position + n
+    if end_pos > List.len<Int>(list: read reader.data) { return List.len<Int>(list: read reader.data) }
+    return end_pos
+}
+
+fn _parse_message(reader: mut OnnxReader, end_pos: Int) -> fresh List<OnnxParseField> {
+    local fields = List.new<OnnxParseField>()
+    let mut limit = end_pos
+    if limit > List.len<Int>(list: read reader.data) { limit = List.len<Int>(list: read reader.data) }
+    while reader.position < limit {
+        let tag = decode_varint(reader: mut reader)
+        let field_no = tag >> 3
+        let wire = tag & 7
+        local raw = List.new<Int>()
+        let mut int_value = 0
+        if wire == 0 {
+            int_value = decode_varint(reader: mut reader)
+        } else if wire == 1 {
+            let mut i = 0
+            while i < 8 && reader.position < limit {
+                List.push<Int>(list: mut raw, value: read onnx_read_u8(reader: mut reader))
+                i = i + 1
+            }
+        } else if wire == 2 {
+            let n = decode_varint(reader: mut reader)
+            let mut i = 0
+            while i < n && reader.position < limit {
+                List.push<Int>(list: mut raw, value: read onnx_read_u8(reader: mut reader))
+                i = i + 1
+            }
+            int_value = n
+        } else if wire == 5 {
+            let mut i = 0
+            while i < 4 && reader.position < limit {
+                List.push<Int>(list: mut raw, value: read onnx_read_u8(reader: mut reader))
+                i = i + 1
+            }
+        } else {
+            reader.position = limit
+        }
+        List.push<OnnxParseField>(list: mut fields, value: read OnnxParseField(field: field_no, wire_type: wire, int_value: int_value, raw: take raw))
+    }
+    return take fields
+}
+
+fn _parse_TensorShapeProtoDimension(fields: read List<OnnxParseField>) -> Int {
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 || f.field == 2 { return f.int_value }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _parse_TensorShapeProto(fields: read List<OnnxParseField>) -> fresh List<Int> {
+    local shape = List.new<Int>()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 && f.wire_type == 2 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            List.push<Int>(list: mut shape, value: read _parse_TensorShapeProtoDimension(fields: read nested))
+        }
+        i = i + 1
+    }
+    return take shape
+}
+
+fn _parse_TypeProtoTensor(fields: read List<OnnxParseField>) -> fresh OnnxValueInfoProto {
+    let mut shape = List.new<Int>()
+    let mut dtype = dt_float32()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { dtype = to_dtype(data_type: f.int_value) }
+        if f.field == 2 && f.wire_type == 2 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            shape = _parse_TensorShapeProto(fields: read nested)
+        }
+        i = i + 1
+    }
+    return OnnxValueInfoProto(name: String.copy(value: read ""), shape: onnx_copy_ints(values: read shape), dtype: dtype.clone())
+}
+
+fn _parse_TypeProto(fields: read List<OnnxParseField>) -> fresh OnnxValueInfoProto {
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 && f.wire_type == 2 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            return _parse_TypeProtoTensor(fields: read nested)
+        }
+        i = i + 1
+    }
+    return onnx_empty_value(name: read "")
+}
+
+fn _parse_TypeProtoWrapper(fields: read List<OnnxParseField>) -> fresh OnnxValueInfoProto {
+    return _parse_TypeProto(fields: read fields)
+}
+
+fn _parse_ValueInfoProto(fields: read List<OnnxParseField>) -> fresh OnnxValueInfoProto {
+    let mut name = String.copy(value: read "")
+    let mut shape = List.new<Int>()
+    let mut dtype = dt_float32()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { name = String.concat(left: read "value", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 2 && f.wire_type == 2 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local typ = _parse_TypeProto(fields: read nested)
+            shape = typ.shape
+            dtype = typ.dtype
+        }
+        i = i + 1
+    }
+    return OnnxValueInfoProto(name: String.copy(value: read name), shape: onnx_copy_ints(values: read shape), dtype: dtype.clone())
+}
+
+fn _parse_TensorProto(fields: read List<OnnxParseField>) -> fresh OnnxTensorProto {
+    local dims = List.new<Int>()
+    local ints = List.new<Int>()
+    local floats = List.new<Float>()
+    let mut raw = List.new<Int>()
+    let mut name = String.copy(value: read "")
+    let mut data_type = 1
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 {
+            let iv = f.int_value
+            List.push<Int>(list: mut dims, value: read iv)
+        }
+        if f.field == 2 { data_type = f.int_value }
+        if f.field == 4 { List.push<Float>(list: mut floats, value: read Int.to_float(value: read f.int_value)) }
+        if f.field == 7 { raw = f.raw }
+        if f.field == 8 { name = String.concat(left: read "tensor", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 10 {
+            let iv = f.int_value
+            List.push<Int>(list: mut ints, value: read iv)
+        }
+        i = i + 1
+    }
+    return OnnxTensorProto(name: String.copy(value: read name), data_type: data_type, dims: take dims, int64_data: take ints, float_data: take floats, raw_data: onnx_copy_ints(values: read raw))
+}
+
+fn _parse_AttributeProto(fields: read List<OnnxParseField>) -> fresh OnnxAttributeProto {
+    let mut name = String.copy(value: read "")
+    let mut attr_type = 0
+    local ints = List.new<Int>()
+    local floats = List.new<Float>()
+    local strings = List.new<String>()
+    let mut tensor = onnx_empty_tensor()
+    let mut graph = List.new<Int>()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { name = String.concat(left: read "attr", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 20 { attr_type = f.int_value }
+        if f.field == 2 { List.push<Float>(list: mut floats, value: read Int.to_float(value: read f.int_value)) }
+        if f.field == 3 {
+            let iv = f.int_value
+            List.push<Int>(list: mut ints, value: read iv)
+        }
+        if f.field == 4 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            tensor = _parse_TensorProto(fields: read nested)
+        }
+        if f.field == 5 { graph = f.raw }
+        if f.field == 6 { List.push<Float>(list: mut floats, value: read Int.to_float(value: read f.int_value)) }
+        if f.field == 7 {
+            let iv = f.int_value
+            List.push<Int>(list: mut ints, value: read iv)
+        }
+        if f.field == 8 { List.push<String>(list: mut strings, value: read "bytes") }
+        i = i + 1
+    }
+    return OnnxAttributeProto(name: String.copy(value: read name), attr_type: attr_type, ints: take ints, floats: take floats, strings: take strings, tensor: tensor.clone(), graph: onnx_copy_ints(values: read graph))
+}
+
+fn _parse_NodeProto(fields: read List<OnnxParseField>) -> fresh OnnxNodeProto {
+    let mut node = onnx_empty_node()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { List.push<String>(list: mut node.inputs, value: read String.concat(left: read "in", right: read Int.to_string(value: read f.int_value))) }
+        if f.field == 2 { List.push<String>(list: mut node.outputs, value: read String.concat(left: read "out", right: read Int.to_string(value: read f.int_value))) }
+        if f.field == 3 { node.name = String.concat(left: read "node", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 4 { node.op_type = String.concat(left: read "op", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 7 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local attr = _parse_AttributeProto(fields: read nested)
+            List.push<OnnxAttributeProto>(list: mut node.attributes, value: read (manage attr))
+        }
+        if f.field == 9 { node.domain = from_onnx(domain: read node.domain) }
+        i = i + 1
+    }
+    return node.clone()
+}
+
+fn _parse_StringStringEntryProto(fields: read List<OnnxParseField>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        List.push<String>(list: mut out, value: read String.concat(left: read "field", right: read Int.to_string(value: read f.field)))
+        i = i + 1
+    }
+    return take out
+}
+
+fn _parse_OperatorSetIdProto(fields: read List<OnnxParseField>) -> fresh OnnxOperatorSetIdProto {
+    let mut domain = String.copy(value: read "")
+    let mut version = 0
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { domain = from_onnx(domain: read domain) }
+        if f.field == 2 { version = f.int_value }
+        i = i + 1
+    }
+    return OnnxOperatorSetIdProto(domain: String.copy(value: read domain), version: version)
+}
+
+fn _parse_GraphProto(fields: read List<OnnxParseField>) -> fresh OnnxGraphProto {
+    let mut graph = onnx_empty_graph()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local node = _parse_NodeProto(fields: read nested)
+            List.push<OnnxNodeProto>(list: mut graph.nodes, value: read (manage node))
+        }
+        if f.field == 2 { graph.name = String.concat(left: read "graph", right: read Int.to_string(value: read f.int_value)) }
+        if f.field == 5 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local tensor = _parse_TensorProto(fields: read nested)
+            List.push<OnnxTensorProto>(list: mut graph.initializers, value: read (manage tensor))
+        }
+        if f.field == 11 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local inp = _parse_ValueInfoProto(fields: read nested)
+            List.push<OnnxValueInfoProto>(list: mut graph.inputs, value: read (manage inp))
+        }
+        if f.field == 12 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local outp = _parse_ValueInfoProto(fields: read nested)
+            List.push<OnnxValueInfoProto>(list: mut graph.outputs, value: read (manage outp))
+        }
+        i = i + 1
+    }
+    return graph.clone()
+}
+
+fn _parse_ModelProto(fields: read List<OnnxParseField>) -> fresh OnnxModelProto {
+    let mut ir_version = 0
+    let mut graph = onnx_empty_graph()
+    local opsets = List.new<OnnxOperatorSetIdProto>()
+    let mut i = 0
+    while i < List.len<OnnxParseField>(list: read fields) {
+        local f = List.get<OnnxParseField>(list: read fields, index: i)
+        if f.field == 1 { ir_version = f.int_value }
+        if f.field == 7 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            graph = _parse_GraphProto(fields: read nested)
+        }
+        if f.field == 8 {
+            local r = onnx_reader_new(data: read f.raw)
+            local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
+            local op = _parse_OperatorSetIdProto(fields: read nested)
+            List.push<OnnxOperatorSetIdProto>(list: mut opsets, value: read (manage op))
+        }
+        i = i + 1
+    }
+    return OnnxModelProto(ir_version: ir_version, graph: graph.clone(), opsets: take opsets)
+}
+
+fn parse(reader: mut OnnxReader) -> fresh OnnxModelProto {
+    local fields = _parse_message(reader: mut reader, end_pos: List.len<Int>(list: read reader.data))
+    return _parse_ModelProto(fields: read fields)
+}
+
+fn _to_python_const(tensor: read OnnxTensorProto) -> fresh String {
+    let dtype_name = to_dtype(data_type: tensor.data_type).name
+    return String.concat(left: read tensor.name, right: read String.concat(left: read ":", right: read dtype_name))
+}
+
+fn _init_from_graph(graph: read OnnxGraphProto, is_subgraph: Bool) -> fresh OnnxRunnerState {
+    local names = List.new<String>()
+    local values = List.new<OnnxTensorProto>()
+    let mut i = 0
+    while i < List.len<OnnxTensorProto>(list: read graph.initializers) {
+        local t = List.get<OnnxTensorProto>(list: read graph.initializers, index: i)
+        List.push<String>(list: mut names, value: read String.copy(value: read t.name))
+        List.push<OnnxTensorProto>(list: mut values, value: read (manage t))
+        i = i + 1
+    }
+    return OnnxRunnerState(graph: graph.clone(), is_subgraph: is_subgraph, const_names: take names, const_values: take values)
+}
+
+fn _from_subgraph(graph: read OnnxGraphProto) -> fresh OnnxRunnerState {
+    return _init_from_graph(graph: read graph, is_subgraph: true)
+}
+
+fn _parse_input(runner: mut OnnxRunnerState, name: read String, value: Int, spec: read OnnxValueInfoProto) -> Int {
+    if String.len(value: read name) == 0 { return value }
+    if String.len(value: read spec.name) == 0 { return value }
+    return value
+}
+
+fn _select_op(runner: read OnnxRunnerState, op: read String, domain: read String, version: Int) -> fresh String {
+    let dom = from_onnx(domain: read domain)
+    let base = String.concat(left: read dom, right: read ".")
+    let named = String.concat(left: read base, right: read op)
+    if version > 0 { return String.concat(left: read named, right: read String.concat(left: read "@", right: read Int.to_string(value: read version))) }
+    return String.copy(value: read named)
+}
+
+fn get_empty_input_data(cache: mut UOpCache, runner: read OnnxRunnerState, device: read String, dtype: read DType) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<OnnxValueInfoProto>(list: read runner.graph.inputs) {
+        local inp = List.get<OnnxValueInfoProto>(list: read runner.graph.inputs, index: i)
+        let dt = inp.dtype
+        let chosen = dtype
+        let mut shape = inp.shape
+        if List.len<Int>(list: read shape) == 0 { List.push<Int>(list: mut shape, value: read 1) }
+        let t = tensor_zeros(cache: mut cache, dt: read chosen, shape: read shape)
+        List.push<Int>(list: mut out, value: read t)
+        if DType.itemsize(self: read dt) < 0 { List.push<Int>(list: mut out, value: read t) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _get_python_const(runner: mut OnnxRunnerState, name: read String, op: read String, idx: Int) -> fresh String {
+    let mut i = 0
+    while i < List.len<String>(list: read runner.const_names) {
+        if List.get<String>(list: read runner.const_names, index: i) == name {
+            local t = List.get<OnnxTensorProto>(list: read runner.const_values, index: i)
+            return _to_python_const(tensor: read t)
+        }
+        i = i + 1
+    }
+    return String.concat(left: read op, right: read String.concat(left: read "#", right: read Int.to_string(value: read idx)))
+}
+
+fn get_onnx_ops() -> fresh List<String> {
+    local ops = List.new<String>()
+    List.push<String>(list: mut ops, value: read "Add")
+    List.push<String>(list: mut ops, value: read "Sub")
+    List.push<String>(list: mut ops, value: read "Mul")
+    List.push<String>(list: mut ops, value: read "Div")
+    List.push<String>(list: mut ops, value: read "MatMul")
+    List.push<String>(list: mut ops, value: read "Gemm")
+    List.push<String>(list: mut ops, value: read "Conv")
+    List.push<String>(list: mut ops, value: read "Relu")
+    List.push<String>(list: mut ops, value: read "Reshape")
+    List.push<String>(list: mut ops, value: read "Transpose")
+    return take ops
+}

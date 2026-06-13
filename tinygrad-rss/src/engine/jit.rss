@@ -1,0 +1,400 @@
+// Source-shaped slice of tinygrad/engine/jit.py.
+//
+// This module ports the capture/lowering metadata surface over the integrated UOp graph:
+// pruning, graph-call packing, resource/dependency summaries, and TinyJit state helpers.
+// Backend-specific graph execution remains represented as CUSTOM_FUNCTION("graph") calls.
+features: local
+
+struct JitPruneResult derives(Clone) {
+    kept: Int,
+    onetime: Int,
+}
+
+struct JitDepsTracker derives(Clone) {
+    w_start: List<Int>,
+    w_end: List<Int>,
+    w_dep: List<Int>,
+    r_start: List<Int>,
+    r_end: List<Int>,
+    r_dep: List<Int>,
+}
+
+struct GraphRunnerState derives(Clone) {
+    linear: Int,
+    calls: List<Int>,
+    vars: List<String>,
+    device: String,
+    estimates: Estimates,
+    deps: JitDepsTracker,
+}
+
+struct CapturedJitState derives(Clone) {
+    ret: Int,
+    linear: Int,
+    expected_names: List<String>,
+    expected_input_info: List<Int>,
+    written_uops: List<Int>,
+}
+
+struct TinyJitState derives(Clone) {
+    cnt: Int,
+    captured: Bool,
+    captured_state: CapturedJitState,
+    prune: Bool,
+    linears: List<Int>,
+}
+
+struct JitInputs derives(Clone) {
+    input_uops: List<Int>,
+    var_vals: Map<String, Int>,
+    names: List<String>,
+    expected_input_info: List<Int>,
+}
+
+fn jit_empty_deps_tracker() -> fresh JitDepsTracker {
+    local ws = List.new<Int>()
+    local we = List.new<Int>()
+    local wd = List.new<Int>()
+    local rs = List.new<Int>()
+    local re = List.new<Int>()
+    local rd = List.new<Int>()
+    return JitDepsTracker(w_start: take ws, w_end: take we, w_dep: take wd, r_start: take rs, r_end: take re, r_dep: take rd)
+}
+
+fn jit_empty_captured_state() -> fresh CapturedJitState {
+    local names = List.new<String>()
+    local info = List.new<Int>()
+    local written = List.new<Int>()
+    return CapturedJitState(ret: 0, linear: 0, expected_names: take names, expected_input_info: take info, written_uops: take written)
+}
+
+fn tiny_jit_new(prune: Bool) -> fresh TinyJitState {
+    local linears = List.new<Int>()
+    return TinyJitState(cnt: 0, captured: false, captured_state: jit_empty_captured_state(), prune: prune, linears: take linears)
+}
+
+fn jit_list_contains(items: read List<Int>, value: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read items) {
+        if List.get<Int>(list: read items, index: i) == value { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn jit_push_unique_int(items: mut List<Int>, value: Int) -> Unit {
+    if jit_list_contains(items: read items, value: value) == false {
+        List.push<Int>(list: mut items, value: read value)
+    }
+    return Unit
+}
+
+fn jit_push_unique_string(items: mut List<String>, value: read String) -> Unit {
+    let mut i = 0
+    while i < List.len<String>(list: read items) {
+        if List.get<String>(list: read items, index: i) == value { return Unit }
+        i = i + 1
+    }
+    List.push<String>(list: mut items, value: read String.copy(value: read value))
+    return Unit
+}
+
+fn jit_any_overlap(a: read List<Int>, b: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read a) {
+        if jit_list_contains(items: read b, value: List.get<Int>(list: read a, index: i)) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn jit_extend_unique(dst: mut List<Int>, src: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        jit_push_unique_int(items: mut dst, value: List.get<Int>(list: read src, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn prune_linear(cache: mut UOpCache, linear: Int, needed: read List<Int>) -> fresh JitPruneResult {
+    local keep_src = List.new<Int>()
+    local onetime_src = List.new<Int>()
+    local live = copy_int_list(l: read needed)
+    if node_op(cache: read cache, id: linear) != LINEAR {
+        return JitPruneResult(kept: mk_linear(cache: mut cache, srcs: read keep_src), onetime: mk_linear(cache: mut cache, srcs: read onetime_src))
+    }
+    let mut i = node_num_src(cache: read cache, id: linear) - 1
+    while i >= 0 {
+        let call = node_src_id(cache: read cache, id: linear, k: i)
+        local bufs = _collect_bufs(cache: read cache, id: call, held: read live)
+        if jit_any_overlap(a: read bufs, b: read live) || List.len<Int>(list: read live) == 0 {
+            List.push<Int>(list: mut keep_src, value: read call)
+            jit_extend_unique(dst: mut live, src: read bufs)
+        } else {
+            List.push<Int>(list: mut onetime_src, value: read call)
+        }
+        i = i - 1
+    }
+    local keep_order = List.new<Int>()
+    local one_order = List.new<Int>()
+    let mut ki = List.len<Int>(list: read keep_src) - 1
+    while ki >= 0 {
+        List.push<Int>(list: mut keep_order, value: read List.get<Int>(list: read keep_src, index: ki))
+        ki = ki - 1
+    }
+    let mut oi = List.len<Int>(list: read onetime_src) - 1
+    while oi >= 0 {
+        List.push<Int>(list: mut one_order, value: read List.get<Int>(list: read onetime_src, index: oi))
+        oi = oi - 1
+    }
+    return JitPruneResult(kept: mk_linear(cache: mut cache, srcs: read keep_order), onetime: mk_linear(cache: mut cache, srcs: read one_order))
+}
+
+fn jit_collect_call_params(cache: read UOpCache, id: Int, out: mut List<Int>) -> Unit {
+    if node_op(cache: read cache, id: id) == PARAM {
+        jit_push_unique_int(items: mut out, value: id)
+        return Unit
+    }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        jit_collect_call_params(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), out: mut out)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn create_graph_call(cache: mut UOpCache, batch: read List<Int>) -> Int {
+    let inner = mk_linear(cache: mut cache, srcs: read batch)
+    local graph_src = List.new<Int>()
+    List.push<Int>(list: mut graph_src, value: read inner)
+    let graph = mk_custom_function(cache: mut cache, name: read "graph", dt: read dt_void(), srcs: read graph_src)
+    local args = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read batch) {
+        jit_collect_call_params(cache: read cache, id: List.get<Int>(list: read batch, index: i), out: mut args)
+        i = i + 1
+    }
+    let ca = mk_call_arg(name: read "graph", has_name: true, precompile: false, precompile_backward: false)
+    return mk_call(cache: mut cache, body: graph, args: read args, call: read ca)
+}
+
+fn graph_split_rewrite(cache: mut UOpCache, linear: Int, max_batch_size: Int) -> Int {
+    if node_op(cache: read cache, id: linear) != LINEAR { return linear }
+    local out = List.new<Int>()
+    let mut batch = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        let call = node_src_id(cache: read cache, id: linear, k: i)
+        if supports_uop(cache: read cache, batch_devs: read out, new_call: call) {
+            List.push<Int>(list: mut batch, value: read call)
+            if max_batch_size > 0 && List.len<Int>(list: read batch) >= max_batch_size {
+                List.push<Int>(list: mut out, value: read create_graph_call(cache: mut cache, batch: read batch))
+                batch = List.new<Int>()
+            }
+        } else {
+            if List.len<Int>(list: read batch) > 0 {
+                List.push<Int>(list: mut out, value: read create_graph_call(cache: mut cache, batch: read batch))
+                batch = List.new<Int>()
+            }
+            List.push<Int>(list: mut out, value: read call)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read batch) > 0 {
+        if List.len<Int>(list: read batch) == 1 {
+            List.push<Int>(list: mut out, value: read List.get<Int>(list: read batch, index: 0))
+        } else {
+            List.push<Int>(list: mut out, value: read create_graph_call(cache: mut cache, batch: read batch))
+        }
+    }
+    return mk_linear(cache: mut cache, srcs: read out)
+}
+
+fn _copy_input(cache: mut UOpCache, ctx: mut RealizeExecContext, u: Int) -> Int {
+    let mut dev = String.copy(value: read "CPU")
+    if node_effective_device_count(cache: read cache, id: u) > 0 {
+        dev = node_effective_device_name(cache: read cache, id: u, index: 0)
+    }
+    return mk_copy_to_device(cache: mut cache, x: u, device: read dev)
+}
+
+fn jit_lower(cache: mut UOpCache, linear: Int, held_bufs: read List<Int>, input_uops: read List<Int>) -> Int {
+    let compiled = compile_linear(cache: read cache, linear: linear, beam: read None, validate: false)
+    local planned = memory_plan_rewrite(cache: mut cache, linear: compiled, held: read held_bufs)
+    return graph_split_rewrite(cache: mut cache, linear: planned.linear, max_batch_size: 0)
+}
+
+fn _check_no_non_tensor_return(ret: Int) -> Bool {
+    return ret >= 0
+}
+
+fn graph_class(dev: read String) -> fresh String {
+    if String.len(value: read dev) == 0 { return String.copy(value: read "") }
+    return String.copy(value: read "GraphRunner")
+}
+
+fn _buf_key(buf: Int) -> Int {
+    return buf
+}
+
+fn access_resources(deps: mut JitDepsTracker, resources: read List<Int>, write: Bool, dep: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read resources) {
+        let r = _buf_key(buf: List.get<Int>(list: read resources, index: i))
+        if write {
+            List.push<Int>(list: mut deps.w_start, value: read r)
+            List.push<Int>(list: mut deps.w_end, value: read r)
+            List.push<Int>(list: mut deps.w_dep, value: read dep)
+        } else {
+            List.push<Int>(list: mut deps.r_start, value: read r)
+            List.push<Int>(list: mut deps.r_end, value: read r)
+            List.push<Int>(list: mut deps.r_dep, value: read dep)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn _access_resources(cache: read UOpCache, deps: mut JitDepsTracker, call: Int, dep: Int) -> Unit {
+    local io = get_call_outs_ins(cache: read cache, call: call)
+    local args = get_call_arg_uops(cache: read cache, call: call)
+    local outs = List.new<Int>()
+    local ins = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read io.outs) {
+        let slot = List.get<Int>(list: read io.outs, index: i)
+        if slot >= 0 && slot < List.len<Int>(list: read args) {
+            List.push<Int>(list: mut outs, value: read List.get<Int>(list: read args, index: slot))
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < List.len<Int>(list: read io.ins) {
+        let slot = List.get<Int>(list: read io.ins, index: j)
+        if slot >= 0 && slot < List.len<Int>(list: read args) {
+            List.push<Int>(list: mut ins, value: read List.get<Int>(list: read args, index: slot))
+        }
+        j = j + 1
+    }
+    access_resources(deps: mut deps, resources: read outs, write: true, dep: dep)
+    access_resources(deps: mut deps, resources: read ins, write: false, dep: dep)
+    return Unit
+}
+
+fn updated_vars(cache: read UOpCache, runner: read GraphRunnerState, var_vals: read Map<String, Int>) -> fresh ProgramVals {
+    local values = List.new<Int>()
+    local has_value = List.new<Bool>()
+    local is_runtime = List.new<Bool>()
+    let mut i = 0
+    while i < List.len<String>(list: read runner.vars) {
+        let name = List.get<String>(list: read runner.vars, index: i)
+        match Map.get<String, Int>(map: read var_vals, key: read name) {
+            Some(v) => {
+                List.push<Int>(list: mut values, value: read v)
+                List.push<Bool>(list: mut has_value, value: read true)
+                List.push<Bool>(list: mut is_runtime, value: read false)
+            }
+            None => {
+                List.push<Int>(list: mut values, value: read 0)
+                List.push<Bool>(list: mut has_value, value: read false)
+                List.push<Bool>(list: mut is_runtime, value: read true)
+            }
+        }
+        i = i + 1
+    }
+    return ProgramVals(values: take values, has_value: take has_value, is_runtime: take is_runtime)
+}
+
+fn updated_launch_dims(cache: read UOpCache, runner: read GraphRunnerState, var_vals: read Map<String, Int>) -> fresh ProgramLaunchDims {
+    local global_size = List.new<Int>()
+    List.push<Int>(list: mut global_size, value: read runner.estimates.ops)
+    local local_size = List.new<Int>()
+    return ProgramLaunchDims(global_size: take global_size, has_local_size: false, local_size: take local_size)
+}
+
+fn _all_devs(cache: read UOpCache, batch_devs: read List<String>, new_call: Int) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read batch_devs) {
+        jit_push_unique_string(items: mut out, value: read List.get<String>(list: read batch_devs, index: i))
+        i = i + 1
+    }
+    local args = get_call_arg_uops(cache: read cache, call: new_call)
+    let mut j = 0
+    while j < List.len<Int>(list: read args) {
+        let a = List.get<Int>(list: read args, index: j)
+        let cnt = node_effective_device_count(cache: read cache, id: a)
+        let mut k = 0
+        while k < cnt {
+            local dev = node_effective_device_name(cache: read cache, id: a, index: k)
+            if String.len(value: read dev) > 0 { jit_push_unique_string(items: mut out, value: read dev) }
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return take out
+}
+
+fn supports_uop(cache: read UOpCache, batch_devs: read List<Int>, new_call: Int) -> Bool {
+    if node_op(cache: read cache, id: new_call) != CALL { return false }
+    if node_num_src(cache: read cache, id: new_call) == 0 { return false }
+    let body = node_src_id(cache: read cache, id: new_call, k: 0)
+    let op = node_op(cache: read cache, id: body)
+    if op == PROGRAM || op == COPY || op == CUSTOM_FUNCTION || op == SLICE { return true }
+    return false
+}
+
+fn _written_uops(cache: read UOpCache, linear: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if node_op(cache: read cache, id: linear) != LINEAR { return take out }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: linear) {
+        let call = node_src_id(cache: read cache, id: linear, k: i)
+        local io = get_call_outs_ins(cache: read cache, call: call)
+        local args = get_call_arg_uops(cache: read cache, call: call)
+        let mut j = 0
+        while j < List.len<Int>(list: read io.outs) {
+            let slot = List.get<Int>(list: read io.outs, index: j)
+            if slot >= 0 && slot < List.len<Int>(list: read args) {
+                jit_push_unique_int(items: mut out, value: List.get<Int>(list: read args, index: slot))
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn free_intermediates(ctx: mut RealizeExecContext, written_uops: read List<Int>) -> Int {
+    return List.len<Int>(list: read written_uops)
+}
+
+fn _prepare_jit_inputs(input_uops: read List<Int>) -> fresh JitInputs {
+    local copied = copy_int_list(l: read input_uops)
+    local vals = Map.new<String, Int>()
+    local names = List.new<String>()
+    local info = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read input_uops) {
+        let nm = Int.to_string(value: read i)
+        List.push<String>(list: mut names, value: read nm)
+        List.push<Int>(list: mut info, value: read List.get<Int>(list: read input_uops, index: i))
+        i = i + 1
+    }
+    return JitInputs(input_uops: take copied, var_vals: take vals, names: take names, expected_input_info: take info)
+}
+
+fn add_linear(state: mut TinyJitState, linear: Int, var_vals: read Map<String, Int>) -> Unit {
+    List.push<Int>(list: mut state.linears, value: read linear)
+    state.cnt = state.cnt + 1
+    return Unit
+}
+
+fn reset(state: mut TinyJitState) -> Unit {
+    state.cnt = 0
+    state.captured = false
+    state.captured_state = jit_empty_captured_state()
+    state.linears = List.new<Int>()
+    return Unit
+}

@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 41 RSS files, 34,559 LOC.
+  - integrated `tinygrad-rss/src`: 42 RSS files, 35,009 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -33,7 +33,8 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.
-  - focused runtime-device batch: `device.py` 66/66 symbols covered in rough inventory.
+  - focused runtime-engine/device/codegen batch: `engine/jit.py`, `engine/realize.py`,
+    `device.py`, `renderer/cstyle.py`, and `codegen/opt/*`: 210/210 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -464,6 +465,17 @@ Integrated pieces:
   metadata/no-op placeholders. Dynamic symbolic launch dimension evaluation, general compiled
   numeric kernel invocation, validation execution, graph execution, full multi-buffer/device
   remapping, and dynamic-library runtime plumbing remain unported.
+- `engine/jit.rss`: source-shaped `tinygrad/engine/jit.py` facade and metadata slice covering
+  `prune_linear`, `create_graph_call`, `graph_split_rewrite`, `_copy_input`, `jit_lower`,
+  `_check_no_non_tensor_return`, `graph_class`, `_buf_key`, `access_resources`,
+  `updated_vars`, `updated_launch_dims`, `_access_resources`, `_all_devs`, `supports_uop`,
+  `_written_uops`, `free_intermediates`, `_prepare_jit_inputs`, `add_linear`, and `reset`.
+  The implementation builds real integrated UOps for graph packing (`CALL(CUSTOM_FUNCTION("graph"))`
+  over a nested `LINEAR`), threads through the current `compile_linear`/memory planner/lowering
+  path, records read/write resource metadata from call outs/ins, and exposes RSS state structs for
+  graph runner, captured JIT, and TinyJit-style counters. Backend-specific graph launch, Python
+  object identity/weakref behavior, exact tensor-return validation, input-copy aliasing rules, and
+  full dynamic launch-dimension updates remain later fidelity work.
 - `gradient.rss`: first integrated reverse-mode autodiff slice over interned UOp ids, covering
   target-specific symbolic gradients for `CAST`, `ADD`, `SUB`, `MUL`, `FDIV`, unary
   `NEG`/`RECIPROCAL`/`SQRT`/`EXP2`/`LOG2`/`SIN`/`TRUNC`, binary `POW`, `MAX` with upstream
@@ -1134,8 +1146,8 @@ Major missing integrated work:
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/cstyle.py`: exact target-specific compiler integration, full prefix emission, and
   renderer policy beyond the source-shaped facade names now in `renderer/cstyle.rss`.
-- `engine/*`, target-specific `runtime/*`, `runtime/support/*`, and native device backends:
-  handwritten execution, device/runtime/compiler layers.
+- target-specific `runtime/*`, `runtime/support/*`, native device backends, and full JIT graph
+  execution: handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
   ported and accounted for.
 - `nn/*`: layers, optimizers, state, datasets where in scope. `nn/onnx.py` may be scoped as a

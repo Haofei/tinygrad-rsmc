@@ -420,8 +420,9 @@ Integrated pieces:
   Source-shaped facades also include conservative folded-index/image entry points, scalar
   DEFINE_LOCAL/DEFINE_REG buffer devectorization, addrspace-aware `BUFFER(ParamArg)` local/reg
   buffer devectorization, simple CAST-backed index lane expansion,
-  and no-range `reduce_to_acc` delegation. Full ImageDType
-  handling, exact folded-index regrouping, and range-backed DEFINE_ACC lowering remain later
+  range-backed `reduce_to_acc` lowering through REG accumulator init/update/end/readback, and
+  tensor-core `WMMA + addend` accumulator folding. Full ImageDType
+  handling, exact folded-index regrouping, and exact mergeable-END consolidation remain later
   devectorizer slices. The REG/local buffer devectorization slice now also covers upstream-shaped
   `CAST(...).index`, broadcast-index, and GEP-index lane mapping for addrspace-tagged REG buffers.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,

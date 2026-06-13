@@ -6,8 +6,8 @@
 // deps first, and vector CONST/GEP/STACK nodes are normalized for rendering.
 // It also ports the context-free load/store folding rules for STACK-backed
 // INDEX, GEP, PTRCAT, add-load insertion, and nested-load cleanup.
-// ImageDType-specific rewrites and full range-backed REDUCE-to-acc lowering
-// remain later slices.
+// ImageDType-specific rewrites and exact mergeable-END consolidation remain
+// later slices.
 features: local
 
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
@@ -431,8 +431,33 @@ fn devectorizer_cast_after(cache: mut UOpCache, id: Int) -> Option<Int> {
     return Some(mk_after(cache: mut cache, id: casted, srcs: read deps))
 }
 
+fn devectorizer_wmma_add_accumulate(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != ADD { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let lhs = node_src_id(cache: read cache, id: id, k: 0)
+    let rhs = node_src_id(cache: read cache, id: id, k: 1)
+    let mut wmma = lhs
+    let mut addend = rhs
+    if node_op(cache: read cache, id: wmma) != WMMA {
+        wmma = rhs
+        addend = lhs
+    }
+    if node_op(cache: read cache, id: wmma) != WMMA { return None }
+    if node_num_src(cache: read cache, id: wmma) != 3 { return None }
+    let a = node_src_id(cache: read cache, id: wmma, k: 0)
+    let b = node_src_id(cache: read cache, id: wmma, k: 1)
+    let acc = node_src_id(cache: read cache, id: wmma, k: 2)
+    let acc_add = mk_alu2(cache: mut cache, op: ADD, dt: read node_full_dtype(cache: read cache, id: acc), x: acc, y: addend)
+    local arg = node_argints(cache: read cache, id: wmma)
+    return Some(mk_wmma(cache: mut cache, a_id: a, b_id: b, acc_id: acc_add, dt: read node_full_dtype(cache: read cache, id: wmma), arg: read arg))
+}
+
 fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
     match devectorizer_cast_after(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match devectorizer_wmma_add_accumulate(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
     }
@@ -483,7 +508,7 @@ fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
-    match devectorizer_horizontal_reduce(cache: mut cache, id: id) {
+    match reduce_to_acc(cache: mut cache, red: id) {
         Some(r) => { return Some(r) }
         None => {}
     }
@@ -754,7 +779,64 @@ fn horizontal_reduce(cache: mut UOpCache, inp: Int, out_dtype: read DType) -> fr
 }
 
 fn reduce_to_acc(cache: mut UOpCache, red: Int) -> Option<Int> {
-    return devectorizer_horizontal_reduce(cache: mut cache, id: red)
+    if node_op(cache: read cache, id: red) != REDUCE { return None }
+    if node_num_src(cache: read cache, id: red) < 1 { return None }
+    let inp = node_src_id(cache: read cache, id: red, k: 0)
+    let out_dt = node_full_dtype(cache: read cache, id: red)
+    local parts = horizontal_reduce(cache: mut cache, inp: inp, out_dtype: read out_dt)
+    if List.len<Int>(list: read parts) == 0 { return None }
+    let rop = devectorizer_reduce_op(kind: node_reduce_kind(cache: read cache, id: red))
+    if node_num_src(cache: read cache, id: red) == 1 {
+        let mut ret = List.get<Int>(list: read parts, index: 0)
+        let mut i = 1
+        while i < List.len<Int>(list: read parts) {
+            ret = mk_alu2(cache: mut cache, op: rop.clone(), dt: read out_dt, x: ret, y: List.get<Int>(list: read parts, index: i))
+            i = i + 1
+        }
+        return Some(ret)
+    }
+    local acc_shape = List.new<Int>()
+    List.push<Int>(list: mut acc_shape, value: read 1)
+    let acc = mk_define_reg(cache: mut cache, slot: cache_len(cache: read cache), dt: read out_dt, shape: read acc_shape)
+    let zero = mk_const_int(cache: mut cache, dt: read dt_int32(), v: 0)
+    local init_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut init_idx_srcs, value: read zero)
+    let init_ptr = mk_index(cache: mut cache, base: acc, srcs: read init_idx_srcs, ptr: true)
+    let identity = mk_const_int(cache: mut cache, dt: read out_dt, v: identity_element(op: read rop))
+    let init_store = mk_store(cache: mut cache, ptr: init_ptr, value: identity, gate: read None)
+    local after_deps = List.new<Int>()
+    List.push<Int>(list: mut after_deps, value: read init_store)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: red) {
+        List.push<Int>(list: mut after_deps, value: read node_src_id(cache: read cache, id: red, k: i))
+        i = i + 1
+    }
+    let acc_after = mk_after(cache: mut cache, id: acc, srcs: read after_deps)
+    local read_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut read_idx_srcs, value: read zero)
+    let mut ret = mk_index(cache: mut cache, base: acc_after, srcs: read read_idx_srcs, ptr: false)
+    let mut j = 0
+    while j < List.len<Int>(list: read parts) {
+        ret = mk_alu2(cache: mut cache, op: rop.clone(), dt: read out_dt, x: ret, y: List.get<Int>(list: read parts, index: j))
+        j = j + 1
+    }
+    local write_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut write_idx_srcs, value: read zero)
+    let write_ptr = mk_index(cache: mut cache, base: acc, srcs: read write_idx_srcs, ptr: true)
+    let write = mk_store(cache: mut cache, ptr: write_ptr, value: ret, gate: read None)
+    local ranges = List.new<Int>()
+    let mut k = 1
+    while k < node_num_src(cache: read cache, id: red) {
+        List.push<Int>(list: mut ranges, value: read node_src_id(cache: read cache, id: red, k: k))
+        k = k + 1
+    }
+    let ended = mk_end(cache: mut cache, id: write, srcs: read ranges)
+    local done = List.new<Int>()
+    List.push<Int>(list: mut done, value: read ended)
+    let final_acc = mk_after(cache: mut cache, id: acc, srcs: read done)
+    local final_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut final_idx_srcs, value: read zero)
+    return Some(mk_index(cache: mut cache, base: final_acc, srcs: read final_idx_srcs, ptr: false))
 }
 
 fn merge_reduce_ends(cache: mut UOpCache, sink: Int) -> Option<Int> {

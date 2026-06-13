@@ -283,5 +283,142 @@ fn load_state_dict(cache: mut UOpCache, model: read List<TensorState>, state_dic
 }
 
 fn zip_extract(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }
-fn tar_extract(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }
+
+fn tar_is_zero_block(data: read List<Float>, offset: Int) -> Bool {
+    if offset + 512 > List.len<Float>(list: read data) { return true }
+    let mut i = 0
+    while i < 512 {
+        if (trunc_float_to_int(v: List.get<Float>(list: read data, index: offset + i)) & 255) != 0 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn tar_read_octal(data: read List<Float>, offset: Int, len: Int) -> Int {
+    let mut out = 0
+    let mut i = 0
+    while i < len && offset + i < List.len<Float>(list: read data) {
+        let b = trunc_float_to_int(v: List.get<Float>(list: read data, index: offset + i)) & 255
+        if b >= 48 && b <= 55 { out = out * 8 + (b - 48) }
+        i = i + 1
+    }
+    return out
+}
+
+fn tar_name_from_header(data: read List<Float>, offset: Int) -> fresh String {
+    local name_bytes = List.new<Int>()
+    let mut i = 0
+    while i < 100 && offset + i < List.len<Float>(list: read data) {
+        let b = trunc_float_to_int(v: List.get<Float>(list: read data, index: offset + i)) & 255
+        if b == 0 { return Bytes.to_string(value: read Bytes.from_uints(values: read name_bytes)) }
+        push1(l: mut name_bytes, a: b)
+        i = i + 1
+    }
+    return Bytes.to_string(value: read Bytes.from_uints(values: read name_bytes))
+}
+
+fn tar_next_offset(offset: Int, size: Int) -> Int {
+    return offset + 512 + round_up(num: size, amt: 512)
+}
+
+fn tar_extract(cache: mut UOpCache, t: Int) -> fresh StateDict {
+    local sd = state_dict_new()
+    local data = tensor_data(cache: read cache, x: t)
+    let mut offset = 0
+    while offset + 512 <= List.len<Float>(list: read data) && tar_is_zero_block(data: read data, offset: offset) == false {
+        let size = tar_read_octal(data: read data, offset: offset + 124, len: 12)
+        let typeflag = trunc_float_to_int(v: List.get<Float>(list: read data, index: offset + 156)) & 255
+        if offset + 512 + size <= List.len<Float>(list: read data) && (typeflag == 0 || typeflag == 48) {
+            local name = tar_name_from_header(data: read data, offset: offset)
+            local raw = state_bytes_from_tensor_slice(cache: read cache, t: t, start: offset + 512, len: size)
+            let tensor = tensor_bytes_to_1d(cache: mut cache, bytes: read raw)
+            List.push<String>(list: mut sd.names, value: read (manage name))
+            push1(l: mut sd.tensors, a: tensor)
+        }
+        offset = tar_next_offset(offset: offset, size: size)
+    }
+    return take sd
+}
+
+fn tar_smoke_push_zero(dst: mut List<Int>, n: Int) -> Unit {
+    let mut i = 0
+    while i < n {
+        push1(l: mut dst, a: 0)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn tar_smoke_push_bytes(dst: mut List<Int>, src: read List<Int>) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read src) {
+        push1(l: mut dst, a: List.get<Int>(list: read src, index: i))
+        i = i + 1
+    }
+    return Unit
+}
+
+fn tar_smoke_push_string_padded(dst: mut List<Int>, s: read String, width: Int) -> Unit {
+    local bs = Bytes.to_uints(value: read String.to_bytes(value: read s))
+    let mut i = 0
+    while i < width {
+        if i < List.len<Int>(list: read bs) {
+            push1(l: mut dst, a: List.get<Int>(list: read bs, index: i))
+        } else {
+            push1(l: mut dst, a: 0)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn tar_smoke_push_octal_size(dst: mut List<Int>, size: Int) -> Unit {
+    let mut div = 1073741824
+    let mut remaining = size
+    let mut i = 0
+    while i < 11 {
+        let digit = remaining / div
+        push1(l: mut dst, a: 48 + digit)
+        remaining = remaining - digit * div
+        div = div / 8
+        i = i + 1
+    }
+    push1(l: mut dst, a: 0)
+    return Unit
+}
+
+fn tar_smoke_append_header(dst: mut List<Int>, name: read String, size: Int, typeflag: Int) -> Unit {
+    tar_smoke_push_string_padded(dst: mut dst, s: read name, width: 100)
+    tar_smoke_push_string_padded(dst: mut dst, s: read "0000777", width: 8)
+    tar_smoke_push_string_padded(dst: mut dst, s: read "0000000", width: 8)
+    tar_smoke_push_string_padded(dst: mut dst, s: read "0000000", width: 8)
+    tar_smoke_push_octal_size(dst: mut dst, size: size)
+    tar_smoke_push_string_padded(dst: mut dst, s: read "00000000000", width: 12)
+    tar_smoke_push_string_padded(dst: mut dst, s: read "        ", width: 8)
+    push1(l: mut dst, a: typeflag)
+    tar_smoke_push_zero(dst: mut dst, n: 100)
+    tar_smoke_push_zero(dst: mut dst, n: 255)
+    return Unit
+}
+
+fn tar_extract_smoke(cache: mut UOpCache) -> Bool {
+    local bytes = List.new<Int>()
+    tar_smoke_append_header(dst: mut bytes, name: read "a.txt", size: 4, typeflag: 48)
+    tar_smoke_push_bytes(dst: mut bytes, src: read [65, 66, 67, 68])
+    tar_smoke_push_zero(dst: mut bytes, n: 508)
+    tar_smoke_append_header(dst: mut bytes, name: read "dir/", size: 0, typeflag: 53)
+    tar_smoke_append_header(dst: mut bytes, name: read "dir/b.bin", size: 3, typeflag: 48)
+    tar_smoke_push_bytes(dst: mut bytes, src: read [9, 8, 7])
+    tar_smoke_push_zero(dst: mut bytes, n: 509)
+    tar_smoke_push_zero(dst: mut bytes, n: 1024)
+    let tar_tensor = tensor_bytes_to_1d(cache: mut cache, bytes: read Bytes.from_uints(values: read bytes))
+    local extracted = tar_extract(cache: mut cache, t: tar_tensor)
+    if List.len<String>(list: read extracted.names) != 2 { return false }
+    if List.get<String>(list: read extracted.names, index: 0) != "a.txt" { return false }
+    if List.get<String>(list: read extracted.names, index: 1) != "dir/b.bin" { return false }
+    local a_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read extracted.tensors, index: 0))
+    local b_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read extracted.tensors, index: 1))
+    return List.len<Float>(list: read a_vals) == 4 && List.get<Float>(list: read a_vals, index: 0) == 65.0 && List.get<Float>(list: read a_vals, index: 3) == 68.0 && List.len<Float>(list: read b_vals) == 3 && List.get<Float>(list: read b_vals, index: 0) == 9.0 && List.get<Float>(list: read b_vals, index: 2) == 7.0
+}
+
 fn torch_load(cache: read UOpCache, t: Int) -> fresh StateDict { return state_dict_new() }

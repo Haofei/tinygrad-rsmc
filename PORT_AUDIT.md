@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 43,415 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 43,553 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -83,9 +83,11 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused NN state-file batch: `nn/state.py` now parses simple in-memory safetensors metadata
     from tensor-backed bytes using the upstream 8-byte header length, JSON object keys, dtype,
     shape, and `data_offsets`; `safe_load` slices raw payload bytes into typed/shaped tensors.
-    The active smoke loads a minimal `U8[4]` safetensors payload. Zip/tar/torch pickle loading,
-    file-name wrappers, compression, external storage, and full model object traversal are still
-    not exact upstream behavior.
+    It also extracts uncompressed tar regular-file members into tensor-backed byte payloads with
+    upstream-style 512-byte record stepping and directory skipping. The active smoke loads a
+    minimal `U8[4]` safetensors payload and a synthetic tar containing two regular files plus a
+    directory entry. Zip/torch pickle loading, compressed archives, file-name wrappers, external
+    storage, and full model object traversal are still not exact upstream behavior.
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.
@@ -1100,12 +1102,13 @@ Current integrated demo:
   RMS-style `_norm`, embedding forward/backward materialized helpers, optimizer entry points
   (`SGD`, `Muon`, `AdamW`, `Adam`) over explicit `TensorState` lists, state-dict/list helpers,
   tensor byte-IO shells, archive/load/save shells, deterministic `mnist`/`cifar` dataset split
-  facades, simple safetensors metadata parsing, and the first ONNX runner tensor execution slice
-  are present. The active smoke calls these entry points and checks constructor, optimizer/state
-  list, IO, embedding, dataset shape, state-file, and ONNX tensor-op behavior. This does not yet
-  implement exact upstream module objects, Python optimizer mutation semantics, complete
-  safetensors/torch/zip/tar formats, real dataset downloads/parsing, complete ONNX parsed-model
-  execution, or enough backend behavior to train real examples.
+  facades, simple safetensors metadata parsing/loading, uncompressed tar regular-file extraction,
+  and the first ONNX runner tensor execution slice are present. The active smoke calls these entry
+  points and checks constructor, optimizer/state list, IO, embedding, dataset shape, state-file,
+  tar extraction, and ONNX tensor-op behavior. This does not yet implement exact upstream module
+  objects, Python optimizer mutation semantics, complete safetensors/torch/zip/compressed-tar
+  formats, real dataset downloads/parsing, complete ONNX parsed-model execution, or enough backend
+  behavior to train real examples.
 - validates bool Tensor reductions against real tinygrad: `all()`, `any()`, `all(axis=1)`, and
   `any(axis=0)`.
 - validates Tensor `argmax`/`argmin` against real tinygrad for all, axis-0, and axis-1 cases,

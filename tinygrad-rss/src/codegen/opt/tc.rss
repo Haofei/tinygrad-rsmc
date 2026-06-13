@@ -1,0 +1,425 @@
+// Source-shaped metadata slice of tinygrad/codegen/opt/tc.py.
+//
+// This ports TensorCore table shape/dtype/axis metadata and arch selection.
+// Real WMMA lowering still belongs to postrange/search/renderer integration.
+features: local
+
+struct TensorCoreRemap derives(Clone) {
+    keys: List<String>,
+    values: List<String>,
+}
+
+struct TensorCore derives(Clone) {
+    dims: List<Int>,
+    threads: Int,
+    elements_per_thread: List<Int>,
+    dtype_in: DType,
+    dtype_out: DType,
+    opts: List<String>,
+    swizzle_a_local: List<String>,
+    swizzle_a_upcast: List<String>,
+    swizzle_a_reduce: List<String>,
+    swizzle_b_local: List<String>,
+    swizzle_b_upcast: List<String>,
+    swizzle_b_reduce: List<String>,
+}
+
+fn tc_strings() -> fresh List<String> { return List.new<String>() }
+
+fn tc_ints() -> fresh List<Int> { return List.new<Int>() }
+
+fn tc_axis_name(prefix: read String, idx: Int) -> fresh String {
+    return String.concat(left: read prefix, right: read Int.to_string(value: read idx))
+}
+
+fn tc_copy_strings(xs: read List<String>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read xs) {
+        List.push<String>(list: mut out, value: read String.copy(value: read List.get<String>(list: read xs, index: i)))
+        i = i + 1
+    }
+    return take out
+}
+
+fn tc_copy_ints(xs: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read xs) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read xs, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn tc_concat_strings(a: read List<String>, b: read List<String>, c: read List<String>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read a) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read a, index: i))
+        i = i + 1
+    }
+    i = 0
+    while i < List.len<String>(list: read b) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read b, index: i))
+        i = i + 1
+    }
+    i = 0
+    while i < List.len<String>(list: read c) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read c, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn tc_starts_with(s: read String, prefix: read String) -> Bool {
+    if String.len(value: read s) < String.len(value: read prefix) { return false }
+    return String.slice(value: read s, start: 0, len: String.len(value: read prefix)) == prefix
+}
+
+fn tc_log2_int(x: Int) -> Int {
+    let mut v = x
+    let mut n = 0
+    while v > 1 {
+        v = v / 2
+        n = n + 1
+    }
+    return n
+}
+
+fn tensor_core_new(dims: read List<Int>, threads: Int, elements_per_thread: read List<Int>, dtype_in: read DType,
+                   dtype_out: read DType, opts: read List<String>, swizzle_a_local: read List<String>,
+                   swizzle_a_upcast: read List<String>, swizzle_a_reduce: read List<String>,
+                   swizzle_b_local: read List<String>, swizzle_b_upcast: read List<String>,
+                   swizzle_b_reduce: read List<String>) -> fresh TensorCore {
+    return TensorCore(dims: tc_copy_ints(xs: read dims), threads: threads, elements_per_thread: tc_copy_ints(xs: read elements_per_thread),
+                      dtype_in: dtype_copy(d: read dtype_in), dtype_out: dtype_copy(d: read dtype_out), opts: tc_copy_strings(xs: read opts),
+                      swizzle_a_local: tc_copy_strings(xs: read swizzle_a_local), swizzle_a_upcast: tc_copy_strings(xs: read swizzle_a_upcast),
+                      swizzle_a_reduce: tc_copy_strings(xs: read swizzle_a_reduce), swizzle_b_local: tc_copy_strings(xs: read swizzle_b_local),
+                      swizzle_b_upcast: tc_copy_strings(xs: read swizzle_b_upcast), swizzle_b_reduce: tc_copy_strings(xs: read swizzle_b_reduce))
+}
+
+fn get_reduce_axes(tc: read TensorCore) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let k = List.get<Int>(list: read tc.dims, index: 2)
+    let cnt = tc_log2_int(x: k)
+    let mut i = 0
+    while i < cnt {
+        List.push<Int>(list: mut out, value: read i)
+        List.push<Int>(list: mut out, value: read 2)
+        i = i + 1
+    }
+    return take out
+}
+
+fn get_upcast_axes(tc: read TensorCore) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read tc.opts) {
+        let o = List.get<String>(list: read tc.opts, index: i)
+        if tc_starts_with(s: read o, prefix: read "u") { List.push<String>(list: mut out, value: read o) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn get_local_axes(tc: read TensorCore) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<String>(list: read tc.opts) {
+        let o = List.get<String>(list: read tc.opts, index: i)
+        if tc_starts_with(s: read o, prefix: read "l") { List.push<String>(list: mut out, value: read o) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _remaps(tc: read TensorCore) -> fresh List<TensorCoreRemap> {
+    local keys = List.new<String>()
+    let local_axes = List.len<String>(list: read get_local_axes(tc: read tc))
+    let upcast_axes = List.len<String>(list: read get_upcast_axes(tc: read tc))
+    let reduce_axes = List.len<Int>(list: read get_reduce_axes(tc: read tc)) / 2
+    let mut i = 0
+    while i < local_axes {
+        List.push<String>(list: mut keys, value: read tc_axis_name(prefix: read "l", idx: i))
+        i = i + 1
+    }
+    i = 0
+    while i < upcast_axes {
+        List.push<String>(list: mut keys, value: read tc_axis_name(prefix: read "u", idx: i))
+        i = i + 1
+    }
+    i = 0
+    while i < reduce_axes {
+        List.push<String>(list: mut keys, value: read tc_axis_name(prefix: read "r", idx: i))
+        i = i + 1
+    }
+    local out = List.new<TensorCoreRemap>()
+    let av = tc_concat_strings(a: read tc.swizzle_a_local, b: read tc.swizzle_a_upcast, c: read tc.swizzle_a_reduce)
+    let bv = tc_concat_strings(a: read tc.swizzle_b_local, b: read tc.swizzle_b_upcast, c: read tc.swizzle_b_reduce)
+    List.push<TensorCoreRemap>(list: mut out, value: read TensorCoreRemap(keys: tc_copy_strings(xs: read keys), values: tc_copy_strings(xs: read av)))
+    List.push<TensorCoreRemap>(list: mut out, value: read TensorCoreRemap(keys: tc_copy_strings(xs: read keys), values: tc_copy_strings(xs: read bv)))
+    return take out
+}
+
+fn tc_remap_lookup(remap: read TensorCoreRemap, key: read String) -> fresh String {
+    let mut i = 0
+    while i < List.len<String>(list: read remap.keys) {
+        if List.get<String>(list: read remap.keys, index: i) == key {
+            if i < List.len<String>(list: read remap.values) { return String.copy(value: read List.get<String>(list: read remap.values, index: i)) }
+        }
+        i = i + 1
+    }
+    return String.copy(value: read key)
+}
+
+fn tc_index_of_string(xs: read List<String>, v: read String) -> Int {
+    let mut i = 0
+    while i < List.len<String>(list: read xs) {
+        if List.get<String>(list: read xs, index: i) == v { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn permutes_for_shape_str(tc: read TensorCore, shape: read List<String>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local remaps = _remaps(tc: read tc)
+    let mut r = 0
+    while r < List.len<TensorCoreRemap>(list: read remaps) {
+        let remap = List.get<TensorCoreRemap>(list: read remaps, index: r)
+        let mut i = 0
+        while i < List.len<String>(list: read shape) {
+            let dst = tc_remap_lookup(remap: read remap, key: read List.get<String>(list: read shape, index: i))
+            let idx = tc_index_of_string(xs: read shape, v: read dst)
+            if idx >= 0 { List.push<Int>(list: mut out, value: read idx) } else { List.push<Int>(list: mut out, value: read i) }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    return take out
+}
+
+fn base_shape_str(tc: read TensorCore) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut ucnt = 0
+    let mut lcnt = 0
+    let mut i = 0
+    while i < List.len<String>(list: read tc.opts) {
+        let opt = List.get<String>(list: read tc.opts, index: i)
+        if tc_starts_with(s: read opt, prefix: read "u") {
+            List.push<String>(list: mut out, value: read tc_axis_name(prefix: read "u", idx: ucnt))
+            ucnt = ucnt + 1
+        }
+        if tc_starts_with(s: read opt, prefix: read "l") {
+            List.push<String>(list: mut out, value: read tc_axis_name(prefix: read "l", idx: lcnt))
+            lcnt = lcnt + 1
+        }
+        i = i + 1
+    }
+    let reduce_axes = List.len<Int>(list: read get_reduce_axes(tc: read tc)) / 2
+    i = 0
+    while i < reduce_axes {
+        List.push<String>(list: mut out, value: read tc_axis_name(prefix: read "r", idx: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn base_upcast_axes(tc: read TensorCore) -> fresh List<String> {
+    local tmp = List.new<String>()
+    let reduce_axes = List.len<Int>(list: read get_reduce_axes(tc: read tc)) / 2
+    let upcast_axes = List.len<String>(list: read get_upcast_axes(tc: read tc))
+    let mut i = 0
+    while i < reduce_axes {
+        List.push<String>(list: mut tmp, value: read tc_axis_name(prefix: read "r", idx: i))
+        i = i + 1
+    }
+    i = 0
+    while i < upcast_axes {
+        List.push<String>(list: mut tmp, value: read tc_axis_name(prefix: read "u", idx: i))
+        i = i + 1
+    }
+    local out = List.new<String>()
+    i = List.len<String>(list: read tmp) - 1
+    while i >= 0 {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read tmp, index: i))
+        i = i - 1
+    }
+    return take out
+}
+
+fn __str__(tc: read TensorCore) -> fresh String {
+    let n = List.get<Int>(list: read tc.dims, index: 0)
+    let m = List.get<Int>(list: read tc.dims, index: 1)
+    let k = List.get<Int>(list: read tc.dims, index: 2)
+    let mut s = String.copy(value: read "WMMA_")
+    s = String.concat(left: read s, right: read Int.to_string(value: read n))
+    s = String.concat(left: read s, right: read "_")
+    s = String.concat(left: read s, right: read Int.to_string(value: read m))
+    s = String.concat(left: read s, right: read "_")
+    s = String.concat(left: read s, right: read Int.to_string(value: read k))
+    s = String.concat(left: read s, right: read "_")
+    s = String.concat(left: read s, right: read tc.dtype_in.name)
+    s = String.concat(left: read s, right: read "_")
+    return String.concat(left: read s, right: read tc.dtype_out.name)
+}
+
+fn __post_init__(tc: read TensorCore) -> Bool {
+    let local_axes = List.len<String>(list: read get_local_axes(tc: read tc))
+    let upcast_axes = List.len<String>(list: read get_upcast_axes(tc: read tc))
+    let reduce_axes = List.len<Int>(list: read get_reduce_axes(tc: read tc)) / 2
+    let n = List.get<Int>(list: read tc.dims, index: 0)
+    let m = List.get<Int>(list: read tc.dims, index: 1)
+    if n * m != safe_exp2(x: local_axes + upcast_axes) { return false }
+    if safe_exp2(x: local_axes) != tc.threads { return false }
+    if List.len<Int>(list: read tc.elements_per_thread) < 3 { return false }
+    if safe_exp2(x: upcast_axes) != List.get<Int>(list: read tc.elements_per_thread, index: 2) { return false }
+    if List.len<String>(list: read tc.swizzle_a_local) != local_axes { return false }
+    if List.len<String>(list: read tc.swizzle_b_local) != local_axes { return false }
+    if List.len<String>(list: read tc.swizzle_a_upcast) != upcast_axes { return false }
+    if List.len<String>(list: read tc.swizzle_b_upcast) != upcast_axes { return false }
+    if List.len<String>(list: read tc.swizzle_a_reduce) != reduce_axes { return false }
+    if List.len<String>(list: read tc.swizzle_b_reduce) != reduce_axes { return false }
+    return true
+}
+
+fn tc_add_opt(opts: mut List<String>, opt: read String) -> Unit {
+    List.push<String>(list: mut opts, value: read opt)
+    return Unit
+}
+
+fn tc_cuda_opts() -> fresh List<String> {
+    local opts = List.new<String>()
+    tc_add_opt(opts: mut opts, opt: read "u0")
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l1")
+    tc_add_opt(opts: mut opts, opt: read "l1")
+    tc_add_opt(opts: mut opts, opt: read "l1")
+    tc_add_opt(opts: mut opts, opt: read "u1")
+    return take opts
+}
+
+fn tc_push_cuda_81616(out: mut List<TensorCore>, dtype_in: read DType, dtype_out: read DType) -> Unit {
+    local dims = tc_ints()
+    List.push<Int>(list: mut dims, value: read 8)
+    List.push<Int>(list: mut dims, value: read 16)
+    List.push<Int>(list: mut dims, value: read 16)
+    local elems = tc_ints()
+    List.push<Int>(list: mut elems, value: read 8)
+    List.push<Int>(list: mut elems, value: read 4)
+    List.push<Int>(list: mut elems, value: read 4)
+    local al = tc_strings()
+    tc_add_opt(opts: mut al, opt: read "r1")
+    tc_add_opt(opts: mut al, opt: read "r2")
+    tc_add_opt(opts: mut al, opt: read "l2")
+    tc_add_opt(opts: mut al, opt: read "l3")
+    tc_add_opt(opts: mut al, opt: read "l4")
+    local au = tc_strings()
+    tc_add_opt(opts: mut au, opt: read "u1")
+    tc_add_opt(opts: mut au, opt: read "r3")
+    local ar = tc_strings()
+    tc_add_opt(opts: mut ar, opt: read "l0")
+    tc_add_opt(opts: mut ar, opt: read "l1")
+    tc_add_opt(opts: mut ar, opt: read "u0")
+    tc_add_opt(opts: mut ar, opt: read "r0")
+    local bl = tc_strings()
+    tc_add_opt(opts: mut bl, opt: read "r1")
+    tc_add_opt(opts: mut bl, opt: read "r2")
+    tc_add_opt(opts: mut bl, opt: read "u0")
+    tc_add_opt(opts: mut bl, opt: read "l0")
+    tc_add_opt(opts: mut bl, opt: read "l1")
+    local bu = tc_strings()
+    tc_add_opt(opts: mut bu, opt: read "r0")
+    tc_add_opt(opts: mut bu, opt: read "r3")
+    local br = tc_strings()
+    tc_add_opt(opts: mut br, opt: read "l2")
+    tc_add_opt(opts: mut br, opt: read "l3")
+    tc_add_opt(opts: mut br, opt: read "l4")
+    tc_add_opt(opts: mut br, opt: read "u1")
+    let tc = tensor_core_new(dims: read dims, threads: 32, elements_per_thread: read elems, dtype_in: read dtype_in,
+                             dtype_out: read dtype_out, opts: read tc_cuda_opts(), swizzle_a_local: read al,
+                             swizzle_a_upcast: read au, swizzle_a_reduce: read ar, swizzle_b_local: read bl,
+                             swizzle_b_upcast: read bu, swizzle_b_reduce: read br)
+    List.push<TensorCore>(list: mut out, value: read tc)
+    return Unit
+}
+
+fn tc_push_amd_rdna3(out: mut List<TensorCore>, dtype_in: read DType, dtype_out: read DType) -> Unit {
+    local dims = tc_ints()
+    List.push<Int>(list: mut dims, value: read 16)
+    List.push<Int>(list: mut dims, value: read 16)
+    List.push<Int>(list: mut dims, value: read 16)
+    local elems = tc_ints()
+    List.push<Int>(list: mut elems, value: read 16)
+    List.push<Int>(list: mut elems, value: read 16)
+    List.push<Int>(list: mut elems, value: read 8)
+    local opts = tc_strings()
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l0")
+    tc_add_opt(opts: mut opts, opt: read "l1")
+    tc_add_opt(opts: mut opts, opt: read "u1")
+    tc_add_opt(opts: mut opts, opt: read "u1")
+    tc_add_opt(opts: mut opts, opt: read "u1")
+    local al = tc_strings()
+    tc_add_opt(opts: mut al, opt: read "l4")
+    tc_add_opt(opts: mut al, opt: read "u0")
+    tc_add_opt(opts: mut al, opt: read "u1")
+    tc_add_opt(opts: mut al, opt: read "u2")
+    tc_add_opt(opts: mut al, opt: read "l0")
+    local au = tc_strings()
+    tc_add_opt(opts: mut au, opt: read "r1")
+    tc_add_opt(opts: mut au, opt: read "r2")
+    tc_add_opt(opts: mut au, opt: read "r3")
+    local ar = tc_strings()
+    tc_add_opt(opts: mut ar, opt: read "l1")
+    tc_add_opt(opts: mut ar, opt: read "l2")
+    tc_add_opt(opts: mut ar, opt: read "l3")
+    tc_add_opt(opts: mut ar, opt: read "r0")
+    local bl = tc_strings()
+    tc_add_opt(opts: mut bl, opt: read "l0")
+    tc_add_opt(opts: mut bl, opt: read "l1")
+    tc_add_opt(opts: mut bl, opt: read "l2")
+    tc_add_opt(opts: mut bl, opt: read "l3")
+    tc_add_opt(opts: mut bl, opt: read "l4")
+    local bu = tc_strings()
+    tc_add_opt(opts: mut bu, opt: read "r1")
+    tc_add_opt(opts: mut bu, opt: read "r2")
+    tc_add_opt(opts: mut bu, opt: read "r3")
+    local br = tc_strings()
+    tc_add_opt(opts: mut br, opt: read "u0")
+    tc_add_opt(opts: mut br, opt: read "u1")
+    tc_add_opt(opts: mut br, opt: read "u2")
+    tc_add_opt(opts: mut br, opt: read "r0")
+    let tc = tensor_core_new(dims: read dims, threads: 32, elements_per_thread: read elems, dtype_in: read dtype_in,
+                             dtype_out: read dtype_out, opts: read opts, swizzle_a_local: read al,
+                             swizzle_a_upcast: read au, swizzle_a_reduce: read ar, swizzle_b_local: read bl,
+                             swizzle_b_upcast: read bu, swizzle_b_reduce: read br)
+    List.push<TensorCore>(list: mut out, value: read tc)
+    return Unit
+}
+
+fn get_cuda(arch: read String) -> fresh List<TensorCore> {
+    local out = List.new<TensorCore>()
+    if arch == "sm75" || arch == "sm80" || arch == "sm86" || arch == "sm89" || arch == "sm90" {
+        tc_push_cuda_81616(out: mut out, dtype_in: read dt_float16(), dtype_out: read dt_float32())
+    }
+    if arch == "sm80" || arch == "sm86" || arch == "sm89" || arch == "sm90" {
+        tc_push_cuda_81616(out: mut out, dtype_in: read dt_bfloat16(), dtype_out: read dt_float32())
+        tc_push_cuda_81616(out: mut out, dtype_in: read dt_float16(), dtype_out: read dt_float16())
+    }
+    return take out
+}
+
+fn get_amd(arch: read String) -> fresh List<TensorCore> {
+    local out = List.new<TensorCore>()
+    if arch == "gfx942" || arch == "gfx950" || arch == "gfx1200" || arch == "gfx1201" || arch == "rdna3" {
+        tc_push_amd_rdna3(out: mut out, dtype_in: read dt_float16(), dtype_out: read dt_float32())
+        tc_push_amd_rdna3(out: mut out, dtype_in: read dt_float16(), dtype_out: read dt_float16())
+        tc_push_amd_rdna3(out: mut out, dtype_in: read dt_bfloat16(), dtype_out: read dt_float32())
+    }
+    return take out
+}

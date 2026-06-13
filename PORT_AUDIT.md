@@ -512,7 +512,9 @@ Integrated pieces:
   dtype/shape/axis checks, ports the default large-reduction split rewrite into
   reshape/permute/reduce/contiguous/reduce/reshape form, and implements the first device buffer
   cap rewrite for METAL/WEBGPU by staging elementwise children through fresh LOOP ranges when
-  buffer-like inputs exceed the backend cap. It also has `split_store` call wrappers that
+  buffer-like inputs exceed the backend cap. `flatten_bufferize` now computes the single flattened
+  index through the upstream RESHAPE movement mapping and reshapes the staged result back to the
+  original staged shape. It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
   modeling, partial-PCONTIG/local bufferize cost forms, env-configured buffer caps, and full
   assign-dependency repair remain later rangeify slices.

@@ -451,7 +451,7 @@ fn spec_validate_node(cache: read UOpCache, id: Int) -> Bool {
         let mut j = 1
         while j < node_num_src(cache: read cache, id: id) {
             let child = node_src_id(cache: read cache, id: id, k: j)
-            if node_op(cache: read cache, id: child) != RANGE { return false }
+            if node_op(cache: read cache, id: child) != RANGE && spec_dtype_name(cache: read cache, id: child, name: read "weakint") == false { return false }
             j = j + 1
         }
         return true

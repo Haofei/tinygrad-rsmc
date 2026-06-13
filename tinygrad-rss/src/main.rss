@@ -4600,7 +4600,11 @@ fn main() -> Unit {
     }
     let mut rfac_flatten_ok = true
     match flatten_bufferize(cache: mut mcache, x: idx_rf_stage_stage) {
-        Some(r) => { rfac_flatten_ok = node_op(cache: read mcache, id: r) == STAGE }
+        Some(r) => {
+            let flat_stage = node_src_id(cache: read mcache, id: r, k: 0)
+            let flat_idx = node_src_id(cache: read mcache, id: flat_stage, k: 1)
+            rfac_flatten_ok = node_op(cache: read mcache, id: r) == RESHAPE && node_op(cache: read mcache, id: flat_stage) == STAGE && node_num_src(cache: read mcache, id: flat_stage) == 2 && node_op(cache: read mcache, id: flat_idx) != RANGE && spec_type_verify(cache: read mcache, id: r)
+        }
         None => {}
     }
     let mut rfac_debuf_ok = false

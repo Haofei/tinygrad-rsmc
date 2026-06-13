@@ -636,11 +636,24 @@ fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int
 fn flatten_bufferize(cache: mut UOpCache, x: Int) -> Option<Int> {
     if node_op(cache: read cache, id: x) != STAGE { return None }
     if node_num_src(cache: read cache, id: x) <= 2 { return None }
+    local shape = uop_shape(cache: read cache, id: x)
+    if List.len<Int>(list: read shape) == 0 { return None }
+    local flat_shape = List.new<Int>()
+    List.push<Int>(list: mut flat_shape, value: read prod(x: read shape))
+    local rngs = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: x) {
+        List.push<Int>(list: mut rngs, value: read node_src_id(cache: read cache, id: x, k: i))
+        i = i + 1
+    }
+    local flat_idxs = indexing_apply_movement_op(cache: mut cache, op: read RESHAPE, in_shape: read flat_shape, arg: read shape, rngs: read rngs)
+    if List.len<Int>(list: read flat_idxs) != 1 { return None }
     local srcs = List.new<Int>()
     List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: x, k: 0))
-    List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: x, k: 1))
+    List.push<Int>(list: mut srcs, value: read List.get<Int>(list: read flat_idxs, index: 0))
     local arg = node_arg(cache: read cache, id: x)
-    return Some(intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: x), src: take srcs, arg: take arg))
+    let staged = intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: x), src: take srcs, arg: take arg)
+    return Some(mk_reshape(cache: mut cache, x: staged, new_shape: read shape))
 }
 
 fn debuf(cache: mut UOpCache, ctx: mut RangeifyLocalContext, buf: Int) -> Option<Int> {

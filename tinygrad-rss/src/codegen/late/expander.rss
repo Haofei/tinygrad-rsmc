@@ -3,8 +3,8 @@
 // This slice ports the axis-size choice/index helpers, the compact
 // CONTRACT/UNROLL/END normalization rules, the common do_expand path, and the
 // first pm_pre_expander rewrites, plus the first BufferizeOpts-local
-// group-for-reduce lowering. WMMA and register-pointer INDEX special-casing
-// remain later slices.
+// group-for-reduce lowering and REG value-INDEX scalarization. WMMA expansion
+// remains a later slice.
 features: local
 
 fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
@@ -321,6 +321,40 @@ fn expander_reduce_with_srcs(cache: mut UOpCache, id: Int, value: Int, tails: re
     return intern(cache: mut cache, op: REDUCE, dt: read dt, src: take src, arg: take arg)
 }
 
+fn expander_lane_src(cache: mut UOpCache, src: Int, lane: Int) -> Int {
+    if node_full_dtype(cache: read cache, id: src).count <= 1 { return src }
+    local idxs = List.new<Int>()
+    List.push<Int>(list: mut idxs, value: read lane)
+    return mk_gep(cache: mut cache, x: src, idxs: read idxs)
+}
+
+fn expander_reg_index_unroll(cache: mut UOpCache, id: Int, new_srcs: read List<Int>, pairs: read List<Int>, expand_sz: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != INDEX { return None }
+    if node_index_is_ptr(cache: read cache, id: id) { return None }
+    if List.len<Int>(list: read new_srcs) == 0 { return None }
+    let base = List.get<Int>(list: read new_srcs, index: 0)
+    if node_addrspace(cache: read cache, id: base) != ADDR_REG { return None }
+    local idxs = List.new<Int>()
+    let mut lane = 0
+    while lane < expand_sz {
+        local lane_srcs = List.new<Int>()
+        let mut i = 0
+        while i < List.len<Int>(list: read new_srcs) {
+            let src = List.get<Int>(list: read new_srcs, index: i)
+            List.push<Int>(list: mut lane_srcs, value: read expander_lane_src(cache: mut cache, src: src, lane: lane))
+            i = i + 1
+        }
+        local arg = node_arg(cache: read cache, id: id)
+        let scalar_idx = intern(cache: mut cache, op: INDEX, dt: read dtype_scalar(d: read node_full_dtype(cache: read cache, id: id)), src: take lane_srcs, arg: take arg)
+        List.push<Int>(list: mut idxs, value: read scalar_idx)
+        lane = lane + 1
+    }
+    let scalar = dtype_scalar(d: read node_full_dtype(cache: read cache, id: id))
+    let stack_dt = dtype_vec(base: read scalar, sz: expand_sz)
+    let stack = uop_stack(cache: mut cache, dt: read stack_dt, srcs: read idxs)
+    return Some(mk_unroll(cache: mut cache, x: stack, pairs: read pairs))
+}
+
 fn expander_store_with_tail(cache: mut UOpCache, id: Int, tails: read List<Int>) -> Int {
     local src = List.new<Int>()
     List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: id, k: 0))
@@ -388,6 +422,10 @@ fn expander_do_expand(cache: mut UOpCache, id: Int) -> Option<Int> {
         local arg = expander_gep_arg_for_expand(cache: read cache, id: id, expanded_src0: first, expand_sz: expand_sz)
         let expanded = intern(cache: mut cache, op: op, dt: read outdt, src: take new_srcs, arg: take arg)
         return Some(mk_unroll(cache: mut cache, x: expanded, pairs: read pairs))
+    }
+    match expander_reg_index_unroll(cache: mut cache, id: id, new_srcs: read new_srcs, pairs: read pairs, expand_sz: expand_sz) {
+        Some(r) => { return Some(r) }
+        None => {}
     }
     local arg = node_arg(cache: read cache, id: id)
     let expanded = intern(cache: mut cache, op: op, dt: read outdt, src: take new_srcs, arg: take arg)

@@ -674,18 +674,52 @@ fn no_vectorized_index(cache: mut UOpCache, idx: Int) -> Option<Int> {
     if node_op(cache: read cache, id: idx) != INDEX { return None }
     if node_num_src(cache: read cache, id: idx) < 2 { return None }
     let buf = node_src_id(cache: read cache, id: idx, k: 0)
-    if node_op(cache: read cache, id: buf) != CAST { return None }
-    let cast_src = node_src_id(cache: read cache, id: buf, k: 0)
-    let cnt = node_full_dtype(cache: read cache, id: buf).count
+    let bop = node_op(cache: read cache, id: buf)
+    let mut cast = buf
+    let mut mode = 0
+    if bop == STACK {
+        if node_num_src(cache: read cache, id: buf) == 0 { return None }
+        cast = node_src_id(cache: read cache, id: buf, k: 0)
+        mode = 1
+    } else {
+        if bop == GEP {
+            cast = node_src_id(cache: read cache, id: buf, k: 0)
+            mode = 2
+        }
+    }
+    if node_op(cache: read cache, id: cast) != CAST { return None }
+    let cast_src = node_src_id(cache: read cache, id: cast, k: 0)
+    let cnt = node_full_dtype(cache: read cache, id: cast).count
     if cnt <= 1 { return None }
     let raw_idx = node_src_id(cache: read cache, id: idx, k: 1)
-    let raw_dt = node_dtype(cache: read cache, id: raw_idx)
+    let raw_dt = dtype_scalar(d: read node_full_dtype(cache: read cache, id: raw_idx))
     local lanes = List.new<Int>()
+    let mut total = cnt
+    if mode == 1 { total = cnt * node_full_dtype(cache: read cache, id: buf).count }
+    if mode == 2 { total = cnt * List.len<Int>(list: read node_argints(cache: read cache, id: buf)) }
     let mut lane = 0
-    while lane < cnt {
-        let c = mk_const_int(cache: mut cache, dt: read raw_dt, v: lane)
+    while lane < total {
+        let mut idx_lane = 0
+        let mut offset = lane
+        if mode == 1 {
+            idx_lane = lane % node_full_dtype(cache: read cache, id: buf).count
+            offset = lane / node_full_dtype(cache: read cache, id: buf).count
+        }
+        if mode == 2 {
+            local gargs = node_argints(cache: read cache, id: buf)
+            let gcount = List.len<Int>(list: read gargs)
+            idx_lane = lane % gcount
+            offset = (lane / gcount) + List.get<Int>(list: read gargs, index: idx_lane)
+        }
+        let mut idx_part = raw_idx
+        if node_full_dtype(cache: read cache, id: raw_idx).count > 1 {
+            local idx_gep = List.new<Int>()
+            List.push<Int>(list: mut idx_gep, value: read idx_lane)
+            idx_part = mk_gep(cache: mut cache, x: raw_idx, idxs: read idx_gep)
+        }
+        let c = mk_const_int(cache: mut cache, dt: read raw_dt, v: offset)
         let cntc = mk_const_int(cache: mut cache, dt: read raw_dt, v: cnt)
-        let mul = mk_alu2(cache: mut cache, op: MUL, dt: read raw_dt, x: raw_idx, y: cntc)
+        let mul = mk_alu2(cache: mut cache, op: MUL, dt: read raw_dt, x: idx_part, y: cntc)
         let off = mk_alu2(cache: mut cache, op: ADD, dt: read raw_dt, x: mul, y: c)
         local isrcs = List.new<Int>()
         List.push<Int>(list: mut isrcs, value: read off)
@@ -693,7 +727,7 @@ fn no_vectorized_index(cache: mut UOpCache, idx: Int) -> Option<Int> {
         List.push<Int>(list: mut lanes, value: read p)
         lane = lane + 1
     }
-    let odt = node_full_dtype(cache: read cache, id: idx)
+    let odt = dtype_vec(base: read dtype_scalar(d: read node_full_dtype(cache: read cache, id: idx)), sz: total)
     return Some(uop_stack(cache: mut cache, dt: read odt, srcs: read lanes))
 }
 

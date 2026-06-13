@@ -1249,6 +1249,22 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mex_reg_shape = List.new<Int>()
+    List.push<Int>(list: mut mex_reg_shape, value: read 4)
+    let mex_reg_buf = mk_buffer_param(cache: mut mcache, slot: 14, dt: read i32, shape: read mex_reg_shape, addrspace: read ADDR_REG)
+    local mex_reg_idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut mex_reg_idx_srcs, value: read munroll)
+    let mex_reg_idx = mk_index(cache: mut mcache, base: mex_reg_buf, srcs: read mex_reg_idx_srcs, ptr: false)
+    let mut mex_expand_reg_index_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_reg_idx) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let lane0 = node_src_id(cache: read mcache, id: inner, k: 0)
+            let lane0_base = node_src_id(cache: read mcache, id: lane0, k: 0)
+            mex_expand_reg_index_ok = node_op(cache: read mcache, id: r) == UNROLL && node_op(cache: read mcache, id: inner) == STACK && node_num_src(cache: read mcache, id: inner) == 4 && node_op(cache: read mcache, id: lane0) == INDEX && node_addrspace(cache: read mcache, id: lane0_base) == ADDR_REG && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     let mpre_unroll_range = mk_range_int(cache: mut mcache, end: 3, axis_id: 9, axis_type: read AXIS_UNROLL, dt: read i32)
     let mut mpre_range_ok = false
     match expander_pre_rewrite(cache: mut mcache, id: mpre_unroll_range) {
@@ -1346,6 +1362,7 @@ fn main() -> Unit {
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)
     showb(label: read "codegen.expander swizzles mixed unroll axes = ", v: mex_expand_mixed_ok)
+    showb(label: read "codegen.expander scalarizes reg value index = ", v: mex_expand_reg_index_ok)
     let mex_source_idx_ok = _expand_arg_to_idx(args: read maxis_pairs, choice_pairs: read maxis_pairs, choice: 3) == 3
     let mex_source_choices = _choices_from_args(args: read mex_pair0_2)
     local mex_source_exclude = List.new<Int>()
@@ -1735,6 +1752,54 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mdev_reg_shape = List.new<Int>()
+    List.push<Int>(list: mut mdev_reg_shape, value: read 4)
+    let mdev_reg_buf = mk_buffer_param(cache: mut mcache, slot: 16, dt: read i32, shape: read mdev_reg_shape, addrspace: read ADDR_REG)
+    let mdev_reg_vdt = dtype_vec(base: read i32, sz: 4)
+    let mdev_reg_cast = mk_cast(cache: mut mcache, x: mdev_reg_buf, dt: read mdev_reg_vdt)
+    local mdev_reg_simple_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_reg_simple_src, value: read m2)
+    let mdev_reg_simple_idx = mk_index(cache: mut mcache, base: mdev_reg_cast, srcs: read mdev_reg_simple_src, ptr: false)
+    let mut mdev_reg_simple_ok = false
+    match no_vectorized_index(cache: mut mcache, idx: mdev_reg_simple_idx) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            mdev_reg_simple_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4 && node_op(cache: read mcache, id: lane0) == INDEX && node_index_is_ptr(cache: read mcache, id: lane0) && node_src_id(cache: read mcache, id: lane0, k: 0) == mdev_reg_buf && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_reg_bcast = uop_broadcast(cache: mut mcache, id: mdev_reg_cast, count: 2)
+    local mdev_reg_bcast_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_reg_bcast_src, value: read mex_stack2)
+    let mdev_reg_bcast_idx = mk_index(cache: mut mcache, base: mdev_reg_bcast, srcs: read mdev_reg_bcast_src, ptr: false)
+    let mut mdev_reg_bcast_ok = false
+    match no_vectorized_index(cache: mut mcache, idx: mdev_reg_bcast_idx) {
+        Some(r) => {
+            let lane1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let lane1_off = node_src_id(cache: read mcache, id: lane1, k: 1)
+            let lane1_mul = node_src_id(cache: read mcache, id: lane1_off, k: 0)
+            let lane1_idx = node_src_id(cache: read mcache, id: lane1_mul, k: 0)
+            mdev_reg_bcast_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 8 && node_op(cache: read mcache, id: lane1) == INDEX && node_index_is_ptr(cache: read mcache, id: lane1) && node_op(cache: read mcache, id: lane1_idx) == GEP && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mdev_reg_gep_args = List.new<Int>()
+    List.push<Int>(list: mut mdev_reg_gep_args, value: read 1)
+    List.push<Int>(list: mut mdev_reg_gep_args, value: read 3)
+    let mdev_reg_gep = mk_gep(cache: mut mcache, x: mdev_reg_cast, idxs: read mdev_reg_gep_args)
+    local mdev_reg_gep_src = List.new<Int>()
+    List.push<Int>(list: mut mdev_reg_gep_src, value: read mex_stack2)
+    let mdev_reg_gep_idx = mk_index(cache: mut mcache, base: mdev_reg_gep, srcs: read mdev_reg_gep_src, ptr: false)
+    let mut mdev_reg_gep_ok = false
+    match no_vectorized_index(cache: mut mcache, idx: mdev_reg_gep_idx) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let lane0_off = node_src_id(cache: read mcache, id: lane0, k: 1)
+            let lane0_add = node_src_id(cache: read mcache, id: lane0_off, k: 1)
+            mdev_reg_gep_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 8 && node_op(cache: read mcache, id: lane0) == INDEX && node_const_int(cache: read mcache, id: lane0_add) == 1 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     let mut mdev_source_facades_ok = false
     match no_vectorized_alu(cache: mut mcache, alu: mdev_add_vec) {
         Some(a) => {
@@ -1778,6 +1843,9 @@ fn main() -> Unit {
     showb(label: read "codegen.devectorizer splits vector load = ", v: mdev_split_load_ok)
     showb(label: read "codegen.devectorizer splits vector store = ", v: mdev_split_store_ok)
     showb(label: read "codegen.devectorizer adds load to value index = ", v: mdev_add_load_ok)
+    showb(label: read "codegen.devectorizer scalarizes reg cast index = ", v: mdev_reg_simple_ok)
+    showb(label: read "codegen.devectorizer scalarizes reg broadcast index = ", v: mdev_reg_bcast_ok)
+    showb(label: read "codegen.devectorizer scalarizes reg gep index = ", v: mdev_reg_gep_ok)
     showb(label: read "codegen.devectorizer removes nested load load = ", v: mdev_load_load_ok)
     showb(label: read "codegen.devectorizer removes nested store load = ", v: mdev_store_load_ok)
     showb(label: read "codegen.devectorizer source-shaped facades = ", v: mdev_source_facades_ok)

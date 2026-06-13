@@ -420,7 +420,8 @@ Integrated pieces:
   buffer devectorization, simple CAST-backed index lane expansion,
   and no-range `reduce_to_acc` delegation. Full ImageDType
   handling, exact folded-index regrouping, and range-backed DEFINE_ACC lowering remain later
-  devectorizer slices.
+  devectorizer slices. The REG/local buffer devectorization slice now also covers upstream-shaped
+  `CAST(...).index`, broadcast-index, and GEP-index lane mapping for addrspace-tagged REG buffers.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
   wiring `PROGRAM(SINK, DEVICE, LINEAR)` through the first `do_estimates` equivalent and CStyle
   renderer. It computes integer upper-bound `Estimates.from_uops(..., ignore_indexing=True)`-style

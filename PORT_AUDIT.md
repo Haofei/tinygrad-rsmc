@@ -497,10 +497,14 @@ Integrated pieces:
   `cleanup_dead_axes`, `gate_substitute`, `remove_bufferize`, `remove_noop_bufferize`,
   `late_buffer_view`, `limit_bufs`, `bufferize_to_store`, `flatten_bufferize`, `debuf`,
   `unbind_kernel`, `handle_after`, `renumber_range`, `find_bufs`, `get_contiguous`,
-  `split_store`, and `get_kernel_graph`. It delegates `get_kernel_graph` to the integrated
-  indexing rangeify analysis/rewrite, implements practical movement-index lowering, store range
-  injection, simple hazard contiguity, noop/dead-axis staging cleanup with shrink/reshape/expand
-  preservation, disk/tinyfs late buffer views as `SLICE`, global stage-to-buffer store lowering
+  `split_store`, and `get_kernel_graph`. It now composes `get_kernel_graph` through the integrated
+  indexing rangeify analysis/rewrite, device buffer limiting, stage/buffer cleanup, and split-store
+  passes. `split_store` rewrites kernel bodies by replacing buffer-like inputs with PARAMs,
+  unwrapping BIND/AFTER/CONTIGUOUS/NOOP nodes, renumbering ranges, stripping local STAGE devices,
+  and returning a `CALL(SINK(...), original buffers...)` shape for normal stores. The facade also
+  implements practical movement-index lowering, store range injection, simple hazard contiguity,
+  noop/dead-axis staging cleanup with shrink/reshape/expand preservation, disk/tinyfs late buffer
+  views as `SLICE`, global stage-to-buffer store lowering
   through `AFTER(buffer, END(STORE(INDEX(buffer,...), value)))`, reuse of existing `AFTER` buffers,
   local stage-to-`DEFINE_LOCAL` lowering with `BARRIER`,
   buffer-to-param placeholder conversion, range renumbering, and the first upstream
@@ -521,7 +525,9 @@ Integrated pieces:
   index through the upstream RESHAPE movement mapping and reshapes the staged result back to the
   original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
   expressions touching more than three accessed buffers and for reduce subtrees that read
-  bufferized/param data; the later PCONTIG local-buffer fallback is still intentionally unported.
+  bufferized/param data; the later PCONTIG local-buffer fallback, exact symbolic max-shape shrink
+  in split kernels, COPY/SLICE special kernel bodies, and full WAR assign dependency repair are
+  still intentionally unported.
   The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
   stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,
   self-stores, `END(NOOP)`, invalid writes, `AFTER(..., NOOP)`, reshape-through-`MSELECT`/

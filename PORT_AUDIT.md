@@ -514,10 +514,13 @@ Integrated pieces:
   cap rewrite for METAL/WEBGPU by staging elementwise children through fresh LOOP ranges when
   buffer-like inputs exceed the backend cap. `flatten_bufferize` now computes the single flattened
   index through the upstream RESHAPE movement mapping and reshapes the staged result back to the
-  original staged shape. It also has `split_store` call wrappers that
+  original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
+  expressions touching more than three accessed buffers and for reduce subtrees that read
+  bufferized/param data; the later PCONTIG local-buffer fallback is still intentionally unported.
+  It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
-  modeling, partial-PCONTIG/local bufferize cost forms, env-configured buffer caps, and full
-  assign-dependency repair remain later rangeify slices.
+  modeling beyond these guards, partial-PCONTIG/local bufferize cost forms, env-configured buffer
+  caps, and full assign-dependency repair remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,

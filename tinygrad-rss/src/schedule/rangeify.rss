@@ -402,6 +402,55 @@ fn gate_substitute(cache: read UOpCache, b: Int, ranges: read List<Int>) -> Bool
     return false
 }
 
+fn rangeify_remove_access_leaf(op: read Ops) -> Bool {
+    if op == STAGE { return true }
+    if op == PARAM { return true }
+    if op == MSTACK { return true }
+    if op == MSELECT { return true }
+    return false
+}
+
+fn rangeify_remove_collect_cost(cache: read UOpCache, id: Int, bufs: mut List<Int>, indexes: mut List<Int>, reduces: mut List<Int>) -> Unit {
+    let op = node_op(cache: read cache, id: id)
+    if rangeify_remove_access_leaf(op: read op) {
+        indexing_add_unique(items: mut bufs, value: id)
+        return Unit
+    }
+    if op == STORE { return Unit }
+    if op == INDEX { indexing_add_unique(items: mut indexes, value: id) }
+    if op == REDUCE { indexing_add_unique(items: mut reduces, value: id) }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        rangeify_remove_collect_cost(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), bufs: mut bufs, indexes: mut indexes, reduces: mut reduces)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn rangeify_remove_reduce_has_buffer(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if rangeify_remove_access_leaf(op: read op) { return true }
+    if op == STORE { return false }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        if rangeify_remove_reduce_has_buffer(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i)) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn rangeify_remove_any_reduce_has_buffer(cache: read UOpCache, reduces: read List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read reduces) {
+        let red = List.get<Int>(list: read reduces, index: i)
+        if node_num_src(cache: read cache, id: red) > 0 {
+            if rangeify_remove_reduce_has_buffer(cache: read cache, id: node_src_id(cache: read cache, id: red, k: 0)) { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
 fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option<Int> {
     if node_op(cache: read cache, id: buf) != STAGE { return None }
     if node_op(cache: read cache, id: idx) != INDEX { return None }
@@ -410,6 +459,12 @@ fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option
     if node_num_src(cache: read cache, id: buf) != node_num_src(cache: read cache, id: idx) { return None }
     let src_op = node_op(cache: read cache, id: src)
     if src_op == CONTIGUOUS || src_op == COPY || src_op == NOOP { return None }
+    local accessed_buffers = List.new<Int>()
+    local indexes = List.new<Int>()
+    local reduces = List.new<Int>()
+    rangeify_remove_collect_cost(cache: read cache, id: src, bufs: mut accessed_buffers, indexes: mut indexes, reduces: mut reduces)
+    if List.len<Int>(list: read accessed_buffers) > 3 { return None }
+    if rangeify_remove_any_reduce_has_buffer(cache: read cache, reduces: read reduces) { return None }
     local old_ids = List.new<Int>()
     local new_ids = List.new<Int>()
     let mut i = 1

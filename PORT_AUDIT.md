@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 43,012 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 43,415 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -114,8 +114,13 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     `runtime/ops_qcom.py`, `runtime/ops_dsp.py`, `runtime/ops_rdma.py`,
     `runtime/ops_tinyfs.py`, and `runtime/ops_cl.py`: 331/331 rough symbols covered.
   - focused graph-transform batch: `callify.py` and `gradient.py`: 17/17 rough symbols covered.
-  - focused ONNX importer batch: `nn/onnx.py`: 41/41 rough symbols covered. This is a
-    protobuf/importer/runner surface facade; full ONNX operator execution is not yet implemented.
+  - focused ONNX runner execution batch: `nn/onnx.py`: 41/41 rough symbols covered. The RSS port
+    now has runner value-table helpers and graph execution for Add/Sub/Mul/Div, Relu, MatMul,
+    Reshape, Transpose, plus simple Gemm and Conv paths over the tensor helpers. Active smoke
+    checks real tensor values for Add, Relu, Reshape, Transpose, MatMul, Gemm, and Conv. This is
+    still not full parsed-model execution parity: attribute decoding, opset dispatch,
+    optional/sequence types, control flow, quantization, pooling, broadcast edge cases, and full
+    reshape `allowzero` behavior still need deeper work.
   - focused LLM facade batch: `llm/gguf.py`, `llm/model.py`, and `llm/cli.py`: 54/54 rough
     symbols covered. This is a source-shaped GGUF/tokenizer/model/server facade with tiny smoke
     execution; real GGUF quantized tensor decoding and full transformer execution still require
@@ -1094,11 +1099,13 @@ Current integrated demo:
   `nn/state.py`, and `nn/datasets.py`. `calc_stats`, 1D convolution layer constructors,
   RMS-style `_norm`, embedding forward/backward materialized helpers, optimizer entry points
   (`SGD`, `Muon`, `AdamW`, `Adam`) over explicit `TensorState` lists, state-dict/list helpers,
-  tensor byte-IO shells, archive/load/save shells, and deterministic `mnist`/`cifar` dataset
-  split facades are present. The active smoke calls these entry points and checks constructor,
-  optimizer/state list, IO, embedding, and dataset shape behavior. This does not yet implement
-  exact upstream module objects, Python optimizer mutation semantics, safetensors/torch/zip/tar
-  formats, real dataset downloads/parsing, or enough backend behavior to train real examples.
+  tensor byte-IO shells, archive/load/save shells, deterministic `mnist`/`cifar` dataset split
+  facades, simple safetensors metadata parsing, and the first ONNX runner tensor execution slice
+  are present. The active smoke calls these entry points and checks constructor, optimizer/state
+  list, IO, embedding, dataset shape, state-file, and ONNX tensor-op behavior. This does not yet
+  implement exact upstream module objects, Python optimizer mutation semantics, complete
+  safetensors/torch/zip/tar formats, real dataset downloads/parsing, complete ONNX parsed-model
+  execution, or enough backend behavior to train real examples.
 - validates bool Tensor reductions against real tinygrad: `all()`, `any()`, `all(axis=1)`, and
   `any(axis=0)`.
 - validates Tensor `argmax`/`argmin` against real tinygrad for all, axis-0, and axis-1 cases,
@@ -1337,8 +1344,9 @@ Major missing integrated work:
   ported and accounted for.
 - `nn/*`: deeper layer/module semantics, optimizer algorithms, model state serialization, and real
   dataset loaders. The first source-shaped facade names are present, but exact upstream behavior is
-  still incomplete. `nn/onnx.py` may be scoped as a separate importer rather than core tensor
-  correctness.
+  still incomplete. `nn/onnx.py` now has a first real tensor execution slice, but complete parsed
+  ONNX model parity, opset handling, control-flow ops, quantization, and broad operator coverage
+  remain separate follow-up work.
 - examples such as `beautiful_mnist.py`: only after Tensor, nn, datasets, optimizer, scheduler,
   and backend execution are integrated enough to run the real example, not a special demo.
 

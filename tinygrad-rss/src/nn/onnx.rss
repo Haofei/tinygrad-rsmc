@@ -75,6 +75,8 @@ struct OnnxRunnerState derives(Clone) {
     is_subgraph: Bool,
     const_names: List<String>,
     const_values: List<OnnxTensorProto>,
+    value_names: List<String>,
+    value_tensors: List<Int>,
 }
 
 fn onnx_reader_new(data: read List<Int>) -> fresh OnnxReader {
@@ -572,6 +574,8 @@ fn _to_python_const(tensor: read OnnxTensorProto) -> fresh String {
 fn _init_from_graph(graph: read OnnxGraphProto, is_subgraph: Bool) -> fresh OnnxRunnerState {
     local names = List.new<String>()
     local values = List.new<OnnxTensorProto>()
+    local value_names = List.new<String>()
+    local value_tensors = List.new<Int>()
     let mut i = 0
     while i < List.len<OnnxTensorProto>(list: read graph.initializers) {
         local t = List.get<OnnxTensorProto>(list: read graph.initializers, index: i)
@@ -579,7 +583,7 @@ fn _init_from_graph(graph: read OnnxGraphProto, is_subgraph: Bool) -> fresh Onnx
         List.push<OnnxTensorProto>(list: mut values, value: read (manage t))
         i = i + 1
     }
-    return OnnxRunnerState(graph: graph.clone(), is_subgraph: is_subgraph, const_names: take names, const_values: take values)
+    return OnnxRunnerState(graph: graph.clone(), is_subgraph: is_subgraph, const_names: take names, const_values: take values, value_names: take value_names, value_tensors: take value_tensors)
 }
 
 fn _from_subgraph(graph: read OnnxGraphProto) -> fresh OnnxRunnerState {
@@ -642,4 +646,402 @@ fn get_onnx_ops() -> fresh List<String> {
     List.push<String>(list: mut ops, value: read "Reshape")
     List.push<String>(list: mut ops, value: read "Transpose")
     return take ops
+}
+
+fn onnx_attr_empty() -> fresh OnnxAttributeProto {
+    local ints = List.new<Int>()
+    local floats = List.new<Float>()
+    local strings = List.new<String>()
+    local graph = List.new<Int>()
+    local tensor = onnx_empty_tensor()
+    return OnnxAttributeProto(name: String.copy(value: read ""), attr_type: 0, ints: take ints, floats: take floats, strings: take strings, tensor: tensor.clone(), graph: take graph)
+}
+
+fn onnx_attr_ints(name: read String, values: read List<Int>) -> fresh OnnxAttributeProto {
+    local ints = onnx_copy_ints(values: read values)
+    local floats = List.new<Float>()
+    local strings = List.new<String>()
+    local graph = List.new<Int>()
+    local tensor = onnx_empty_tensor()
+    return OnnxAttributeProto(name: String.copy(value: read name), attr_type: 7, ints: take ints, floats: take floats, strings: take strings, tensor: tensor.clone(), graph: take graph)
+}
+
+fn onnx_attr_int(name: read String, value: Int) -> fresh OnnxAttributeProto {
+    local ints = List.new<Int>()
+    push1(l: mut ints, a: value)
+    return onnx_attr_ints(name: read name, values: read ints)
+}
+
+fn onnx_attr_float(name: read String, value: Float) -> fresh OnnxAttributeProto {
+    local ints = List.new<Int>()
+    local floats = List.new<Float>()
+    pushf(l: mut floats, v: value)
+    local strings = List.new<String>()
+    local graph = List.new<Int>()
+    local tensor = onnx_empty_tensor()
+    return OnnxAttributeProto(name: String.copy(value: read name), attr_type: 1, ints: take ints, floats: take floats, strings: take strings, tensor: tensor.clone(), graph: take graph)
+}
+
+fn onnx_node_new(op: read String, inputs: read List<String>, outputs: read List<String>) -> fresh OnnxNodeProto {
+    local attrs = List.new<OnnxAttributeProto>()
+    return OnnxNodeProto(name: String.copy(value: read op), op_type: String.copy(value: read op), domain: String.copy(value: read ""), inputs: inputs.clone(), outputs: outputs.clone(), attributes: take attrs)
+}
+
+fn onnx_node_with_attrs(op: read String, inputs: read List<String>, outputs: read List<String>, attrs: read List<OnnxAttributeProto>) -> fresh OnnxNodeProto {
+    return OnnxNodeProto(name: String.copy(value: read op), op_type: String.copy(value: read op), domain: String.copy(value: read ""), inputs: inputs.clone(), outputs: outputs.clone(), attributes: attrs.clone())
+}
+
+fn onnx_find_attr(node: read OnnxNodeProto, name: read String) -> fresh OnnxAttributeProto {
+    let mut i = 0
+    while i < List.len<OnnxAttributeProto>(list: read node.attributes) {
+        local a = List.get<OnnxAttributeProto>(list: read node.attributes, index: i)
+        if a.name == name { return a.clone() }
+        i = i + 1
+    }
+    return onnx_attr_empty()
+}
+
+fn onnx_attr_int_or(node: read OnnxNodeProto, name: read String, default_value: Int) -> Int {
+    local a = onnx_find_attr(node: read node, name: read name)
+    if List.len<Int>(list: read a.ints) > 0 { return List.get<Int>(list: read a.ints, index: 0) }
+    return default_value
+}
+
+fn onnx_attr_float_or(node: read OnnxNodeProto, name: read String, default_value: Float) -> Float {
+    local a = onnx_find_attr(node: read node, name: read name)
+    if List.len<Float>(list: read a.floats) > 0 { return List.get<Float>(list: read a.floats, index: 0) }
+    return default_value
+}
+
+fn onnx_attr_ints_or(node: read OnnxNodeProto, name: read String, fallback: read List<Int>) -> fresh List<Int> {
+    local a = onnx_find_attr(node: read node, name: read name)
+    if List.len<Int>(list: read a.ints) > 0 { return onnx_copy_ints(values: read a.ints) }
+    return onnx_copy_ints(values: read fallback)
+}
+
+fn onnx_tensor_to_tensor(cache: mut UOpCache, tensor: read OnnxTensorProto) -> Int {
+    let mut dt = to_dtype(data_type: tensor.data_type)
+    local shape = onnx_copy_ints(values: read tensor.dims)
+    local data = List.new<Float>()
+    if List.len<Float>(list: read tensor.float_data) > 0 {
+        let mut i = 0
+        while i < List.len<Float>(list: read tensor.float_data) {
+            pushf(l: mut data, v: List.get<Float>(list: read tensor.float_data, index: i))
+            i = i + 1
+        }
+    } else if List.len<Int>(list: read tensor.int64_data) > 0 {
+        let mut i = 0
+        while i < List.len<Int>(list: read tensor.int64_data) {
+            pushf(l: mut data, v: Int.to_float(value: read List.get<Int>(list: read tensor.int64_data, index: i)))
+            i = i + 1
+        }
+    } else if List.len<Int>(list: read tensor.raw_data) > 0 {
+        let mut i = 0
+        while i < List.len<Int>(list: read tensor.raw_data) {
+            let raw_byte = List.get<Int>(list: read tensor.raw_data, index: i) & 255
+            pushf(l: mut data, v: Int.to_float(value: read raw_byte))
+            i = i + 1
+        }
+        dt = dt_uint8()
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read data)
+}
+
+fn onnx_runner_set_value(runner: mut OnnxRunnerState, name: read String, tensor: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<String>(list: read runner.value_names) {
+        if List.get<String>(list: read runner.value_names, index: i) == name {
+            List.set<Int>(list: mut runner.value_tensors, index: i, value: read tensor)
+            return Unit
+        }
+        i = i + 1
+    }
+    List.push<String>(list: mut runner.value_names, value: read String.copy(value: read name))
+    push1(l: mut runner.value_tensors, a: tensor)
+    return Unit
+}
+
+fn onnx_runner_get_value(runner: read OnnxRunnerState, name: read String) -> Int {
+    let mut i = 0
+    while i < List.len<String>(list: read runner.value_names) {
+        if List.get<String>(list: read runner.value_names, index: i) == name {
+            return List.get<Int>(list: read runner.value_tensors, index: i)
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn onnx_runner_get_tensor(cache: mut UOpCache, runner: mut OnnxRunnerState, name: read String) -> Int {
+    let existing = onnx_runner_get_value(runner: read runner, name: read name)
+    if existing >= 0 { return existing }
+    let mut i = 0
+    while i < List.len<String>(list: read runner.const_names) {
+        if List.get<String>(list: read runner.const_names, index: i) == name {
+            local proto = List.get<OnnxTensorProto>(list: read runner.const_values, index: i)
+            let t = onnx_tensor_to_tensor(cache: mut cache, tensor: read proto)
+            onnx_runner_set_value(runner: mut runner, name: read name, tensor: t)
+            return t
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn onnx_shape_from_tensor(cache: read UOpCache, x: Int) -> fresh List<Int> {
+    local data = tensor_data(cache: read cache, x: x)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Float>(list: read data) {
+        push1(l: mut out, a: trunc_float_to_int(v: List.get<Float>(list: read data, index: i)))
+        i = i + 1
+    }
+    return take out
+}
+
+fn onnx_default_perm(cache: read UOpCache, x: Int) -> fresh List<Int> {
+    local shape = uop_shape(cache: read cache, id: x)
+    local perm = List.new<Int>()
+    let mut i = List.len<Int>(list: read shape) - 1
+    while i >= 0 {
+        push1(l: mut perm, a: i)
+        i = i - 1
+    }
+    return take perm
+}
+
+fn onnx_conv_padding(pads: read List<Int>, pos: Int) -> Int {
+    if List.len<Int>(list: read pads) > pos { return List.get<Int>(list: read pads, index: pos) }
+    return 0
+}
+
+fn onnx_execute_node(cache: mut UOpCache, runner: mut OnnxRunnerState, node: read OnnxNodeProto) -> fresh List<Int> {
+    local outs = List.new<Int>()
+    let mut result = 0 - 1
+    if node.op_type == "Add" || node.op_type == "Sub" || node.op_type == "Mul" || node.op_type == "Div" || node.op_type == "MatMul" {
+        let a = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        let b = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 1))
+        if node.op_type == "Add" { result = tensor_add(cache: mut cache, a: a, b: b) }
+        if node.op_type == "Sub" { result = tensor_sub(cache: mut cache, a: a, b: b) }
+        if node.op_type == "Mul" { result = tensor_mul(cache: mut cache, a: a, b: b) }
+        if node.op_type == "Div" { result = tensor_div(cache: mut cache, a: a, b: b) }
+        if node.op_type == "MatMul" { result = tensor_matmul(cache: mut cache, a: a, b: b) }
+    } else if node.op_type == "Relu" {
+        let x = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        result = tensor_relu(cache: mut cache, x: x)
+    } else if node.op_type == "Reshape" {
+        let x = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        let shape_tensor = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 1))
+        local shape = onnx_shape_from_tensor(cache: read cache, x: shape_tensor)
+        result = tensor_reshape(cache: mut cache, x: x, new_shape: read shape)
+    } else if node.op_type == "Transpose" {
+        let x = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        local fallback = onnx_default_perm(cache: read cache, x: x)
+        local perm = onnx_attr_ints_or(node: read node, name: read "perm", fallback: read fallback)
+        result = tensor_permute(cache: mut cache, x: x, perm: read perm)
+    } else if node.op_type == "Gemm" {
+        let mut a = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        let mut b = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 1))
+        let trans_a = onnx_attr_int_or(node: read node, name: read "transA", default_value: 0)
+        let trans_b = onnx_attr_int_or(node: read node, name: read "transB", default_value: 0)
+        if trans_a != 0 { a = tensor_transpose(cache: mut cache, x: a, dim0: 0 - 1, dim1: 0 - 2) }
+        if trans_b != 0 { b = tensor_transpose(cache: mut cache, x: b, dim0: 0 - 1, dim1: 0 - 2) }
+        result = tensor_matmul(cache: mut cache, a: a, b: b)
+        let alpha = onnx_attr_float_or(node: read node, name: read "alpha", default_value: 1.0)
+        if alpha != 1.0 {
+            let ac = tensor_const_like_float(cache: mut cache, x: result, value: alpha)
+            result = tensor_mul(cache: mut cache, a: result, b: ac)
+        }
+        if List.len<String>(list: read node.inputs) > 2 {
+            let c = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 2))
+            let beta = onnx_attr_float_or(node: read node, name: read "beta", default_value: 1.0)
+            let mut scaled_c = c
+            if beta != 1.0 {
+                let bc = tensor_const_like_float(cache: mut cache, x: c, value: beta)
+                scaled_c = tensor_mul(cache: mut cache, a: c, b: bc)
+            }
+            result = tensor_add(cache: mut cache, a: result, b: scaled_c)
+        }
+    } else if node.op_type == "Conv" {
+        let x = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 0))
+        let w = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 1))
+        let mut bias = 0 - 1
+        if List.len<String>(list: read node.inputs) > 2 { bias = onnx_runner_get_tensor(cache: mut cache, runner: mut runner, name: read List.get<String>(list: read node.inputs, index: 2)) }
+        local zero2 = shp(a: 0, b: 0)
+        local one2 = shp(a: 1, b: 1)
+        local pads = onnx_attr_ints_or(node: read node, name: read "pads", fallback: read zero2)
+        local strides = onnx_attr_ints_or(node: read node, name: read "strides", fallback: read one2)
+        local dilations = onnx_attr_ints_or(node: read node, name: read "dilations", fallback: read one2)
+        let groups = onnx_attr_int_or(node: read node, name: read "group", default_value: 1)
+        result = tensor_conv2d(cache: mut cache, x: x, weight: w, bias: bias, groups: groups, sh: List.get<Int>(list: read strides, index: 0), sw: List.get<Int>(list: read strides, index: 1), dh: List.get<Int>(list: read dilations, index: 0), dw: List.get<Int>(list: read dilations, index: 1), pad_top: onnx_conv_padding(pads: read pads, pos: 0), pad_bottom: onnx_conv_padding(pads: read pads, pos: 2), pad_left: onnx_conv_padding(pads: read pads, pos: 1), pad_right: onnx_conv_padding(pads: read pads, pos: 3))
+    }
+    if result >= 0 && List.len<String>(list: read node.outputs) > 0 {
+        local out_name = List.get<String>(list: read node.outputs, index: 0)
+        onnx_runner_set_value(runner: mut runner, name: read out_name, tensor: result)
+        push1(l: mut outs, a: result)
+    }
+    return take outs
+}
+
+fn onnx_run_graph(cache: mut UOpCache, runner: mut OnnxRunnerState) -> fresh List<Int> {
+    local outs = List.new<Int>()
+    let mut i = 0
+    while i < List.len<OnnxNodeProto>(list: read runner.graph.nodes) {
+        local node = List.get<OnnxNodeProto>(list: read runner.graph.nodes, index: i)
+        local node_outs = onnx_execute_node(cache: mut cache, runner: mut runner, node: read node)
+        let mut j = 0
+        while j < List.len<Int>(list: read node_outs) {
+            push1(l: mut outs, a: List.get<Int>(list: read node_outs, index: j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return take outs
+}
+
+fn onnx_execution_smoke(cache: mut UOpCache) -> Bool {
+    local graph = onnx_empty_graph()
+    local runner = _init_from_graph(graph: read graph, is_subgraph: false)
+    local shape22 = shp(a: 2, b: 2)
+    local a_data = List.new<Float>()
+    pushf(l: mut a_data, v: 1.0)
+    pushf(l: mut a_data, v: 0.0 - 2.0)
+    pushf(l: mut a_data, v: 3.0)
+    pushf(l: mut a_data, v: 4.0)
+    let a = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read shape22, data: read a_data)
+    local b_data = List.new<Float>()
+    pushf(l: mut b_data, v: 5.0)
+    pushf(l: mut b_data, v: 6.0)
+    pushf(l: mut b_data, v: 7.0)
+    pushf(l: mut b_data, v: 8.0)
+    let b = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read shape22, data: read b_data)
+    onnx_runner_set_value(runner: mut runner, name: read "a", tensor: a)
+    onnx_runner_set_value(runner: mut runner, name: read "b", tensor: b)
+
+    local ab_in = List.new<String>()
+    List.push<String>(list: mut ab_in, value: read "a")
+    List.push<String>(list: mut ab_in, value: read "b")
+    local add_out = List.new<String>()
+    List.push<String>(list: mut add_out, value: read "add")
+    local add_node = onnx_node_new(op: read "Add", inputs: read ab_in, outputs: read add_out)
+    local add_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read add_node)
+    let add_id = List.get<Int>(list: read add_ids, index: 0)
+    local add_vals = eval_tensor(cache: read cache, id: add_id)
+
+    local relu_in = List.new<String>()
+    List.push<String>(list: mut relu_in, value: read "add")
+    local relu_out = List.new<String>()
+    List.push<String>(list: mut relu_out, value: read "relu")
+    local relu_node = onnx_node_new(op: read "Relu", inputs: read relu_in, outputs: read relu_out)
+    local relu_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read relu_node)
+    local relu_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read relu_ids, index: 0))
+
+    local reshape_proto_dims = shp1(a: 1)
+    local shape_ints = List.new<Int>()
+    pushi(l: mut shape_ints, v: 4)
+    local shape_floats = List.new<Float>()
+    local shape_raw = List.new<Int>()
+    local shape_proto = OnnxTensorProto(name: String.copy(value: read "shape"), data_type: 7, dims: take reshape_proto_dims, int64_data: take shape_ints, float_data: take shape_floats, raw_data: take shape_raw)
+    let shape_tensor = onnx_tensor_to_tensor(cache: mut cache, tensor: read shape_proto)
+    onnx_runner_set_value(runner: mut runner, name: read "shape", tensor: shape_tensor)
+    local reshape_in = List.new<String>()
+    List.push<String>(list: mut reshape_in, value: read "a")
+    List.push<String>(list: mut reshape_in, value: read "shape")
+    local reshape_out = List.new<String>()
+    List.push<String>(list: mut reshape_out, value: read "reshaped")
+    local reshape_node = onnx_node_new(op: read "Reshape", inputs: read reshape_in, outputs: read reshape_out)
+    local reshape_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read reshape_node)
+    local reshape_shape = uop_shape(cache: read cache, id: List.get<Int>(list: read reshape_ids, index: 0))
+
+    local perm = shp(a: 1, b: 0)
+    local trans_attrs = List.new<OnnxAttributeProto>()
+    local trans_attr = onnx_attr_ints(name: read "perm", values: read perm)
+    List.push<OnnxAttributeProto>(list: mut trans_attrs, value: read (manage trans_attr))
+    local trans_in = List.new<String>()
+    List.push<String>(list: mut trans_in, value: read "a")
+    local trans_out = List.new<String>()
+    List.push<String>(list: mut trans_out, value: read "trans")
+    local trans_node = onnx_node_with_attrs(op: read "Transpose", inputs: read trans_in, outputs: read trans_out, attrs: read trans_attrs)
+    local trans_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read trans_node)
+    local trans_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read trans_ids, index: 0))
+
+    local m1_shape = shp(a: 1, b: 2)
+    local m1_data = List.new<Float>()
+    pushf(l: mut m1_data, v: 2.0)
+    pushf(l: mut m1_data, v: 3.0)
+    let m1 = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read m1_shape, data: read m1_data)
+    local m2_shape = shp(a: 2, b: 1)
+    local m2_data = List.new<Float>()
+    pushf(l: mut m2_data, v: 4.0)
+    pushf(l: mut m2_data, v: 5.0)
+    let m2 = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read m2_shape, data: read m2_data)
+    onnx_runner_set_value(runner: mut runner, name: read "m1", tensor: m1)
+    onnx_runner_set_value(runner: mut runner, name: read "m2", tensor: m2)
+    local mm_in = List.new<String>()
+    List.push<String>(list: mut mm_in, value: read "m1")
+    List.push<String>(list: mut mm_in, value: read "m2")
+    local mm_out = List.new<String>()
+    List.push<String>(list: mut mm_out, value: read "mm")
+    local mm_node = onnx_node_new(op: read "MatMul", inputs: read mm_in, outputs: read mm_out)
+    local mm_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read mm_node)
+    local mm_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read mm_ids, index: 0))
+
+    local gemm_bias_shape = shp1(a: 1)
+    local gemm_bias_data = List.new<Float>()
+    pushf(l: mut gemm_bias_data, v: 1.0)
+    let gemm_bias = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read gemm_bias_shape, data: read gemm_bias_data)
+    onnx_runner_set_value(runner: mut runner, name: read "gb", tensor: gemm_bias)
+    local gemm_in = List.new<String>()
+    List.push<String>(list: mut gemm_in, value: read "m1")
+    List.push<String>(list: mut gemm_in, value: read "m2")
+    List.push<String>(list: mut gemm_in, value: read "gb")
+    local gemm_out = List.new<String>()
+    List.push<String>(list: mut gemm_out, value: read "gemm")
+    local gemm_node = onnx_node_new(op: read "Gemm", inputs: read gemm_in, outputs: read gemm_out)
+    local gemm_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read gemm_node)
+    local gemm_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read gemm_ids, index: 0))
+
+    local conv_x_shape = shp4(a: 1, b: 1, c: 2, d: 2)
+    local conv_x_data = List.new<Float>()
+    pushf(l: mut conv_x_data, v: 1.0)
+    pushf(l: mut conv_x_data, v: 2.0)
+    pushf(l: mut conv_x_data, v: 3.0)
+    pushf(l: mut conv_x_data, v: 4.0)
+    let conv_x = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read conv_x_shape, data: read conv_x_data)
+    local conv_w_shape = shp4(a: 1, b: 1, c: 1, d: 1)
+    local conv_w_data = List.new<Float>()
+    pushf(l: mut conv_w_data, v: 2.0)
+    let conv_w = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read conv_w_shape, data: read conv_w_data)
+    local conv_bias_shape = shp1(a: 1)
+    local conv_bias_data = List.new<Float>()
+    pushf(l: mut conv_bias_data, v: 1.0)
+    let conv_bias = mk_data_tensor(cache: mut cache, dt: read dt_float32(), shape: read conv_bias_shape, data: read conv_bias_data)
+    onnx_runner_set_value(runner: mut runner, name: read "cx", tensor: conv_x)
+    onnx_runner_set_value(runner: mut runner, name: read "cw", tensor: conv_w)
+    onnx_runner_set_value(runner: mut runner, name: read "cb", tensor: conv_bias)
+    local conv_in = List.new<String>()
+    List.push<String>(list: mut conv_in, value: read "cx")
+    List.push<String>(list: mut conv_in, value: read "cw")
+    List.push<String>(list: mut conv_in, value: read "cb")
+    local conv_out = List.new<String>()
+    List.push<String>(list: mut conv_out, value: read "conv")
+    local conv_node = onnx_node_new(op: read "Conv", inputs: read conv_in, outputs: read conv_out)
+    local conv_ids = onnx_execute_node(cache: mut cache, runner: mut runner, node: read conv_node)
+    local conv_vals = eval_tensor(cache: read cache, id: List.get<Int>(list: read conv_ids, index: 0))
+
+    let mut ok = List.len<Float>(list: read add_vals) == 4
+    ok = ok && List.get<Float>(list: read add_vals, index: 0) == 6.0
+    ok = ok && List.get<Float>(list: read add_vals, index: 1) == 4.0
+    ok = ok && List.get<Float>(list: read relu_vals, index: 0) == 6.0
+    ok = ok && List.len<Int>(list: read reshape_shape) == 1
+    ok = ok && List.get<Int>(list: read reshape_shape, index: 0) == 4
+    ok = ok && List.get<Float>(list: read trans_vals, index: 1) == 3.0
+    ok = ok && List.len<Float>(list: read mm_vals) == 1
+    ok = ok && List.get<Float>(list: read mm_vals, index: 0) == 23.0
+    ok = ok && List.len<Float>(list: read gemm_vals) == 1
+    ok = ok && List.get<Float>(list: read gemm_vals, index: 0) == 24.0
+    ok = ok && List.len<Float>(list: read conv_vals) == 4
+    ok = ok && List.get<Float>(list: read conv_vals, index: 0) == 3.0
+    ok = ok && List.get<Float>(list: read conv_vals, index: 3) == 9.0
+    return ok
 }

@@ -593,9 +593,12 @@ Integrated pieces:
   `(x * y) < c` feed range-bound collapse when the lifted operand and bound are range-free, and
   `(x + y) != c` feeds load-index collapse. The next PatternMatcher parity batch covers
   REDUCE-on-ADD distribution, DEFINE_VAR-gated AND-on-WHERE extraction, and MUL-casted-bool
-  normalization into `WHERE(gate, x, 0)` for the supported reduce-collapse path. Full parity for
-  the generic reduce-collapse driver, broader symbolic composition, and exact placeholder
-  substitution remains later fidelity work.
+  normalization into `WHERE(gate, x, 0)` for the supported reduce-collapse path. A first generic
+  reduce-collapse driver is now present for supported range-scoped subgraphs: it rejects nested
+  STORE/REDUCE scopes, replaces non-constant external inputs with bounded DEFINE_VAR placeholders,
+  runs the integrated collapse rules, verifies the collapsed sink is range-free, then restores the
+  original inputs. Full parity for broader symbolic composition, multi-shape corner cases, and the
+  exact upstream placeholder policy remains later fidelity work.
 - `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
   `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and

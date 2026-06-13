@@ -1,5 +1,24 @@
-// Source-path marker for tinygrad/mixin/movement.py. MovementMixin methods are
-// integrated as tensor movement helpers in tensor.rss.
+// Source-shaped MovementMixin wrappers over tensor movement helpers.
 features: local
 
 fn mixin_movement_package_marker() -> fresh String { return String.copy(value: read "mixin.movement") }
+
+fn mixin_movement_reshape(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
+    return tensor_reshape(cache: mut cache, x: x, new_shape: read shape)
+}
+
+fn mixin_movement_expand(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
+    return tensor_expand(cache: mut cache, x: x, new_shape: read shape)
+}
+
+fn mixin_movement_permute(cache: mut UOpCache, x: Int, perm: read List<Int>) -> Int {
+    return tensor_permute(cache: mut cache, x: x, perm: read perm)
+}
+
+fn mixin_movement_flip(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+    return tensor_flip(cache: mut cache, x: x, axes: read axes)
+}
+
+fn mixin_movement_pad(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
+    return tensor_pad(cache: mut cache, x: x, before: read before, after: read after)
+}

@@ -1,5 +1,14 @@
-// Source-path marker for tinygrad/mixin/elementwise.py. ElementwiseMixin methods
-// are integrated as tensor elementwise helpers in tensor.rss.
+// Source-shaped ElementwiseMixin wrappers over tensor elementwise helpers.
 features: local
 
 fn mixin_elementwise_package_marker() -> fresh String { return String.copy(value: read "mixin.elementwise") }
+
+fn mixin_elementwise_add(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_add(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_sub(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_sub(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_mul(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_mul(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_div(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_div(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_where(cache: mut UOpCache, cond: Int, x: Int, y: Int) -> Int { return tensor_where(cache: mut cache, cond: cond, x: x, y: y) }
+fn mixin_elementwise_relu(cache: mut UOpCache, x: Int) -> Int { return tensor_relu(cache: mut cache, x: x) }
+fn mixin_elementwise_sigmoid(cache: mut UOpCache, x: Int) -> Int { return tensor_sigmoid(cache: mut cache, x: x) }
+fn mixin_elementwise_log(cache: mut UOpCache, x: Int) -> Int { return tensor_log(cache: mut cache, x: x) }
+fn mixin_elementwise_exp(cache: mut UOpCache, x: Int) -> Int { return tensor_exp(cache: mut cache, x: x) }

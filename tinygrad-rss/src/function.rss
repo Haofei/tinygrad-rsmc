@@ -1,5 +1,26 @@
-// Source-path marker for tinygrad/function.py. Function decorator surface is
-// currently implemented through tensor call/callify helpers.
+// Source-shaped helpers for tinygrad/function.py over the integrated tensor
+// call/callify surface.
 features: local
 
 fn function_package_marker() -> fresh String { return String.copy(value: read "function") }
+
+fn function_ctx_new(precompile: Bool, precompile_backward: Bool, allow_implicit: Bool) -> fresh FunctionCtx {
+    return function(precompile: precompile, precompile_backward: precompile_backward, allow_implicit: allow_implicit)
+}
+
+fn function_ctx_add(ctx: mut FunctionCtx, x: Int) -> Unit {
+    add_to_ctx(ctx: mut ctx, x: x)
+    return Unit
+}
+
+fn function_ctx_saved_count(ctx: read FunctionCtx) -> Int {
+    return List.len<Int>(list: read ctx.saved)
+}
+
+fn function_call(cache: mut UOpCache, body: Int, args: read List<Int>, fxn: Int) -> Int {
+    return tensor_call(cache: mut cache, x: body, args: read args, fxn: fxn)
+}
+
+fn function_callify(cache: mut UOpCache, body: Int, args: read List<Int>) -> Int {
+    return tensor_callify(cache: mut cache, x: body, args: read args)
+}

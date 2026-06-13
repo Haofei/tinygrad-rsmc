@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 41,871 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 42,013 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -40,6 +40,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     `runtime/support/compiler_qcom.py`: source-path mapping is complete and the rough symbol
     inventory is 100%. Python runtime-adjacent helpers such as env/diskcache/fetch/profile/tqdm
     are deterministic RSS facades, not full Python runtime behavior.
+  - focused function/mixin semantic wrapper batch: `function.py`, `mixin/creation.py`,
+    `mixin/dtype.py`, `mixin/elementwise.py`, `mixin/movement.py`, `mixin/rand.py`, and
+    `mixin/reduce.py` now expose source-path-local wrappers over the integrated tensor call,
+    creation, dtype, elementwise, movement, random, and reduction helpers. These wrappers are
+    exercised by the active smoke; they are still RSS graph-helper entry points, not Python
+    descriptor/decorator object behavior.
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.

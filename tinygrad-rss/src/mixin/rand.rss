@@ -1,5 +1,20 @@
-// Source-path marker for tinygrad/mixin/rand.py. RandMixin methods are
-// integrated as tensor random helpers in tensor.rss.
+// Source-shaped RandMixin wrappers over tensor random helpers.
 features: local
 
 fn mixin_rand_package_marker() -> fresh String { return String.copy(value: read "mixin.rand") }
+
+fn mixin_rand_random_bits(cache: mut UOpCache, key0: Int, key1: Int, counter_low: Int, counter_high: Int, num: Int) -> Int {
+    return random_bits(cache: mut cache, key0: key0, key1: key1, counter_low: counter_low, counter_high: counter_high, num: num)
+}
+
+fn mixin_rand_bits_to_rand(cache: mut UOpCache, bits: Int, shape: read List<Int>, dt: read DType) -> Int {
+    return _bits_to_rand(cache: mut cache, bits: bits, shape: read shape, dt: read dt)
+}
+
+fn mixin_rand_rand_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
+    return tensor_rand_like(cache: mut cache, x: x, dt: read dt, seed: seed)
+}
+
+fn mixin_rand_randn_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
+    return tensor_randn_like(cache: mut cache, x: x, dt: read dt, seed: seed)
+}

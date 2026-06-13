@@ -1,5 +1,20 @@
-// Source-path marker for tinygrad/mixin/creation.py. CreationMixin methods are
-// integrated as tensor creation helpers in tensor.rss.
+// Source-shaped CreationMixin wrappers over tensor creation helpers.
 features: local
 
 fn mixin_creation_package_marker() -> fresh String { return String.copy(value: read "mixin.creation") }
+
+fn mixin_creation_full_like(cache: mut UOpCache, x: Int, value: Float, dt: read DType) -> Int {
+    return tensor_full_like(cache: mut cache, x: x, dt: read dt, value: value)
+}
+
+fn mixin_creation_full_like_same(cache: mut UOpCache, x: Int, value: Float) -> Int {
+    return tensor_full_like_same(cache: mut cache, x: x, value: value)
+}
+
+fn mixin_creation_zeros_like(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
+    return tensor_zeros_like(cache: mut cache, x: x, dt: read dt)
+}
+
+fn mixin_creation_ones_like(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
+    return tensor_ones_like(cache: mut cache, x: x, dt: read dt)
+}

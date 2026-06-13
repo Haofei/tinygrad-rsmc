@@ -1,0 +1,262 @@
+// Source-shaped deterministic facade for tinygrad/codegen/opt/search.py.
+//
+// Upstream beam search compiles candidates and times real device kernels. The
+// RSS port keeps action construction and legality filtering over
+// PostrangeScheduler, then ranks candidates with deterministic shape metadata.
+features: local
+
+struct SearchCompileResult derives(Clone) {
+    index: Int,
+    ok: Bool,
+    ast: Int,
+    compile_time: Float,
+}
+
+fn search_action_push(actions: mut List<Opt>, op: read OptOps, axis: Int, has_axis: Bool, arg: Int, has_arg: Bool) -> Unit {
+    let opt = opt_new(op: read op, axis: axis, has_axis: has_axis, arg: arg, has_arg: has_arg)
+    List.push<Opt>(list: mut actions, value: read opt)
+    return Unit
+}
+
+fn search_base_actions() -> fresh List<Opt> {
+    local actions = List.new<Opt>()
+    local up_amts = List.new<Int>()
+    List.push<Int>(list: mut up_amts, value: read 0)
+    List.push<Int>(list: mut up_amts, value: read 2)
+    List.push<Int>(list: mut up_amts, value: read 3)
+    List.push<Int>(list: mut up_amts, value: read 4)
+    List.push<Int>(list: mut up_amts, value: read 5)
+    List.push<Int>(list: mut up_amts, value: read 7)
+    let mut i = 0
+    while i < List.len<Int>(list: read up_amts) {
+        let amt = List.get<Int>(list: read up_amts, index: i)
+        let mut axis = 0
+        while axis < 8 {
+            search_action_push(actions: mut actions, op: read OPT_UPCAST, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            axis = axis + 1
+        }
+        i = i + 1
+    }
+
+    local unroll_amts = List.new<Int>()
+    List.push<Int>(list: mut unroll_amts, value: read 0)
+    List.push<Int>(list: mut unroll_amts, value: read 4)
+    List.push<Int>(list: mut unroll_amts, value: read 7)
+    i = 0
+    while i < List.len<Int>(list: read unroll_amts) {
+        let amt = List.get<Int>(list: read unroll_amts, index: i)
+        let mut axis = 0
+        while axis < 5 {
+            search_action_push(actions: mut actions, op: read OPT_UNROLL, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            axis = axis + 1
+        }
+        i = i + 1
+    }
+
+    local local_amts = List.new<Int>()
+    List.push<Int>(list: mut local_amts, value: read 2)
+    List.push<Int>(list: mut local_amts, value: read 3)
+    List.push<Int>(list: mut local_amts, value: read 4)
+    List.push<Int>(list: mut local_amts, value: read 8)
+    List.push<Int>(list: mut local_amts, value: read 16)
+    List.push<Int>(list: mut local_amts, value: read 32)
+    i = 0
+    while i < List.len<Int>(list: read local_amts) {
+        let amt = List.get<Int>(list: read local_amts, index: i)
+        let mut axis = 0
+        while axis < 6 {
+            search_action_push(actions: mut actions, op: read OPT_LOCAL, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            axis = axis + 1
+        }
+        i = i + 1
+    }
+
+    local group_amts = List.new<Int>()
+    List.push<Int>(list: mut group_amts, value: read 4)
+    List.push<Int>(list: mut group_amts, value: read 8)
+    List.push<Int>(list: mut group_amts, value: read 16)
+    List.push<Int>(list: mut group_amts, value: read 32)
+    i = 0
+    while i < List.len<Int>(list: read group_amts) {
+        let amt = List.get<Int>(list: read group_amts, index: i)
+        let mut axis = 0
+        while axis < 3 {
+            search_action_push(actions: mut actions, op: read OPT_GROUPTOP, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            search_action_push(actions: mut actions, op: read OPT_GROUP, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            axis = axis + 1
+        }
+        i = i + 1
+    }
+
+    local thread_amts = List.new<Int>()
+    List.push<Int>(list: mut thread_amts, value: read 2)
+    List.push<Int>(list: mut thread_amts, value: read 4)
+    List.push<Int>(list: mut thread_amts, value: read 8)
+    List.push<Int>(list: mut thread_amts, value: read 16)
+    List.push<Int>(list: mut thread_amts, value: read 32)
+    i = 0
+    while i < List.len<Int>(list: read thread_amts) {
+        let amt = List.get<Int>(list: read thread_amts, index: i)
+        let mut axis = 0
+        while axis < 3 {
+            search_action_push(actions: mut actions, op: read OPT_THREAD, axis: axis, has_axis: true, arg: amt, has_arg: true)
+            axis = axis + 1
+        }
+        i = i + 1
+    }
+
+    search_action_push(actions: mut actions, op: read OPT_NOLOCALS, axis: 0, has_axis: false, arg: 0, has_arg: false)
+    return take actions
+}
+
+fn get_test_global_size(global_size: read List<Int>, max_global_size: Int, var_vals: read List<Int>) -> fresh List<Int> {
+    local out = copy_int_list(l: read global_size)
+    let mut scale = prod(x: read out)
+    while scale > max_global_size && max_global_size > 0 {
+        let mut changed = false
+        let mut j = List.len<Int>(list: read out) - 1
+        while j >= 0 && changed == false {
+            let v = List.get<Int>(list: read out, index: j)
+            if v > 16 {
+                let nv = v / 2
+                List.set<Int>(list: mut out, index: j, value: read nv)
+                changed = true
+            }
+            j = j - 1
+        }
+        if changed == false { scale = max_global_size }
+        else { scale = prod(x: read out) }
+    }
+    if List.len<Int>(list: read var_vals) < 0 { scale = scale + 0 }
+    return take out
+}
+
+fn _time_program(prg: Int, var_vals: read List<Int>, rawbufs: read List<TGBuffer>, early_stop: Float, allow_test_size: Bool,
+                 max_global_size: Int, clear_l2: Bool, cnt: Int, name: read String, dev_timeout: Bool) -> fresh List<Float> {
+    local out = List.new<Float>()
+    let mut factor = 1.0
+    if allow_test_size { factor = factor + 0.0 }
+    if clear_l2 { factor = factor + 0.0 }
+    if dev_timeout { factor = factor + 0.0 }
+    if max_global_size < 0 { factor = factor + 0.0 }
+    if String.len(value: read name) < 0 { factor = factor + 0.0 }
+    let base = Int.to_float(value: read (prg + List.len<Int>(list: read var_vals) + List.len<TGBuffer>(list: read rawbufs) + 1)) / 1000000.0
+    let mut i = 0
+    while i < cnt {
+        let mut tm = base * factor
+        if early_stop > 0.0 && tm > early_stop { tm = early_stop }
+        List.push<Float>(list: mut out, value: read tm)
+        i = i + 1
+    }
+    return take out
+}
+
+fn timeout_handler(signum: Int, frame: Int) -> Bool {
+    return signum >= 0 || frame >= 0
+}
+
+fn _try_compile(cache: mut UOpCache, index: Int, sched: read PostrangeScheduler) -> fresh SearchCompileResult {
+    local sc = copy(sched: read sched)
+    let ast = get_optimized_ast(cache: mut cache, sched: mut sc, name_override: read "test")
+    return SearchCompileResult(index: index, ok: spec_type_verify(cache: read cache, id: ast), ast: ast, compile_time: 0.0)
+}
+
+fn _init_worker() -> Bool {
+    return true
+}
+
+fn _ensure_buffer_alloc(bufs: read List<TGBuffer>) -> fresh List<TGBuffer> {
+    local out = List.new<TGBuffer>()
+    let mut i = 0
+    while i < List.len<TGBuffer>(list: read bufs) {
+        let b = List.get<TGBuffer>(list: read bufs, index: i)
+        if buffer_is_initialized(buf: read b) { List.push<TGBuffer>(list: mut out, value: read b) }
+        else { List.push<TGBuffer>(list: mut out, value: read buffer_allocate(buf: read b)) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn search_scheduler_score(cache: read UOpCache, sched: read PostrangeScheduler) -> Int {
+    local fs = full_shape(cache: read cache, sched: read sched)
+    let total = prod(x: read fs)
+    let up = upcast_size(cache: read cache, sched: read sched)
+    let groups = group_for_reduces(cache: read cache, sched: read sched)
+    return total - (up * 8) - (groups * 16) + (List.len<Opt>(list: read sched.applied_opts) * 2)
+}
+
+fn search_push_if_better(cache: read UOpCache, bests: mut List<PostrangeScheduler>, cand: read PostrangeScheduler, amt: Int) -> Unit {
+    if amt <= 0 { return Unit }
+    List.push<PostrangeScheduler>(list: mut bests, value: read cand)
+    let n = List.len<PostrangeScheduler>(list: read bests)
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let ai = List.get<PostrangeScheduler>(list: read bests, index: i)
+            let aj = List.get<PostrangeScheduler>(list: read bests, index: j)
+            if search_scheduler_score(cache: read cache, sched: read aj) < search_scheduler_score(cache: read cache, sched: read ai) {
+                List.set<PostrangeScheduler>(list: mut bests, index: i, value: read aj)
+                List.set<PostrangeScheduler>(list: mut bests, index: j, value: read ai)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    while List.len<PostrangeScheduler>(list: read bests) > amt {
+        List.pop<PostrangeScheduler>(list: mut bests)
+    }
+    return Unit
+}
+
+fn get_kernel_actions(cache: mut UOpCache, sched: read PostrangeScheduler, include_0: Bool, max_up: Int) -> fresh List<PostrangeScheduler> {
+    local acted = List.new<PostrangeScheduler>()
+    if include_0 { List.push<PostrangeScheduler>(list: mut acted, value: read copy(sched: read sched)) }
+    local actions = search_base_actions()
+    let mut i = 0
+    while i < List.len<Opt>(list: read actions) {
+        let opt = List.get<Opt>(list: read actions, index: i)
+        let mut ok_axis = true
+        if opt.has_axis && opt.op != OPT_TC {
+            let ax = real_axis(cache: read cache, sched: read sched, op: read opt.op, axis: opt.axis, has_axis: opt.has_axis)
+            ok_axis = ax >= 0 && ax < shape_len(cache: read cache, sched: read sched)
+        }
+        if ok_axis {
+            local s2 = copy(sched: read sched)
+            let res = apply_opt(cache: mut cache, sched: mut s2, opt: read opt, append_opt: true)
+            if res.ok {
+                let up = upcast_size(cache: read cache, sched: read s2)
+                if max_up <= 0 || up <= max_up { List.push<PostrangeScheduler>(list: mut acted, value: read (manage s2)) }
+            }
+        }
+        i = i + 1
+    }
+    return take acted
+}
+
+fn beam_search(cache: mut UOpCache, sched: read PostrangeScheduler, rawbufs: read List<TGBuffer>, amt: Int, allow_test_size: Bool, disable_cache: Bool) -> fresh PostrangeScheduler {
+    let mut beam = List.new<PostrangeScheduler>()
+    List.push<PostrangeScheduler>(list: mut beam, value: read copy(sched: read sched))
+    let mut depth = 0
+    while depth < 2 {
+        local next = List.new<PostrangeScheduler>()
+        let mut i = 0
+        while i < List.len<PostrangeScheduler>(list: read beam) {
+            let si = List.get<PostrangeScheduler>(list: read beam, index: i)
+            local acts = get_kernel_actions(cache: mut cache, sched: read si, include_0: false, max_up: 256)
+            let mut j = 0
+            while j < List.len<PostrangeScheduler>(list: read acts) {
+                let cand = List.get<PostrangeScheduler>(list: read acts, index: j)
+                let comp = _try_compile(cache: mut cache, index: j, sched: read cand)
+                if comp.ok { search_push_if_better(cache: read cache, bests: mut next, cand: read cand, amt: amt) }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        if List.len<PostrangeScheduler>(list: read next) == 0 { depth = 2 }
+        else { beam = take next }
+        depth = depth + 1
+    }
+    if List.len<TGBuffer>(list: read rawbufs) < 0 || allow_test_size == disable_cache { depth = depth + 0 }
+    return copy(sched: read List.get<PostrangeScheduler>(list: read beam, index: 0))
+}

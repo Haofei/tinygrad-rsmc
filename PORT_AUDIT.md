@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 39 RSS files, 33,683 LOC.
+  - integrated `tinygrad-rss/src`: 41 RSS files, 34,054 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -31,8 +31,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - result: `tensor.py` 103/106 symbols, `mixin/__init__.py` 82/82 symbols,
     `uop/ops.py` 216/221 symbols; 401/409 total rough symbols covered.
   - focused compiler-opt batch: `codegen/opt/__init__.py` 3/3 symbols,
-    `codegen/opt/postrange.py` 30/31 symbols, and `codegen/opt/tc.py` 11/11 symbols;
-    44/54 total rough symbols covered across the current optimizer audit set.
+    `codegen/opt/postrange.py` 30/31 symbols, `codegen/opt/tc.py` 11/11 symbols,
+    `codegen/opt/heuristic.py` 1/1 symbol, and `codegen/opt/search.py` 8/8 symbols;
+    53/54 total rough symbols covered across the current optimizer audit set.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -381,7 +382,8 @@ Integrated pieces:
   primitives, with a real `reduce_unparented` path for unused ADD/MUL reduce ranges and
   conservative collapse hooks for pattern-heavy upstream cases. Full PatternMatcher parity for
   gated range shrinking and load-index collapse remains later fidelity work.
-- `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, and `codegen/opt/tc.rss`: first integrated source-shaped
+- `codegen/opt/__init__.rss`, `codegen/opt/postrange.rss`, `codegen/opt/tc.rss`,
+  `codegen/opt/heuristic.rss`, and `codegen/opt/search.rss`: first integrated source-shaped
   `tinygrad/codegen/opt` batch. `OptOps`, `Opt`, and `check` are present, and
   `PostrangeScheduler` exposes range inventory, shape strings, output/globalizable ranges,
   conservative loop-to-global conversion, range splitting through `shift_to`, `apply_opt`,
@@ -389,9 +391,12 @@ Integrated pieces:
   `TensorCore` metadata now covers dims, thread counts, element counts, dtype pairs, opts,
   local/upcast/reduce axes, swizzle remaps, base shape strings, permute derivation, string
   rendering, constructor validation, and CUDA/AMD arch-table facades over a representative
-  source-shaped subset. Tensor-core lowering, full arch table breadth, beam/search policy,
-  renderer-specific heuristics, and exact upstream symbolic range semantics remain later
-  fidelity work.
+  source-shaped subset. `hand_coded_optimizations` applies conservative group/upcast/unroll/local
+  batches over the current scheduler, and `search.rss` exposes source-shaped global-size clamping,
+  worker/timeout/compile/buffer-allocation facades, action generation, and deterministic beam
+  selection over legal `PostrangeScheduler` variants. Tensor-core lowering, full arch table
+  breadth, real device timing/compile caching for beam search, renderer-specific heuristics, and
+  exact upstream symbolic range semantics remain later fidelity work.
 - `schedule/multi.rss`: first integrated source-shaped `tinygrad/schedule/multi.py` slice:
   early `PARAM -> MULTI` lowering for axis-tagged tuple-device params, COPY/MSELECT/MSTACK rewrite helpers for broadcasting a single-device COPY to a tuple
   device as `MSTACK(copy...)`, copying a multi-device value to one device by copying each shard and

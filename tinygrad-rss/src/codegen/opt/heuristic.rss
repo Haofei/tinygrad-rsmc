@@ -1,0 +1,102 @@
+// Conservative source-shaped slice of tinygrad/codegen/opt/heuristic.py.
+//
+// The upstream policy depends on renderer capabilities, env flags, image dtypes,
+// and tensor-core matching. This RSS layer applies the same broad opt families
+// over the current PostrangeScheduler metadata without claiming device-specific
+// tuning parity.
+features: local
+
+fn heuristic_try_apply(cache: mut UOpCache, sched: mut PostrangeScheduler, op: read OptOps, axis: Int, arg: Int) -> Bool {
+    let opt = opt_new(op: read op, axis: axis, has_axis: axis >= 0, arg: arg, has_arg: arg > 0)
+    let res = apply_opt(cache: mut cache, sched: mut sched, opt: read opt, append_opt: true)
+    return res.ok
+}
+
+fn heuristic_first_divisor(sz: Int, candidates: read List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read candidates) {
+        let c = List.get<Int>(list: read candidates, index: i)
+        if c > 1 && sz % c == 0 { return c }
+        i = i + 1
+    }
+    return 0
+}
+
+fn heuristic_candidates() -> fresh List<Int> {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 16)
+    List.push<Int>(list: mut xs, value: read 8)
+    List.push<Int>(list: mut xs, value: read 4)
+    List.push<Int>(list: mut xs, value: read 3)
+    List.push<Int>(list: mut xs, value: read 2)
+    return take xs
+}
+
+fn hand_coded_optimizations(cache: mut UOpCache, sched: read PostrangeScheduler) -> fresh PostrangeScheduler {
+    local out = copy(sched: read sched)
+    let mut fs = full_shape(cache: read cache, sched: read out)
+    let mut updims = upcastable_dims(cache: read cache, sched: read out)
+    let mut undims = unrollable_dims(cache: read cache, sched: read out)
+    local cands = heuristic_candidates()
+
+    let mut reduce_prod = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read undims) {
+        let ax = List.get<Int>(list: read undims, index: i)
+        if ax >= 0 && ax < List.len<Int>(list: read fs) { reduce_prod = reduce_prod * List.get<Int>(list: read fs, index: ax) }
+        i = i + 1
+    }
+
+    // Group reductions before optional unrolling when a small divisible reduce axis exists.
+    if reduce_prod > 1 && List.len<Int>(list: read undims) > 0 {
+        let ax0 = List.get<Int>(list: read undims, index: 0)
+        if ax0 >= 0 && ax0 < List.len<Int>(list: read fs) {
+            let gsz = heuristic_first_divisor(sz: List.get<Int>(list: read fs, index: ax0), candidates: read cands)
+            if gsz > 0 { heuristic_try_apply(cache: mut cache, sched: mut out, op: read OPT_GROUPTOP, axis: 0, arg: gsz) }
+        }
+    }
+
+    // Upcast one output axis when it is cleanly divisible by a common vector size.
+    updims = upcastable_dims(cache: read cache, sched: read out)
+    fs = full_shape(cache: read cache, sched: read out)
+    i = List.len<Int>(list: read updims) - 1
+    let mut did_upcast = false
+    while i >= 0 && did_upcast == false {
+        let ax = List.get<Int>(list: read updims, index: i)
+        if ax >= 0 && ax < List.len<Int>(list: read fs) {
+            let usz = heuristic_first_divisor(sz: List.get<Int>(list: read fs, index: ax), candidates: read cands)
+            if usz > 0 { did_upcast = heuristic_try_apply(cache: mut cache, sched: mut out, op: read OPT_UPCAST, axis: ax, arg: usz) }
+        }
+        i = i - 1
+    }
+
+    // Unroll the last remaining reduce axis, mirroring upstream's preference for inner reduce work.
+    undims = unrollable_dims(cache: read cache, sched: read out)
+    fs = full_shape(cache: read cache, sched: read out)
+    if List.len<Int>(list: read undims) > 0 && upcast_size(cache: read cache, sched: read out) < 64 {
+        let ridx = List.len<Int>(list: read undims) - 1
+        let raxis = List.get<Int>(list: read undims, index: ridx)
+        if raxis >= 0 && raxis < List.len<Int>(list: read fs) {
+            let rsz = heuristic_first_divisor(sz: List.get<Int>(list: read fs, index: raxis), candidates: read cands)
+            if rsz > 0 { heuristic_try_apply(cache: mut cache, sched: mut out, op: read OPT_UNROLL, axis: ridx, arg: rsz) }
+        }
+    }
+
+    // Localize one global/loop axis when no local axis has been introduced yet.
+    if group_for_reduces(cache: read cache, sched: read out) == 0 {
+        updims = upcastable_dims(cache: read cache, sched: read out)
+        fs = full_shape(cache: read cache, sched: read out)
+        i = 0
+        let mut did_local = false
+        while i < List.len<Int>(list: read updims) && did_local == false {
+            let ax = List.get<Int>(list: read updims, index: i)
+            if ax >= 0 && ax < List.len<Int>(list: read fs) {
+                let lsz = heuristic_first_divisor(sz: List.get<Int>(list: read fs, index: ax), candidates: read cands)
+                if lsz > 0 { did_local = heuristic_try_apply(cache: mut cache, sched: mut out, op: read OPT_LOCAL, axis: ax, arg: lsz) }
+            }
+            i = i + 1
+        }
+    }
+
+    return take out
+}

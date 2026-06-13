@@ -1276,6 +1276,38 @@ fn main() -> Unit {
         }
         None => {}
     }
+    local mex_wmma_arg = mk_wmma_arg(n: 1, m: 1, k: 1, threads: 1, a_elems: 2, b_elems: 2, c_elems: 2, axis_fields: 0)
+    let mex_wmma_same = mk_wmma(cache: mut mcache, a_id: mex_unroll_axis0, b_id: mex_unroll_axis0, acc_id: mex_unroll_axis0, dt: read mex_stack2dt, arg: read mex_wmma_arg)
+    let mut mex_expand_wmma_same_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_wmma_same) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let a_src = node_src_id(cache: read mcache, id: inner, k: 0)
+            let b_src = node_src_id(cache: read mcache, id: inner, k: 1)
+            let c_src = node_src_id(cache: read mcache, id: inner, k: 2)
+            mex_expand_wmma_same_ok = node_op(cache: read mcache, id: r) == UNROLL && node_axis_size_product(cache: read mcache, id: r) == 2 && node_op(cache: read mcache, id: inner) == WMMA && node_full_dtype(cache: read mcache, id: inner).count == 4 && a_src == mex_stack2 && b_src == mex_stack2 && c_src == mex_stack2 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mex_wmma_mixed = mk_wmma(cache: mut mcache, a_id: mex_unroll_axis0, b_id: mex_unroll_axis1, acc_id: mex_stack2, dt: read mex_stack2dt, arg: read mex_wmma_arg)
+    let mut mex_expand_wmma_mixed_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_wmma_mixed) {
+        Some(r) => {
+            let inner = node_src_id(cache: read mcache, id: r, k: 0)
+            let a_src = node_src_id(cache: read mcache, id: inner, k: 0)
+            let b_src = node_src_id(cache: read mcache, id: inner, k: 1)
+            let c_src = node_src_id(cache: read mcache, id: inner, k: 2)
+            local a_idxs = node_argints(cache: read mcache, id: a_src)
+            local b_idxs = node_argints(cache: read mcache, id: b_src)
+            let wmma_mixed_root_ok = node_op(cache: read mcache, id: r) == UNROLL && node_axis_size_product(cache: read mcache, id: r) == 4
+            let wmma_mixed_inner_ok = node_op(cache: read mcache, id: inner) == WMMA && node_full_dtype(cache: read mcache, id: inner).count == 8
+            let wmma_mixed_geps_ok = node_op(cache: read mcache, id: a_src) == GEP && node_op(cache: read mcache, id: b_src) == GEP
+            let wmma_mixed_acc_ok = node_op(cache: read mcache, id: c_src) == VCAT && node_num_src(cache: read mcache, id: c_src) == 4
+            let wmma_mixed_lens_ok = List.len<Int>(list: read a_idxs) == 8 && List.len<Int>(list: read b_idxs) == 8
+            mex_expand_wmma_mixed_ok = wmma_mixed_root_ok && wmma_mixed_inner_ok && wmma_mixed_geps_ok && wmma_mixed_acc_ok && wmma_mixed_lens_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     local mex_reg_shape = List.new<Int>()
     List.push<Int>(list: mut mex_reg_shape, value: read 4)
     let mex_reg_buf = mk_buffer_param(cache: mut mcache, slot: 14, dt: read i32, shape: read mex_reg_shape, addrspace: read ADDR_REG)
@@ -1389,6 +1421,7 @@ fn main() -> Unit {
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)
     showb(label: read "codegen.expander swizzles mixed unroll axes = ", v: mex_expand_mixed_ok)
+    showb(label: read "codegen.expander expands wmma unrolls = ", v: mex_expand_wmma_same_ok && mex_expand_wmma_mixed_ok)
     showb(label: read "codegen.expander scalarizes reg value index = ", v: mex_expand_reg_index_ok)
     let mex_source_idx_ok = _expand_arg_to_idx(args: read maxis_pairs, choice_pairs: read maxis_pairs, choice: 3) == 3
     let mex_source_choices = _choices_from_args(args: read mex_pair0_2)

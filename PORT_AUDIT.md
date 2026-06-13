@@ -388,7 +388,7 @@ Integrated pieces:
   `fix_store_unroll`, and `fix_group_for_reduce`. It ports axis-size
   choice/index helpers and the compact normalization rewrites for
   `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. It also has the common
-  same/mixed-axis `do_expand` path for non-WMMA roots, including `UNROLL` source stripping,
+  same/mixed-axis `do_expand` path for elementwise, memory, ordering, and `WMMA` roots, including `UNROLL` source stripping,
   mixed-axis `GEP` swizzles, scalar broadcast, vector `VCAT` repetition, range-arg passthrough,
   and `GEP` arg expansion. It also has the first `pm_pre_expander` slice: `UNROLL`/`UPCAST`
   ranges become `UNROLL` constants, and `REDUCE`/`STORE` nodes carrying `UNROLL` tails are
@@ -396,7 +396,8 @@ Integrated pieces:
   `GROUP_REDUCE` rewrite: grouped reduce ranges are converted to local `STAGE` storage and
   final `AXIS_REDUCE` loops while preserving upstream local ranges. Broadcast `STACK`s now push
   through `AFTER`/`END`, two-UNROLL `STAGE` inputs now contract before expansion, and normalized
-  REG value-index roots scalarize to per-lane `INDEX` nodes. WMMA expansion remains a later slice.
+  REG value-index roots scalarize to per-lane `INDEX` nodes. Exact upstream WMMA excluded-axis
+  metadata remains approximated by the current flat RSS WMMA arg payload.
 - `codegen/late/devectorizer.rss`: integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, exposing the upstream names
   `_drop_valid_stmts`, `simplify_valid_load`, `simplify_valid_image_load`, `expand_index`,

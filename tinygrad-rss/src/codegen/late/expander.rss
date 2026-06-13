@@ -3,8 +3,7 @@
 // This slice ports the axis-size choice/index helpers, the compact
 // CONTRACT/UNROLL/END normalization rules, the common do_expand path, and the
 // first pm_pre_expander rewrites, plus the first BufferizeOpts-local
-// group-for-reduce lowering and REG value-INDEX scalarization. WMMA expansion
-// remains a later slice.
+// group-for-reduce lowering, REG value-INDEX scalarization, and WMMA expansion.
 features: local
 
 fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
@@ -121,7 +120,7 @@ fn expander_has_unroll_src(cache: read UOpCache, id: Int) -> Bool {
 
 fn expander_supported_root_op(op: read Ops) -> Bool {
     if group_alu(op: read op) { return true }
-    if op == CAST || op == BITCAST || op == GEP || op == LOAD || op == STORE { return true }
+    if op == CAST || op == BITCAST || op == GEP || op == WMMA || op == LOAD || op == STORE { return true }
     if op == INDEX || op == STAGE || op == STACK || op == REDUCE || op == END || op == AFTER { return true }
     return false
 }
@@ -373,7 +372,7 @@ fn expander_do_expand(cache: mut UOpCache, id: Int) -> Option<Int> {
     let op = node_op(cache: read cache, id: id)
     if expander_supported_root_op(op: read op) == false { return None }
     if expander_has_unroll_src(cache: read cache, id: id) == false { return None }
-    if op == WMMA || op == SHAPED_WMMA { return None }
+    if op == SHAPED_WMMA { return None }
     let pairs = expander_pairs_union(cache: read cache, id: id)
     if List.len<Int>(list: read pairs) == 0 { return None }
     let expand_sz = axis_size_pairs_product(pairs: read pairs)

@@ -1114,6 +1114,17 @@ fn tensor_shard(cache: mut UOpCache, x: Int, devices: read List<String>, axis: I
     return uop_shard(cache: mut cache, id: x, devices: read canon, axis: axis)
 }
 
+fn tensor_effective_devices(cache: read UOpCache, x: Int) -> fresh List<String> {
+    local devices = List.new<String>()
+    let dcount = uop_device_count(cache: read cache, id: x)
+    let mut i = 0
+    while i < dcount {
+        List.push<String>(list: mut devices, value: read uop_device_name_at(cache: read cache, id: x, index: i))
+        i = i + 1
+    }
+    return take devices
+}
+
 fn tensor_shard_inplace(cache: mut UOpCache, x: Int, devices: read List<String>, axis: Int) -> Int {
     return tensor_shard(cache: mut cache, x: x, devices: read devices, axis: axis)
 }
@@ -1130,12 +1141,7 @@ fn tensor_shard_like(cache: mut UOpCache, x: Int, y: Int) -> Int {
         local dev = uop_device_key(cache: read cache, id: y)
         return tensor_to(cache: mut cache, x: x, device: read dev)
     }
-    local devices = List.new<String>()
-    let mut i = 0
-    while i < dcount {
-        List.push<String>(list: mut devices, value: read uop_device_name_at(cache: read cache, id: y, index: i))
-        i = i + 1
-    }
+    local devices = tensor_effective_devices(cache: read cache, x: y)
     return tensor_shard(cache: mut cache, x: x, devices: read devices, axis: uop_axis(cache: read cache, id: y))
 }
 
@@ -1892,8 +1898,14 @@ fn tensor_normal_state_result(cache: mut UOpCache, dt: read DType, shape: read L
 fn tensor_multi_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
     let dcount = uop_device_count(cache: read cache, id: x)
     if dcount <= 1 { return tensor_rand_like(cache: mut cache, x: x, dt: read dt, seed: seed) }
-    local shards = List.new<Int>()
     let axis = uop_axis(cache: read cache, id: x)
+    if axis < 0 {
+        local full_shape = uop_shape(cache: read cache, id: x)
+        let full = tensor_rand(cache: mut cache, dt: read dt, shape: read full_shape, seed: seed)
+        local devices = tensor_effective_devices(cache: read cache, x: x)
+        return tensor_shard(cache: mut cache, x: full, devices: read devices, axis: 0 - 1)
+    }
+    local shards = List.new<Int>()
     local sh = uop_shard_shape(cache: read cache, id: x)
     let mut i = 0
     while i < dcount {

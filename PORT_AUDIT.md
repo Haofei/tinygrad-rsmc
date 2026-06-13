@@ -797,8 +797,8 @@ Integrated pieces:
   graph-level `call`, `callify`, `linear_with_vars`, and `schedule_linear` wrappers over the
   existing `FUNCTION`/`CALL` and scheduler primitives, simple `assign` as STORE+AFTER with
   broadcast-to-target-shape, `clone` preserving param/grad state, `shard`/`shard_`/`shard_like`
-  over the integrated multi-device UOp helpers, and in-place binary/matmul wrappers composed as
-  `op` plus `assign`,
+  over the integrated multi-device UOp helpers including upstream `axis=None` replicated
+  tuple-device COPY, and in-place binary/matmul wrappers composed as `op` plus `assign`,
   an explicit RSS-side `TensorRngState`/counter wrapper for `manual_seed` and `_next_counter`,
   plus state-returning random distribution wrappers for `rand`, `uniform`, `randint`, `randn`,
   and `normal` that thread the advanced counter state explicitly,
@@ -906,8 +906,9 @@ Current integrated demo:
   `CONTIGUOUS`, `DETACH`, `CUSTOM_FUNCTION`, and rejection of empty devices, out-of-range
   `MSELECT`, and invalid `ALLREDUCE` ops.
 - validates source-shaped multi-device method helpers for `copy_to_device`, `multi`,
-  `mselect`, `mstack`, `allreduce`, `detach`, and `contiguous_backward`, plus full-dtype
-  preservation through `COPY`, `CONTIGUOUS`, and `DETACH`.
+  `mselect`, `mstack`, `allreduce`, `detach`, and `contiguous_backward`, plus replicated
+  `shard(axis=None)` tuple COPY and full-dtype preservation through `COPY`, `CONTIGUOUS`, and
+  `DETACH`.
 - validates the first source-shaped scheduler allreduce slice: naive `ALLREDUCE` over both
   `MULTI` and `MSTACK` inputs emits verifier-accepted `CONTIGUOUS -> MSELECT -> COPY` shard
   graphs reduced with `ADD`, plus explicit all2all/ring chunked graph builders.

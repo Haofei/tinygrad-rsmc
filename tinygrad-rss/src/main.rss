@@ -1187,11 +1187,38 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mex_bcast = uop_broadcast(cache: mut mcache, id: m2, count: 4)
+    local mex_after_deps = List.new<Int>()
+    List.push<Int>(list: mut mex_after_deps, value: read m3)
+    let mex_bcast_after = mk_after(cache: mut mcache, id: mex_bcast, srcs: read mex_after_deps)
+    let mut mex_bcast_after_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_bcast_after) {
+        Some(r) => {
+            let lane0 = node_src_id(cache: read mcache, id: r, k: 0)
+            mex_bcast_after_ok = node_op(cache: read mcache, id: r) == STACK && node_num_src(cache: read mcache, id: r) == 4 && node_op(cache: read mcache, id: lane0) == AFTER && node_src_id(cache: read mcache, id: lane0, k: 0) == m2 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    local mex_stage_opts = mk_bufferize_arg_none(addrspace: read ADDR_GLOBAL, removable: true)
+    local mex_stage_ranges = List.new<Int>()
+    List.push<Int>(list: mut mex_stage_ranges, value: read munroll)
+    let mex_stage_unrolls = mk_stage(cache: mut mcache, x: mex_inner_unroll, ranges: read mex_stage_ranges, opts: read mex_stage_opts)
+    let mut mex_stage_unrolls_ok = false
+    match expander_rewrite(cache: mut mcache, id: mex_stage_unrolls) {
+        Some(r) => {
+            let s0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let s1 = node_src_id(cache: read mcache, id: r, k: 1)
+            mex_stage_unrolls_ok = node_op(cache: read mcache, id: r) == STAGE && node_op(cache: read mcache, id: s0) == CONTRACT && node_op(cache: read mcache, id: s1) == CONTRACT && node_axis_size_product(cache: read mcache, id: s0) == 4 && node_axis_size_product(cache: read mcache, id: s1) == 4
+        }
+        None => {}
+    }
     showb(label: read "codegen.expander contract scalar to stack = ", v: mex_contract_stack_ok)
     showb(label: read "codegen.expander contract unroll to gep = ", v: mex_contract_unroll_ok)
     showb(label: read "codegen.expander empty unroll unwraps = ", v: mex_empty_unroll_ok)
     showb(label: read "codegen.expander double unroll merges axes = ", v: mex_double_unroll_ok)
     showb(label: read "codegen.expander end consumes unroll axes = ", v: mex_end_unroll_ok)
+    showb(label: read "codegen.expander pushes broadcast through after = ", v: mex_bcast_after_ok)
+    showb(label: read "codegen.expander contracts stage unrolls = ", v: mex_stage_unrolls_ok)
     let mex_add_unroll = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: munroll, y: munroll)
     let mut mex_expand_add_ok = false
     match expander_rewrite(cache: mut mcache, id: mex_add_unroll) {

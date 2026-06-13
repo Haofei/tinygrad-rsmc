@@ -394,8 +394,9 @@ Integrated pieces:
   ranges become `UNROLL` constants, and `REDUCE`/`STORE` nodes carrying `UNROLL` tails are
   contracted before later expansion. It also has the first BufferizeOpts-local
   `GROUP_REDUCE` rewrite: grouped reduce ranges are converted to local `STAGE` storage and
-  final `AXIS_REDUCE` loops while preserving upstream local ranges. WMMA and register-pointer
-  special-casing remain later expander slices.
+  final `AXIS_REDUCE` loops while preserving upstream local ranges. Broadcast `STACK`s now push
+  through `AFTER`/`END`, two-UNROLL `STAGE` inputs now contract before expansion, and normalized
+  REG value-index roots scalarize to per-lane `INDEX` nodes. WMMA expansion remains a later slice.
 - `codegen/late/devectorizer.rss`: integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, exposing the upstream names
   `_drop_valid_stmts`, `simplify_valid_load`, `simplify_valid_image_load`, `expand_index`,

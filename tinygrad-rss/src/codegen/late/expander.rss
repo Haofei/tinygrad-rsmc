@@ -439,6 +439,56 @@ fn expander_empty_unroll(cache: read UOpCache, id: Int) -> Option<Int> {
     return Some(node_src_id(cache: read cache, id: id, k: 0))
 }
 
+fn expander_broadcast_base(cache: read UOpCache, id: Int) -> Int {
+    if node_op(cache: read cache, id: id) != STACK { return 0 - 1 }
+    if node_num_src(cache: read cache, id: id) == 0 { return 0 - 1 }
+    let base = node_src_id(cache: read cache, id: id, k: 0)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        if node_src_id(cache: read cache, id: id, k: i) != base { return 0 - 1 }
+        i = i + 1
+    }
+    return base
+}
+
+fn expander_push_broadcast_through_order(cache: mut UOpCache, id: Int) -> Option<Int> {
+    let op = node_op(cache: read cache, id: id)
+    if op != AFTER && op != END { return None }
+    if node_num_src(cache: read cache, id: id) < 2 { return None }
+    let bcast = node_src_id(cache: read cache, id: id, k: 0)
+    let base = expander_broadcast_base(cache: read cache, id: bcast)
+    if base < 0 { return None }
+    local deps = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: id) {
+        List.push<Int>(list: mut deps, value: read node_src_id(cache: read cache, id: id, k: i))
+        i = i + 1
+    }
+    let mut ordered = base
+    if op == AFTER {
+        ordered = mk_after(cache: mut cache, id: base, srcs: read deps)
+    } else {
+        ordered = mk_end(cache: mut cache, id: base, srcs: read deps)
+    }
+    return Some(uop_broadcast(cache: mut cache, id: ordered, count: node_num_src(cache: read cache, id: bcast)))
+}
+
+fn expander_stage_unroll_contracts(cache: mut UOpCache, id: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: id) != STAGE { return None }
+    if node_num_src(cache: read cache, id: id) != 2 { return None }
+    let x0 = node_src_id(cache: read cache, id: id, k: 0)
+    let x1 = node_src_id(cache: read cache, id: id, k: 1)
+    if node_op(cache: read cache, id: x0) != UNROLL || node_op(cache: read cache, id: x1) != UNROLL { return None }
+    let pairs = node_axis_size_pairs(cache: read cache, id: x1)
+    let c0 = mk_contract(cache: mut cache, x: x0, pairs: read pairs)
+    let c1 = mk_contract(cache: mut cache, x: x1, pairs: read pairs)
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read c0)
+    List.push<Int>(list: mut src, value: read c1)
+    local arg = node_arg(cache: read cache, id: id)
+    return Some(intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: id), src: take src, arg: take arg))
+}
+
 fn expander_double_unroll(cache: mut UOpCache, id: Int) -> Option<Int> {
     if node_op(cache: read cache, id: id) != UNROLL { return None }
     if node_num_src(cache: read cache, id: id) != 1 { return None }
@@ -504,6 +554,14 @@ fn expander_end_unrolls(cache: mut UOpCache, id: Int) -> Option<Int> {
 }
 
 fn expander_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match expander_push_broadcast_through_order(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match expander_stage_unroll_contracts(cache: mut cache, id: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match expander_empty_unroll(cache: read cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}

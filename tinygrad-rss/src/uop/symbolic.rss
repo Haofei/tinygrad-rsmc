@@ -87,6 +87,9 @@ struct SymbolicIndexCastMatch derives(Clone) {
     ok: Bool,
     buf: Int,
     idx: Int,
+    idx1: Int,
+    count: Int,
+    index_node: Int,
     or_cast: Int,
 }
 
@@ -1829,20 +1832,83 @@ fn symbolic_match_index_or_cast(cache: read UOpCache, id: Int) -> fresh Symbolic
     let mut cur = id
     if node_op(cache: read cache, id: cur) == CAST {
         if node_num_src(cache: read cache, id: cur) != 1 {
-            return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, or_cast: id)
+            return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, idx1: 0, count: 0, index_node: 0, or_cast: id)
         }
         cur = node_src_id(cache: read cache, id: cur, k: 0)
     }
     if node_op(cache: read cache, id: cur) != INDEX {
-        return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, or_cast: id)
+        return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, idx1: 0, count: 0, index_node: 0, or_cast: id)
     }
-    if node_num_src(cache: read cache, id: cur) != 2 {
-        return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, or_cast: id)
+    let n = node_num_src(cache: read cache, id: cur)
+    if n != 2 && n != 3 {
+        return SymbolicIndexCastMatch(ok: false, buf: 0, idx: 0, idx1: 0, count: 0, index_node: 0, or_cast: id)
     }
+    let mut idx1 = 0
+    if n == 3 { idx1 = node_src_id(cache: read cache, id: cur, k: 2) }
     return SymbolicIndexCastMatch(ok: true,
                                   buf: node_src_id(cache: read cache, id: cur, k: 0),
                                   idx: node_src_id(cache: read cache, id: cur, k: 1),
+                                  idx1: idx1,
+                                  count: n - 1,
+                                  index_node: cur,
                                   or_cast: id)
+}
+
+fn where_on_index(cache: mut UOpCache, cond: Int, m: read SymbolicIndexCastMatch) -> Option<Int> {
+    if m.count == 1 {
+        return where_on_load(cache: mut cache, cond: cond, buf: m.buf, idx: m.idx, or_cast: m.or_cast)
+    }
+    if m.count != 2 { return None }
+    let valid0 = uop_get_valid(cache: mut cache, id: m.idx)
+    let valid1 = uop_get_valid(cache: mut cache, id: m.idx1)
+    local valid_base = List.new<Int>()
+    List.push<Int>(list: mut valid_base, value: read valid0)
+    List.push<Int>(list: mut valid_base, value: read valid1)
+    let load_valid = symbolic_and_product(cache: mut cache, parts: read valid_base)
+    local where_clauses = uop_split_by_op(cache: read cache, id: cond, sep: AND)
+    local in_load = uop_split_by_op(cache: read cache, id: load_valid, sep: AND)
+    local idx_indexes = symbolic_index_nodes(cache: read cache, id: m.index_node)
+    local moved = List.new<Int>()
+    local keep = List.new<Int>()
+    let mut dropped_existing = false
+    let mut i = 0
+    while i < List.len<Int>(list: read where_clauses) {
+        let clause = List.get<Int>(list: read where_clauses, index: i)
+        if uop_ints_contains(vals: read in_load, v: clause) {
+            dropped_existing = true
+        } else if symbolic_can_move_where_clause(cache: read cache, clause: clause, idx: m.index_node, idx_indexes: read idx_indexes) {
+            List.push<Int>(list: mut moved, value: read clause)
+        } else {
+            List.push<Int>(list: mut keep, value: read clause)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read moved) == 0 && dropped_existing == false { return None }
+    local valid_parts = List.new<Int>()
+    List.push<Int>(list: mut valid_parts, value: read load_valid)
+    i = 0
+    while i < List.len<Int>(list: read moved) {
+        List.push<Int>(list: mut valid_parts, value: read List.get<Int>(list: read moved, index: i))
+        i = i + 1
+    }
+    let new_valid = symbolic_and_product(cache: mut cache, parts: read valid_parts)
+    let raw0 = uop_get_idx(cache: read cache, id: m.idx)
+    let raw1 = uop_get_idx(cache: read cache, id: m.idx1)
+    let valid0_new = uop_valid(cache: mut cache, id: raw0, cond: new_valid)
+    let valid1_new = uop_valid(cache: mut cache, id: raw1, cond: new_valid)
+    local idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut idx_srcs, value: read valid0_new)
+    List.push<Int>(list: mut idx_srcs, value: read valid1_new)
+    let new_idx = mk_index(cache: mut cache, base: m.buf, srcs: read idx_srcs, ptr: false)
+    let mut ret_idx = new_idx
+    if node_op(cache: read cache, id: m.or_cast) == CAST {
+        let cast_dt = node_full_dtype(cache: read cache, id: m.or_cast)
+        ret_idx = mk_cast(cache: mut cache, x: new_idx, dt: read cast_dt)
+    }
+    let keep_cond = symbolic_and_product(cache: mut cache, parts: read keep)
+    let zero = uop_const_like(cache: mut cache, id: ret_idx, v: 0)
+    let dt = node_full_dtype(cache: read cache, id: ret_idx)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: keep_cond, tval: ret_idx, fval: zero))
 }
 
 fn rule_symbolic_drop_and_clauses(cache: mut UOpCache, id: Int) -> Option<Int> {
@@ -1865,14 +1931,14 @@ fn rule_symbolic_where_on_load(cache: mut UOpCache, id: Int) -> Option<Int> {
     if symbolic_const_zero(cache: read cache, id: fval) {
         let m = symbolic_match_index_or_cast(cache: read cache, id: tval)
         if m.ok {
-            return where_on_load(cache: mut cache, cond: cond, buf: m.buf, idx: m.idx, or_cast: m.or_cast)
+            return where_on_index(cache: mut cache, cond: cond, m: read m)
         }
     }
     if symbolic_const_zero(cache: read cache, id: tval) {
         let m = symbolic_match_index_or_cast(cache: read cache, id: fval)
         if m.ok {
             let ncond = symbolic_bool_logical_not(cache: mut cache, id: cond)
-            return where_on_load(cache: mut cache, cond: ncond, buf: m.buf, idx: m.idx, or_cast: m.or_cast)
+            return where_on_index(cache: mut cache, cond: ncond, m: read m)
         }
     }
     return None

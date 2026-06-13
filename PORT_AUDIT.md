@@ -737,11 +737,12 @@ Integrated pieces:
   not overlap the guarded weak/index expression, and `where_on_load` moves movable guard clauses
   into indexed load valid masks when the clause ranges and data-dependent `INDEX` uses are bounded
   by the load index. The normal `graph_rewrite` path now schedules the corresponding
-  `invalid_gate`, gated-valid, and single-index `WHERE(INDEX(...), 0)` rewrites over the current
-  RSS matcher style. Full byte reinterpretation for float bitcasts, exact WMMA/GEP layout pushing,
-  full upstream PatternMatcher parity, multi-source RSS `INDEX` load movement, IMAGE/DIV/MOD guard
-  exclusions in gated valid movement, full boolean/arithmetic Z3 parity, and broader symbolic phase
-  composition remain conservative/partial.
+  `invalid_gate`, gated-valid, and one-/two-axis `WHERE(INDEX(...), 0)` rewrites over the current
+  RSS matcher style; two-axis movement applies the same moved valid mask to both index axes, matching
+  the late gater's accepted form. Full byte reinterpretation for float bitcasts, exact WMMA/GEP
+  layout pushing, full upstream PatternMatcher parity, wider multi-source RSS `INDEX` load movement,
+  IMAGE/DIV/MOD guard exclusions in gated valid movement, full boolean/arithmetic Z3 parity, and
+  broader symbolic phase composition remain conservative/partial.
   The evaluator now covers the integrated unary math UOps
   `EXP2`, `LOG2`, `SIN`, `SQRT`, `RECIPROCAL`, `NEG`, `TRUNC`, plus binary `POW`, and handles
   scalar-to-tensor `EXPAND` materialization, `FLIP`, `PAD`, graph-backed `SHRINK` slicing, and

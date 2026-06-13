@@ -509,7 +509,8 @@ Integrated pieces:
   `remove_bufferize` and source-shaped `SHAPED_WMMA` lowering into upcast-indexed
   `CONTRACT` inputs, `WMMA`, per-lane `GEP`, and a register `AFTER(STORE...)` result. It also
   resolves `FUNCTION` bodies by gathering PARAM slots and substituting provided arguments with
-  dtype/shape/axis checks.
+  dtype/shape/axis checks, and ports the default large-reduction split rewrite into
+  reshape/permute/reduce/contiguous/reduce/reshape form.
   It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
   modeling, partial-PCONTIG/local bufferize cost forms, and full assign-dependency repair

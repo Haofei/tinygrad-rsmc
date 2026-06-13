@@ -216,10 +216,81 @@ fn fix_store_hazard(cache: mut UOpCache, target: Int, src: Int) -> Option<Int> {
     return Some(mk_store(cache: mut cache, ptr: target, value: contig, gate: read None))
 }
 
+fn rangeify_reduce_by_kind(cache: mut UOpCache, x: Int, kind: Int, axes: read List<Int>) -> Int {
+    if kind == 1 { return mk_prod_reduce(cache: mut cache, x: x, axes: read axes) }
+    if kind == 2 { return mk_max_reduce(cache: mut cache, x: x, axes: read axes) }
+    return mk_sum(cache: mut cache, x: x, axes: read axes)
+}
+
+fn rangeify_split_reduce_divisor(x_dim: Int, out_numel: Int) -> Int {
+    if out_numel <= 0 { return 0 }
+    let mut max_div = 4194304 / out_numel
+    if max_div > 256 { max_div = 256 }
+    if max_div < 8 { return 0 }
+    let mut d = max_div
+    while d >= 8 {
+        if x_dim % d == 0 { return d }
+        d = d - 1
+    }
+    return 0
+}
+
 fn split_reduceop(cache: mut UOpCache, reduce: Int, x: Int) -> Option<Int> {
     if node_op(cache: read cache, id: reduce) != REDUCE { return None }
     if x < 0 { return None }
-    return None
+    local reduce_shape = uop_shape(cache: read cache, id: reduce)
+    if prod(x: read reduce_shape) == 0 { return None }
+    local x_shape = uop_shape(cache: read cache, id: x)
+    if prod(x: read x_shape) == 0 { return None }
+    if prod(x: read x_shape) / prod(x: read reduce_shape) < 32768 { return None }
+    local axes = node_argints(cache: read cache, id: reduce)
+    let mut dim_to_split = 0 - 1
+    let mut divisor = 0
+    let out_numel = prod(x: read reduce_shape)
+    let mut ai = 0
+    while ai < List.len<Int>(list: read axes) {
+        let axis = List.get<Int>(list: read axes, index: ai)
+        if axis >= 0 && axis < List.len<Int>(list: read x_shape) {
+            let dim = List.get<Int>(list: read x_shape, index: axis)
+            let d = rangeify_split_reduce_divisor(x_dim: dim, out_numel: out_numel)
+            if d > 0 {
+                dim_to_split = axis
+                divisor = d
+                break
+            }
+        }
+        ai = ai + 1
+    }
+    if dim_to_split < 0 { return None }
+
+    local splitted_shape = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read x_shape) {
+        let dim = List.get<Int>(list: read x_shape, index: i)
+        if i == dim_to_split {
+            List.push<Int>(list: mut splitted_shape, value: read divisor)
+            let split_tail = dim / divisor
+            List.push<Int>(list: mut splitted_shape, value: read split_tail)
+        } else {
+            List.push<Int>(list: mut splitted_shape, value: read dim)
+        }
+        i = i + 1
+    }
+    let reshaped = mk_reshape(cache: mut cache, x: x, new_shape: read splitted_shape)
+    local perm = List.new<Int>()
+    let mut pi = 0
+    while pi < List.len<Int>(list: read splitted_shape) {
+        if pi != dim_to_split { List.push<Int>(list: mut perm, value: read pi) }
+        pi = pi + 1
+    }
+    List.push<Int>(list: mut perm, value: read dim_to_split)
+    let permuted = mk_permute(cache: mut cache, x: reshaped, perm: read perm)
+    let first_reduce = rangeify_reduce_by_kind(cache: mut cache, x: permuted, kind: node_reduce_kind(cache: read cache, id: reduce), axes: read axes)
+    let contig = mk_contiguous(cache: mut cache, x: first_reduce)
+    local split_axis = List.new<Int>()
+    List.push<Int>(list: mut split_axis, value: read List.len<Int>(list: read reduce_shape))
+    let second_reduce = rangeify_reduce_by_kind(cache: mut cache, x: contig, kind: node_reduce_kind(cache: read cache, id: reduce), axes: read split_axis)
+    return Some(mk_reshape(cache: mut cache, x: second_reduce, new_shape: read reduce_shape))
 }
 
 fn rangeify_param_list_contains(params: read List<Int>, p: Int) -> Bool {

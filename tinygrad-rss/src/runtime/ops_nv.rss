@@ -1,0 +1,117 @@
+features: local
+
+struct NVDeviceState derives(Clone) {
+    device: String,
+    fd: Int,
+    vm: Int,
+    fifo: Int,
+    vidmem: Bool,
+}
+
+struct NVElfInfo derives(Clone) {
+    name: String,
+    source_len: Int,
+}
+
+fn get_error_str(status: Int) -> fresh String {
+    if status == 0 { return String.copy(value: read "OK") }
+    return String.concat(left: read "NV error ", right: read Int.to_string(value: read status))
+}
+
+fn nv_flags(base: Int, flags: Int) -> Int { return base | flags }
+
+fn nv_iowr(fd: Int, nr: Int, data: Int) -> Int { return fd + nr + data }
+
+fn _rw_bits(value: Int, shift: Int, bits: Int) -> Int {
+    let mask = (1 << bits) - 1
+    return (value >> shift) & mask
+}
+
+fn field_offset(base: Int, field: Int) -> Int { return base + field }
+
+fn set_constant_buf_addr(slot: Int, addr: Int) -> Int { return slot * 8 + addr }
+
+fn nvm(device: read String) -> fresh NVDeviceState {
+    return NVDeviceState(device: String.copy(value: read device), fd: String.len(value: read device), vm: 0, fifo: 0, vidmem: false)
+}
+
+fn setup(dev: mut NVDeviceState) -> Unit {
+    dev.fd = dev.fd + 1
+    return Unit
+}
+
+fn _submit_to_gpfifo(dev: mut NVDeviceState, entries: read List<Int>) -> Int {
+    dev.fifo = dev.fifo + List.len<Int>(list: read entries)
+    return dev.fifo
+}
+
+fn decode_hevc_chunk(data: read List<Int>) -> Int {
+    return List.len<Int>(list: read data)
+}
+
+fn _parse_elf_info(data: read List<Int>) -> fresh NVElfInfo {
+    return NVElfInfo(name: String.copy(value: read "nv_elf"), source_len: List.len<Int>(list: read data))
+}
+
+fn rm_alloc(dev: read NVDeviceState, cls: Int, handle: Int) -> Int { return dev.fd + cls + handle }
+
+fn rm_control(dev: read NVDeviceState, cmd: Int, value: Int) -> Int { return dev.fd + cmd + value }
+
+fn uvm(dev: read NVDeviceState) -> Int { return dev.fd + dev.vm }
+
+fn setup_usermode(dev: mut NVDeviceState) -> Unit {
+    dev.fd = dev.fd + 10
+    return Unit
+}
+
+fn setup_vm(dev: mut NVDeviceState, vm: Int) -> Unit {
+    dev.vm = vm
+    return Unit
+}
+
+fn setup_gpfifo_vm(dev: mut NVDeviceState, fifo: Int) -> Unit {
+    dev.fifo = fifo
+    return Unit
+}
+
+fn _new_gpu_fd(device: read String) -> Int { return String.len(value: read device) + 100 }
+
+fn _gpu_map_to_cpu(buf: read RuntimeBufferState) -> Int { return buf.handle + buf.offset }
+
+fn _gpu_uvm_map(dev: read NVDeviceState, buf: read RuntimeBufferState) -> Int { return dev.vm + buf.handle }
+
+fn _alloc_gpu_vaddr(dev: read NVDeviceState, size: Int) -> Int { return dev.vm + size }
+
+fn is_nvd(device: read String) -> Bool { return device == "NVD" || device == "NV" }
+
+fn _new_gpu_fifo(dev: mut NVDeviceState) -> Int {
+    dev.fifo = dev.fifo + 1
+    return dev.fifo
+}
+
+fn _query_gpu_info(dev: read NVDeviceState) -> fresh String {
+    return String.concat(left: read "nv:", right: read dev.device)
+}
+
+fn _setup_gpfifos(dev: mut NVDeviceState, count: Int) -> Unit {
+    dev.fifo = count
+    return Unit
+}
+
+fn _ensure_has_vid_hw(dev: mut NVDeviceState) -> Bool {
+    dev.vidmem = true
+    return dev.vidmem
+}
+
+fn _prof_init(dev: read NVDeviceState) -> Int { return dev.fd }
+
+fn _prof_setup_pc_sampling(dev: read NVDeviceState, period: Int) -> Int { return dev.fd + period }
+
+fn reg_ops(reg_num: Int, value: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read reg_num)
+    List.push<Int>(list: mut out, value: read value)
+    return take out
+}
+
+fn _prof_readback(dev: read NVDeviceState, samples: Int) -> Int { return dev.fd + samples }

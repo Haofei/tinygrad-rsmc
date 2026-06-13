@@ -1,0 +1,43 @@
+features: local
+
+struct DSPHandle derives(Clone) {
+    name: String,
+    handle: Int,
+    opened: Bool,
+}
+
+fn rpc_sc(domain: Int, handle: Int, scalar: Int) -> Int {
+    return domain + handle + scalar
+}
+
+fn rpc_prep_args(args: read List<Int>, vals: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read args, index: i))
+        i = i + 1
+    }
+    let mut j = 0
+    while j < List.len<Int>(list: read vals) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read vals, index: j))
+        j = j + 1
+    }
+    return take out
+}
+
+fn open_lib(name: read String) -> fresh DSPHandle {
+    return DSPHandle(name: String.copy(value: read name), handle: String.len(value: read name), opened: true)
+}
+
+fn close_lib(lib: mut DSPHandle) -> Unit {
+    lib.opened = false
+    return Unit
+}
+
+fn exec_lib(lib: read DSPHandle, symbol: read String, args: read List<Int>) -> Int {
+    return lib.handle + String.len(value: read symbol) + List.len<Int>(list: read args)
+}
+
+fn init_dsp(device: read String) -> fresh DSPHandle {
+    return open_lib(name: read device)
+}

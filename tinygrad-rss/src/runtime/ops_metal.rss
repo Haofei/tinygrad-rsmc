@@ -1,0 +1,32 @@
+features: local
+
+struct MetalCommandBufferState derives(Clone) {
+    label: String,
+    status: Int,
+    error: String,
+}
+
+fn to_ns_str(value: read String) -> fresh String {
+    return String.copy(value: read value)
+}
+
+fn from_ns_str(value: read String) -> fresh String {
+    return String.copy(value: read value)
+}
+
+fn wait_check(buf: read MetalCommandBufferState) -> Bool {
+    return buf.status >= 0
+}
+
+fn cmdbuf_label(buf: mut MetalCommandBufferState, label: read String) -> Unit {
+    buf.label = String.copy(value: read label)
+    return Unit
+}
+
+fn error_check(buf: read MetalCommandBufferState) -> Bool {
+    return String.len(value: read buf.error) == 0
+}
+
+fn _cp_mv(dst: read RuntimeBufferState, src: read RuntimeBufferState, size: Int) -> fresh DiskShardCopy {
+    return DiskShardCopy(batch: dst.handle, copied_in: src.handle, minor_offset: src.offset, size: size)
+}

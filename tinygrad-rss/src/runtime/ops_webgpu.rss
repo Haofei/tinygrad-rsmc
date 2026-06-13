@@ -1,0 +1,42 @@
+features: local
+
+struct WebGPUBufferState derives(Clone) {
+    handle: Int,
+    size: Int,
+    readable: Bool,
+}
+
+fn from_wgpu_str(value: read String) -> fresh String {
+    return String.copy(value: read value)
+}
+
+fn to_wgpu_str(value: read String) -> fresh String {
+    return String.copy(value: read value)
+}
+
+fn buf_to_mv(buf: read WebGPUBufferState) -> fresh RuntimeBufferState {
+    return runtime_buffer_new(handle: buf.handle, size: buf.size, offset: 0, device: read "WEBGPU")
+}
+
+fn synchronous(label: read String, status: Int) -> Bool {
+    return status == 0 && String.len(value: read label) >= 0
+}
+
+fn pop_error(errors: mut List<String>) -> fresh String {
+    if List.len<String>(list: read errors) == 0 { return String.copy(value: read "") }
+    return String.copy(value: read List.get<String>(list: read errors, index: 0))
+}
+
+fn create_uniform(vals: read List<Int>) -> fresh WebGPUBufferState {
+    return WebGPUBufferState(handle: List.len<Int>(list: read vals), size: List.len<Int>(list: read vals) * 4, readable: false)
+}
+
+fn _readable_buffer(buf: read WebGPUBufferState) -> fresh WebGPUBufferState {
+    return WebGPUBufferState(handle: buf.handle, size: buf.size, readable: true)
+}
+
+fn write_buffer(buf: mut WebGPUBufferState, offset: Int, data: read List<Int>) -> Unit {
+    let end = offset + List.len<Int>(list: read data)
+    if end > buf.size { buf.size = end }
+    return Unit
+}

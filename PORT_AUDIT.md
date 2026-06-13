@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 66 RSS files, about 37.7k LOC.
+  - integrated `tinygrad-rss/src`: 76 RSS files, about 38.4k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -50,6 +50,10 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused renderer ISA/AMD batch: `renderer/amd/dsl.py`, `renderer/amd/elf.py`,
     `renderer/amd/sqtt.py`, `renderer/isa/x86.py`, `renderer/__init__.py`,
     `renderer/amd/__init__.py`, and `renderer/isa/__init__.py`: 135/135 rough symbols covered.
+  - focused target runtime batch: `runtime/ops_amd.py`, `runtime/ops_nv.py`,
+    `runtime/ops_cuda.py`, `runtime/ops_metal.py`, `runtime/ops_webgpu.py`,
+    `runtime/ops_qcom.py`, `runtime/ops_dsp.py`, `runtime/ops_rdma.py`,
+    `runtime/ops_tinyfs.py`, and `runtime/ops_cl.py`: 331/331 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -250,6 +254,15 @@ Integrated pieces:
   linear assembly byte shells, and SQTT packet/decode/map/format helper names. These are
   deterministic state/string/byte facades, not exact x86 lowering, AMD instruction table parity,
   or real machine-code assembly/disassembly yet.
+- `runtime/ops_amd.rss`, `runtime/ops_nv.rss`, `runtime/ops_cuda.rss`,
+  `runtime/ops_metal.rss`, `runtime/ops_webgpu.rss`, `runtime/ops_qcom.rss`,
+  `runtime/ops_dsp.rss`, `runtime/ops_rdma.rss`, `runtime/ops_tinyfs.rss`, and
+  `runtime/ops_cl.rss`: first source-shaped target runtime facade batch. The integrated names
+  cover CUDA argument/time/synchronization helpers, OpenCL status checks, Metal/WebGPU buffer and
+  command helpers, AMD/NV/QCOM packet/register/allocation/profiling helper surfaces, DSP RPC/lib
+  helpers, RDMA work-queue encoding, and tinyfs connection/copy shells. These are deterministic
+  metadata/state facades over RSS structs, not real CUDA/Metal/WebGPU/OpenCL/AMD/NV/QCOM/DSP/RDMA
+  driver execution yet.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
   scoring from active ranges, upstream op priorities for `PARAM`/`DEFINE_VAR`/`DEFINE_REG`/
@@ -845,6 +858,12 @@ Current integrated demo:
   disk open/close/io_uring/sharded-copy/offset surface, and the Python `generic_wmma_helper`
   path over the existing `mk_wmma` graph API. These are deterministic RSS runtime state facades,
   not real mmap/io_uring/thread/native-kernel execution yet.
+- validates first source-shaped target runtime facade batch through the active smoke and coverage
+  audit: CUDA argument/time/system synchronization helpers, OpenCL status checks, Metal/WebGPU
+  buffer/command helpers, AMD/NV/QCOM packet/register/allocation/profiling helpers, DSP RPC/lib
+  helpers, RDMA work-queue encoding, and tinyfs connection/copy shells are present. These are
+  deterministic RSS metadata/state facades; real target driver calls, native queues, memory maps,
+  command submission, and profiling streams remain future work.
 - validates first source-shaped runtime support and HCQ graph facade batch through the active
   smoke and coverage audit: file/MMIO helper names, HCQ queue/symbol/bind/signal/device hooks,
   TLSF/page-table/mapping allocator names, C ABI metadata helpers, CPU compiler object/JIT shells,
@@ -1206,11 +1225,12 @@ Major missing integrated work:
   real machine-code assembly/disassembly, and renderer policy beyond the source-shaped facade
   names now in `renderer/*.rss`.
 - target-specific `runtime/*`, `runtime/support/*`, native device backends, and full JIT graph
-  execution: the first source-shaped CPU/null/disk/Python runtime backend facades and HCQ/support
-  graph facades are present, but real mmap/io_uring/thread/native-kernel execution, native
-  clang/LLVM/ELF relocation, support-layer HCQ semantics, and device/runtime integration still
-  need to be ported. The generated `runtime/autogen` data has been copied, but handwritten
-  behavior must still be ported and accounted for.
+  execution: source-shaped CPU/null/disk/Python facades, first target runtime facades, and
+  HCQ/support graph facades are present, but real mmap/io_uring/thread/native-kernel execution,
+  native CUDA/Metal/WebGPU/OpenCL/AMD/NV/QCOM/DSP/RDMA driver calls, native clang/LLVM/ELF
+  relocation, support-layer HCQ semantics, and device/runtime integration still need to be ported.
+  The generated `runtime/autogen` data has been copied, but handwritten behavior must still be
+  ported and accounted for.
 - `nn/*`: deeper layer/module semantics, optimizer algorithms, model state serialization, and real
   dataset loaders. The first source-shaped facade names are present, but exact upstream behavior is
   still incomplete. `nn/onnx.py` may be scoped as a separate importer rather than core tensor

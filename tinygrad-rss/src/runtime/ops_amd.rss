@@ -1,0 +1,199 @@
+features: local
+
+struct AMDQueueState derives(Clone) {
+    device: String,
+    queue_id: Int,
+    doorbell: Int,
+    packets: List<Int>,
+    usable: Bool,
+}
+
+struct AMDComputeProps derives(Clone) {
+    arch: String,
+    compute_units: Int,
+    local_memory: Int,
+    wgp_active: Bool,
+}
+
+fn pkt3(op: Int, count: Int, predicate: Bool) -> Int {
+    let mut pred = 0
+    if predicate { pred = 1 }
+    return 3221225472 + op * 256 + count + pred
+}
+
+fn _pm4_pkt(op: Int, count: Int) -> Int {
+    return pkt3(op: op, count: count, predicate: false)
+}
+
+fn wreg(reg_num: Int, value: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read reg_num)
+    List.push<Int>(list: mut out, value: read value)
+    return take out
+}
+
+fn pred_exec(mask: Int) -> Bool {
+    return mask != 0
+}
+
+fn set_grbm(queue: mut AMDQueueState, value: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read value)
+    return Unit
+}
+
+fn wait_reg_mem(reg_num: Int, value: Int, mask: Int) -> Bool {
+    return (reg_num & mask) == (value & mask)
+}
+
+fn acquire_mem(queue: mut AMDQueueState, size: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read size)
+    return Unit
+}
+
+fn release_mem(queue: mut AMDQueueState, size: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read (0 - size))
+    return Unit
+}
+
+fn spi_config(waves: Int, sgprs: Int, vgprs: Int) -> Int {
+    return waves * 1000000 + sgprs * 1000 + vgprs
+}
+
+fn pmc_reset_counters(queue: mut AMDQueueState) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read 0)
+    return Unit
+}
+
+fn pmc_start(queue: mut AMDQueueState, counter: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read counter)
+    return Unit
+}
+
+fn pmc_read(queue: read AMDQueueState, counter: Int) -> Int {
+    return List.len<Int>(list: read queue.packets) + counter
+}
+
+fn sqtt_setup_exec(queue: mut AMDQueueState, size: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read size)
+    return Unit
+}
+
+fn sqtt_userdata(queue: mut AMDQueueState, value: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read value)
+    return Unit
+}
+
+fn sqtt_config(queue: mut AMDQueueState, mode: Int) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read mode)
+    return Unit
+}
+
+fn sqtt_start(queue: mut AMDQueueState) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read 1)
+    return Unit
+}
+
+fn sqtt_stop(queue: mut AMDQueueState) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read 0)
+    return Unit
+}
+
+fn _prep_aql(queue: read AMDQueueState, kernel_object: Int, kernargs: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read queue.queue_id)
+    List.push<Int>(list: mut out, value: read kernel_object)
+    List.push<Int>(list: mut out, value: read kernargs)
+    return take out
+}
+
+fn _do_free(buf: read RuntimeBufferState) -> Bool {
+    return buf.handle >= 0
+}
+
+fn signal_doorbell(queue: mut AMDQueueState, value: Int) -> Unit {
+    queue.doorbell = value
+    return Unit
+}
+
+fn _is_usable_gpu(device: read String) -> Bool {
+    return String.len(value: read device) > 0
+}
+
+fn create_queue(device: read String, queue_id: Int) -> fresh AMDQueueState {
+    return AMDQueueState(device: String.copy(value: read device), queue_id: queue_id, doorbell: 0, packets: List.new<Int>(), usable: true)
+}
+
+fn sleep(queue: read AMDQueueState, ticks: Int) -> Bool {
+    return queue.usable && ticks >= 0
+}
+
+fn on_device_hang(queue: mut AMDQueueState, reason: read String) -> Unit {
+    queue.usable = false
+    List.push<Int>(list: mut queue.packets, value: read String.len(value: read reason))
+    return Unit
+}
+
+fn require_profile_mode(enabled: Bool) -> Bool {
+    return enabled
+}
+
+fn drm_dev_info(device: read String) -> fresh String {
+    return String.concat(left: read "drm:", right: read device)
+}
+
+fn is_wgp_active(props: read AMDComputeProps) -> Bool {
+    return props.wgp_active
+}
+
+fn p2p_paddrs(bufs: read List<RuntimeBufferState>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<RuntimeBufferState>(list: read bufs) {
+        let b = List.get<RuntimeBufferState>(list: read bufs, index: i)
+        List.push<Int>(list: mut out, value: read (b.handle + b.offset))
+        i = i + 1
+    }
+    return take out
+}
+
+fn _compute_props(device: read String) -> fresh AMDComputeProps {
+    return AMDComputeProps(arch: String.copy(value: read device), compute_units: 1, local_memory: 65536, wgp_active: true)
+}
+
+fn _collect_interrupts(queue: read AMDQueueState) -> Int {
+    return List.len<Int>(list: read queue.packets)
+}
+
+fn device_fini(queue: mut AMDQueueState) -> Unit {
+    queue.usable = false
+    return Unit
+}
+
+fn _dma_region(buf: read RuntimeBufferState, size: Int) -> fresh RuntimeBufferState {
+    return runtime_buffer_new(handle: buf.handle, size: size, offset: buf.offset, device: read buf.device)
+}
+
+fn _mock(device: read String) -> Bool {
+    return device == "MOCK" || device == "mock"
+}
+
+fn is_am(device: read String) -> Bool {
+    return device == "AM" || device == "AMD"
+}
+
+fn is_usb(device: read String) -> Bool {
+    return device == "USB"
+}
+
+fn sdma_queue(device: read String) -> fresh AMDQueueState {
+    return create_queue(device: read device, queue_id: 1)
+}
+
+fn _ensure_has_local_memory(props: read AMDComputeProps, size: Int) -> Bool {
+    return props.local_memory >= size
+}
+
+fn invalidate_caches(queue: mut AMDQueueState) -> Unit {
+    List.push<Int>(list: mut queue.packets, value: read 0)
+    return Unit
+}

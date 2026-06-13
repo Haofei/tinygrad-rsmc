@@ -1,0 +1,88 @@
+features: local
+
+struct QCOMCommandState derives(Clone) {
+    device: String,
+    regs: List<Int>,
+    flags: Int,
+}
+
+fn dcache_flush(buf: read RuntimeBufferState, size: Int) -> Bool {
+    return buf.size >= size
+}
+
+fn _qreg_exec(regs: read List<Int>) -> Int {
+    return List.len<Int>(list: read regs)
+}
+
+fn ctz(value: Int) -> Int {
+    if value == 0 { return 64 }
+    let mut v = value
+    let mut out = 0
+    while (v & 1) == 0 {
+        out = out + 1
+        v = v >> 1
+    }
+    return out
+}
+
+fn parity(value: Int) -> Int {
+    let mut v = value
+    let mut out = 0
+    while v != 0 {
+        out = out ^ (v & 1)
+        v = v >> 1
+    }
+    return out
+}
+
+fn pkt7_hdr(opcode: Int, size: Int) -> Int { return 1879048192 + opcode * 65536 + size }
+
+fn pkt4_hdr(reg_num: Int, count: Int) -> Int { return 1073741824 + reg_num * 256 + count }
+
+fn _read_lib(name: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read name))
+    return take out
+}
+
+fn reg(reg_num: Int, value: Int) -> Int { return reg_num * 65536 + value }
+
+fn _cache_flush(cmd: mut QCOMCommandState) -> Unit {
+    cmd.flags = cmd.flags | 1
+    return Unit
+}
+
+fn _build_gpu_command(device: read String, regs: read List<Int>) -> fresh QCOMCommandState {
+    local copied = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read regs) {
+        List.push<Int>(list: mut copied, value: read List.get<Int>(list: read regs, index: i))
+        i = i + 1
+    }
+    return QCOMCommandState(device: String.copy(value: read device), regs: take copied, flags: 0)
+}
+
+fn _parse_lib(data: read List<Int>) -> Int { return List.len<Int>(list: read data) }
+
+fn _do_copy(dst: read RuntimeBufferState, src: read RuntimeBufferState, size: Int) -> Int {
+    return dst.handle + src.handle + size
+}
+
+fn flag(value: Int, bit: Int) -> Bool {
+    return (value & (1 << bit)) != 0
+}
+
+fn _gpu_alloc(device: read String, size: Int) -> fresh RuntimeBufferState {
+    return runtime_buffer_new(handle: String.len(value: read device), size: size, offset: 0, device: read device)
+}
+
+fn _gpu_map(buf: read RuntimeBufferState, offset_bytes: Int) -> fresh RuntimeBufferState {
+    return runtime_buffer_new(handle: buf.handle, size: buf.size, offset: buf.offset + offset_bytes, device: read buf.device)
+}
+
+fn _gpu_free(buf: read RuntimeBufferState) -> Bool { return buf.handle >= 0 }
+
+fn _ensure_stack_size(current: Int, required: Int) -> Int {
+    if current >= required { return current }
+    return required
+}

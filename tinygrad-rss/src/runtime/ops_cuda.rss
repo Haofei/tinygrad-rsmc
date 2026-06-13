@@ -1,0 +1,32 @@
+features: local
+
+struct CUDALaunchArgs derives(Clone) {
+    ptrs: List<Int>,
+    vals: List<Int>,
+    encoded_size: Int,
+}
+
+fn encode_args(args: read List<Int>, vals: read List<Int>) -> fresh CUDALaunchArgs {
+    local ptrs = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        List.push<Int>(list: mut ptrs, value: read List.get<Int>(list: read args, index: i))
+        i = i + 1
+    }
+    local copied_vals = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read vals) {
+        List.push<Int>(list: mut copied_vals, value: read List.get<Int>(list: read vals, index: j))
+        j = j + 1
+    }
+    return CUDALaunchArgs(ptrs: take ptrs, vals: take copied_vals, encoded_size: List.len<Int>(list: read args) * 8 + List.len<Int>(list: read vals) * 4)
+}
+
+fn cu_time_execution(enable: Bool, callback_status: Int) -> Int {
+    if enable == false { return callback_status }
+    return callback_status
+}
+
+fn synchronize_system(devices: read List<String>) -> Int {
+    return List.len<String>(list: read devices)
+}

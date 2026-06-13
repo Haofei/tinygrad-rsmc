@@ -1,0 +1,5 @@
+features: local
+
+fn checked(status: Int, api: read String) -> Bool {
+    return status == 0 && String.len(value: read api) >= 0
+}

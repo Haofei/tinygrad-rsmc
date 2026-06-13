@@ -1,0 +1,34 @@
+features: local
+
+struct RDMAWorkQueueEntry derives(Clone) {
+    opcode: Int,
+    addr: Int,
+    size: Int,
+    key: Int,
+}
+
+fn _wqe_data(opcode: Int, addr: Int, size: Int, key: Int) -> fresh RDMAWorkQueueEntry {
+    return RDMAWorkQueueEntry(opcode: opcode, addr: addr, size: size, key: key)
+}
+
+fn encode_ring(entries: read List<RDMAWorkQueueEntry>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<RDMAWorkQueueEntry>(list: read entries) {
+        let e = List.get<RDMAWorkQueueEntry>(list: read entries, index: i)
+        List.push<Int>(list: mut out, value: read e.opcode)
+        List.push<Int>(list: mut out, value: read e.addr)
+        List.push<Int>(list: mut out, value: read e.size)
+        List.push<Int>(list: mut out, value: read e.key)
+        i = i + 1
+    }
+    return take out
+}
+
+fn is_bar_small(size: Int) -> Bool {
+    return size > 0 && size <= 268435456
+}
+
+fn connect(src: read String, dst: read String) -> fresh String {
+    return String.concat(left: read String.concat(left: read src, right: read "->"), right: read dst)
+}

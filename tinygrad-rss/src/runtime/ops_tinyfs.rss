@@ -1,0 +1,20 @@
+features: local
+
+struct TinyFSConnection derives(Clone) {
+    path: String,
+    active: Bool,
+    pending: Int,
+}
+
+fn _start_thread(path: read String) -> fresh TinyFSConnection {
+    return TinyFSConnection(path: String.copy(value: read path), active: true, pending: 0)
+}
+
+fn connection(path: read String) -> fresh TinyFSConnection {
+    return _start_thread(path: read path)
+}
+
+fn _copyout_async(conn: mut TinyFSConnection, buf: read RuntimeBufferState, size: Int) -> Int {
+    conn.pending = conn.pending + 1
+    return buf.handle + size
+}

@@ -515,7 +515,9 @@ Integrated pieces:
   buffer-like inputs exceed the backend cap. `bufferize_to_store` now reuses `AFTER` buffers with
   upstream-shaped writeback repair for nested `INDEX(STAGE(INDEX(...)), ...)` targets, drops
   self-stores after unwrapping, and ends repaired stores over the union of target and consumer
-  ranges. `flatten_bufferize` now computes the single flattened
+  ranges. Dead-axis cleanup now follows the upstream guards for always-run/`AFTER` sources and
+  removes unused `RANGE` axes as well as constant axes; store hazard repair now forces contiguity
+  only when the self-referencing source also contains unsafe movement. `flatten_bufferize` now computes the single flattened
   index through the upstream RESHAPE movement mapping and reshapes the staged result back to the
   original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
   expressions touching more than three accessed buffers and for reduce subtrees that read

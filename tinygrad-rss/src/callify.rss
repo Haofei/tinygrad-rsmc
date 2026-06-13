@@ -1,0 +1,197 @@
+features: local
+
+struct AllocCtx derives(Clone) {
+    uop_list: List<Int>,
+    buffer_from: List<Int>,
+    buffer_to: List<Int>,
+    bases: List<Int>,
+    assigns: List<Int>,
+    replacements: List<Int>,
+}
+
+struct CallifyResult derives(Clone) {
+    call: Int,
+    buffer_from: List<Int>,
+    buffer_to: List<Int>,
+    replacements: List<Int>,
+}
+
+fn alloc_ctx_new() -> fresh AllocCtx {
+    return AllocCtx(uop_list: List.new<Int>(), buffer_from: List.new<Int>(), buffer_to: List.new<Int>(), bases: List.new<Int>(), assigns: List.new<Int>(), replacements: List.new<Int>())
+}
+
+fn callify_push_unique(vals: mut List<Int>, v: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read vals) {
+        if List.get<Int>(list: read vals, index: i) == v { return Unit }
+        i = i + 1
+    }
+    List.push<Int>(list: mut vals, value: read v)
+    return Unit
+}
+
+fn callify_map_put(ctx: mut AllocCtx, src: Int, dst: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read ctx.buffer_from) {
+        if List.get<Int>(list: read ctx.buffer_from, index: i) == src {
+            List.set<Int>(list: mut ctx.buffer_to, index: i, value: read dst)
+            return Unit
+        }
+        i = i + 1
+    }
+    List.push<Int>(list: mut ctx.buffer_from, value: read src)
+    List.push<Int>(list: mut ctx.buffer_to, value: read dst)
+    return Unit
+}
+
+fn tag_uop(ctx: mut AllocCtx, x: Int) -> Int {
+    callify_push_unique(vals: mut ctx.uop_list, v: x)
+    return x
+}
+
+fn disk_copy_is_buffer(cache: mut UOpCache, ctx: mut AllocCtx, u: Int) -> Bool {
+    if node_op(cache: read cache, id: u) != COPY { return false }
+    let base = node_src_id(cache: read cache, id: u, k: 0)
+    let key = node_device_key(cache: read cache, id: base)
+    let from_creation = String.starts_with(value: read key, prefix: read "NPY") || String.starts_with(value: read key, prefix: read "DISK") || String.starts_with(value: read key, prefix: read "PYTHON") || String.starts_with(value: read key, prefix: read "TINYFS")
+    let to_disk = String.starts_with(value: read node_device_key(cache: read cache, id: u), prefix: read "DISK") || String.starts_with(value: read node_device_key(cache: read cache, id: u), prefix: read "TINYFS")
+    if from_creation || to_disk {
+        let buf = uop_empty_like(cache: mut cache, id: u, dt: read node_dtype(cache: read cache, id: u), device: read uop_device(cache: read cache, id: u), num: List.len<Int>(list: read ctx.buffer_from))
+        callify_map_put(ctx: mut ctx, src: u, dst: buf)
+        tag_uop(ctx: mut ctx, x: u)
+        return true
+    }
+    return false
+}
+
+fn apply_after(cache: read UOpCache, ctx: mut AllocCtx, u: Int) -> Int {
+    let mut base = u
+    while node_op(cache: read cache, id: base) == AFTER {
+        base = node_src_id(cache: read cache, id: base, k: 0)
+    }
+    callify_map_put(ctx: mut ctx, src: u, dst: base)
+    return base
+}
+
+fn replace_contig_with_store_after(cache: mut UOpCache, u: Int) -> Int {
+    if node_op(cache: read cache, id: u) != CONTIGUOUS { return u }
+    let src = node_src_id(cache: read cache, id: u, k: 0)
+    local sh = uop_shape(cache: read cache, id: u)
+    let mut numel = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read sh) {
+        numel = numel * List.get<Int>(list: read sh, index: i)
+        i = i + 1
+    }
+    if numel == 0 { return src }
+    let dev = uop_device(cache: read cache, id: u)
+    if String.starts_with(value: read dev, prefix: read "DISK") || String.starts_with(value: read dev, prefix: read "TINYFS") { return u }
+    let buf = uop_empty_like(cache: mut cache, id: u, dt: read node_dtype(cache: read cache, id: u), device: read dev, num: u)
+    let st = mk_store(cache: mut cache, ptr: buf, value: src, gate: read None)
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read st)
+    return mk_after(cache: mut cache, id: buf, srcs: read deps)
+}
+
+fn replace_store_after_with_contig(cache: mut UOpCache, u: Int, src: Int) -> Int {
+    if node_op(cache: read cache, id: u) != AFTER { return src }
+    return mk_contiguous(cache: mut cache, x: src)
+}
+
+fn _make_buffer_view(cache: mut UOpCache, src: Int) -> Int {
+    match contiguous_view_offset(cache: read cache, id: src) {
+        Some(off) => {
+            let base = uop_base(cache: read cache, id: src)
+            let dt = node_dtype(cache: read cache, id: src)
+            let view = mk_slice(cache: mut cache, base: base, offset: off, size: uop_max_numel(cache: read cache, id: src), dt: read dt)
+            local sh = uop_shape(cache: read cache, id: src)
+            return mk_reshape(cache: mut cache, x: view, new_shape: read sh)
+        }
+        None => { return src }
+    }
+}
+
+fn contiguous_mops_to_view(cache: mut UOpCache, c: Int, src: Int) -> Int {
+    if node_op(cache: read cache, id: c) != CONTIGUOUS { return c }
+    let view = _make_buffer_view(cache: mut cache, src: src)
+    if view == src { return c }
+    return mk_contiguous(cache: mut cache, x: view)
+}
+
+fn _precompiled_output_redirect(cache: mut UOpCache, s: Int, t: Int) -> Int {
+    if node_op(cache: read cache, id: s) == CONTIGUOUS {
+        let val = node_src_id(cache: read cache, id: s, k: 0)
+        let st = mk_store(cache: mut cache, ptr: t, value: val, gate: read None)
+        local deps = List.new<Int>()
+        List.push<Int>(list: mut deps, value: read st)
+        return mk_after(cache: mut cache, id: t, srcs: read deps)
+    }
+    if uop_has_buffer_identity(cache: read cache, id: s) { return t }
+    return s
+}
+
+fn transform_precompiled_call(cache: mut UOpCache, c: Int) -> Int {
+    let op = node_op(cache: read cache, id: c)
+    if op != FUNCTION && op != CALL { return c }
+    let call = node_call_arg(cache: read cache, id: c)
+    if call.precompile == false { return c }
+    let body = node_src_id(cache: read cache, id: c, k: 0)
+    local args = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: c) {
+        List.push<Int>(list: mut args, value: read node_src_id(cache: read cache, id: c, k: i))
+        i = i + 1
+    }
+    let new_call_arg = mk_call_arg(name: read call.name, has_name: call.has_name, precompile: true, precompile_backward: call.precompile_backward)
+    return mk_call(cache: mut cache, body: body, args: read args, call: read new_call_arg)
+}
+
+fn finalize_after(cache: read UOpCache, ctx: mut AllocCtx, x: Int) -> Int {
+    if node_op(cache: read cache, id: x) == AFTER {
+        List.push<Int>(list: mut ctx.assigns, value: read x)
+        callify_map_put(ctx: mut ctx, src: x, dst: node_src_id(cache: read cache, id: x, k: 0))
+    }
+    return x
+}
+
+fn replace_input_buffer(cache: mut UOpCache, ctx: mut AllocCtx, b: Int) -> Int {
+    let slot = List.len<Int>(list: read ctx.replacements)
+    List.push<Int>(list: mut ctx.replacements, value: read b)
+    local sh = uop_shape(cache: read cache, id: b)
+    return mk_param(cache: mut cache, slot: slot, dt: read node_dtype(cache: read cache, id: b), shape: read sh, name: read String.concat(left: read "buf", right: read Int.to_string(value: read slot)))
+}
+
+fn transform_to_call(cache: mut UOpCache, big_sink: Int) -> fresh CallifyResult {
+    local ctx = alloc_ctx_new()
+    local assigns = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: big_sink) {
+        let child = node_src_id(cache: read cache, id: big_sink, k: i)
+        tag_uop(ctx: mut ctx, x: child)
+        disk_copy_is_buffer(cache: mut cache, ctx: mut ctx, u: child)
+        if node_op(cache: read cache, id: child) == AFTER || node_op(cache: read cache, id: child) == COPY {
+            List.push<Int>(list: mut assigns, value: read child)
+        } else {
+            let contig = mk_contiguous(cache: mut cache, x: child)
+            let placed = replace_contig_with_store_after(cache: mut cache, u: contig)
+            List.push<Int>(list: mut assigns, value: read placed)
+            callify_map_put(ctx: mut ctx, src: child, dst: placed)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read assigns) == 0 {
+        List.push<Int>(list: mut assigns, value: read big_sink)
+    }
+    let body = uop_sink(cache: mut cache, srcs: read assigns)
+    local call_args = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read ctx.replacements) {
+        let repl = List.get<Int>(list: read ctx.replacements, index: j)
+        let param = replace_input_buffer(cache: mut cache, ctx: mut ctx, b: repl)
+        List.push<Int>(list: mut call_args, value: read param)
+        j = j + 1
+    }
+    let carg = mk_call_arg(name: read "callify", has_name: true, precompile: false, precompile_backward: false)
+    let call = mk_call(cache: mut cache, body: body, args: read call_args, call: read carg)
+    return CallifyResult(call: call, buffer_from: take ctx.buffer_from, buffer_to: take ctx.buffer_to, replacements: take ctx.replacements)
+}

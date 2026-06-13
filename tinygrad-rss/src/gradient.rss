@@ -387,3 +387,141 @@ fn grad_wrt_with_gradient(cache: mut UOpCache, root: Int, target: Int, gradient:
     let raw = grad_wrt_inner(cache: mut cache, node: root, g: gradient, target: target)
     return graph_rewrite(cache: mut cache, id: raw)
 }
+
+struct GradientMap derives(Clone) {
+    nodes: List<Int>,
+    grads: List<Int>,
+}
+
+struct DeepWalkResult derives(Clone) {
+    walk: List<Int>,
+    in_target_path: List<Bool>,
+}
+
+struct CompactParamsResult derives(Clone) {
+    body: Int,
+    args: List<Int>,
+}
+
+fn reduce_gradient(cache: mut UOpCache, ctx: Int, ret: Int, op: Ops) -> Int {
+    let src = node_src_id(cache: read cache, id: ret, k: 0)
+    local src_shape = uop_shape(cache: read cache, id: src)
+    let mut bctx = ctx
+    if List.len<Int>(list: read src_shape) > 0 { bctx = mk_expand(cache: mut cache, x: ctx, new_shape: read src_shape) }
+    if op == ADD { return bctx }
+    if op == MUL {
+        let prod = grad_mul(cache: mut cache, a: bctx, b: ret)
+        return grad_div(cache: mut cache, a: prod, b: src)
+    }
+    if op == MAX {
+        let dt = node_dtype(cache: read cache, id: src)
+        let eq = grad_compare(cache: mut cache, op: CMPEQ, a: src, b: bctx)
+        let zero = grad_const_zero_like(cache: mut cache, like: bctx)
+        return mk_where(cache: mut cache, dt: read dt, cond: eq, tval: bctx, fval: zero)
+    }
+    return bctx
+}
+
+fn _compact_params(cache: mut UOpCache, body: Int, all_args: read List<Int>) -> fresh CompactParamsResult {
+    local used_slots = List.new<Int>()
+    local topo = uop_toposort_enter_calls(cache: read cache, id: body, enter_calls: false)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == PARAM {
+            callify_push_unique(vals: mut used_slots, v: node_param_slot(cache: read cache, id: u))
+        }
+        i = i + 1
+    }
+    local args = List.new<Int>()
+    let mut j = 0
+    while j < List.len<Int>(list: read used_slots) {
+        let slot = List.get<Int>(list: read used_slots, index: j)
+        if slot >= 0 && slot < List.len<Int>(list: read all_args) {
+            List.push<Int>(list: mut args, value: read List.get<Int>(list: read all_args, index: slot))
+        }
+        j = j + 1
+    }
+    return CompactParamsResult(body: body, args: take args)
+}
+
+fn call_gradient(cache: mut UOpCache, ctx: Int, k: Int, needed: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let missing = 0 - 1
+    List.push<Int>(list: mut out, value: read missing)
+    let mut i = 0
+    while i < List.len<Int>(list: read needed) {
+        let idx = List.get<Int>(list: read needed, index: i)
+        if idx + 1 < node_num_src(cache: read cache, id: k) {
+            let arg = node_src_id(cache: read cache, id: k, k: idx + 1)
+            let g = grad_wrt_with_gradient(cache: mut cache, root: k, target: arg, gradient: ctx)
+            List.push<Int>(list: mut out, value: read g)
+        } else {
+            List.push<Int>(list: mut out, value: read missing)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _deepwalk(cache: read UOpCache, root: Int, targets: read List<Int>) -> fresh DeepWalkResult {
+    local topo = uop_toposort_enter_calls(cache: read cache, id: root, enter_calls: false)
+    local flags = List.new<Bool>()
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        List.push<Bool>(list: mut flags, value: read false)
+        i = i + 1
+    }
+    let mut j = List.len<Int>(list: read topo) - 1
+    while j >= 0 {
+        let u = List.get<Int>(list: read topo, index: j)
+        let mut active = false
+        let mut t = 0
+        while t < List.len<Int>(list: read targets) {
+            if u == List.get<Int>(list: read targets, index: t) { active = true }
+            t = t + 1
+        }
+        let mut s = 0
+        while s < node_num_src(cache: read cache, id: u) {
+            let src = node_src_id(cache: read cache, id: u, k: s)
+            let mut kidx = 0
+            while kidx < List.len<Int>(list: read topo) {
+                if src == List.get<Int>(list: read topo, index: kidx) && List.get<Bool>(list: read flags, index: kidx) { active = true }
+                kidx = kidx + 1
+            }
+            s = s + 1
+        }
+        if node_op(cache: read cache, id: u) == DETACH { active = false }
+        List.set<Bool>(list: mut flags, index: j, value: read active)
+        if j == 0 { break }
+        j = j - 1
+    }
+    local walk = List.new<Int>()
+    let mut w = 0
+    while w < List.len<Int>(list: read topo) {
+        if List.get<Bool>(list: read flags, index: w) {
+            List.push<Int>(list: mut walk, value: read List.get<Int>(list: read topo, index: w))
+        }
+        w = w + 1
+    }
+    return DeepWalkResult(walk: take walk, in_target_path: take flags)
+}
+
+fn compute_gradient(cache: mut UOpCache, root: Int, root_grad: Int, targets: read List<Int>) -> fresh GradientMap {
+    local nodes = List.new<Int>()
+    local grads = List.new<Int>()
+    let dw = _deepwalk(cache: read cache, root: root, targets: read targets)
+    let mut i = 0
+    while i < List.len<Int>(list: read targets) {
+        let t = List.get<Int>(list: read targets, index: i)
+        let g = grad_wrt_with_gradient(cache: mut cache, root: root, target: t, gradient: root_grad)
+        List.push<Int>(list: mut nodes, value: read t)
+        List.push<Int>(list: mut grads, value: read g)
+        i = i + 1
+    }
+    if List.len<Int>(list: read targets) == 0 && List.len<Int>(list: read dw.walk) > 0 {
+        List.push<Int>(list: mut nodes, value: read root)
+        List.push<Int>(list: mut grads, value: read root_grad)
+    }
+    return GradientMap(nodes: take nodes, grads: take grads)
+}

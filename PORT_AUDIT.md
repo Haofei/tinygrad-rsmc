@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 76 RSS files, about 38.4k LOC.
+  - integrated `tinygrad-rss/src`: 77 RSS files, about 38.7k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -54,6 +54,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     `runtime/ops_cuda.py`, `runtime/ops_metal.py`, `runtime/ops_webgpu.py`,
     `runtime/ops_qcom.py`, `runtime/ops_dsp.py`, `runtime/ops_rdma.py`,
     `runtime/ops_tinyfs.py`, and `runtime/ops_cl.py`: 331/331 rough symbols covered.
+  - focused graph-transform batch: `callify.py` and `gradient.py`: 17/17 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -526,7 +527,17 @@ Integrated pieces:
   tie-splitting, mask-selection `WHERE`, zero gradients for integrated comparison predicates, and
   movement/reduce VJPs for `RESHAPE`, `EXPAND`, `PERMUTE`, `FLIP`, `PAD`, `SHRINK`, and `REDUCE`,
   plus grouped boundary VJPs for `CONTIGUOUS`, `CONTIGUOUS_BACKWARD`, `COPY`, `DETACH`, and `BITCAST`, then
-  simplifying the resulting gradient graph.
+  simplifying the resulting gradient graph. Source-shaped upstream entry points now cover
+  `reduce_gradient`, `_compact_params`, `call_gradient`, `_deepwalk`, and `compute_gradient`
+  over the current explicit-cache UOp model.
+- `callify.rss`: first source-shaped `tinygrad/callify.py` graph-transform facade over interned
+  UOp ids. It exposes the upstream transform names for tagging UOps, recognizing disk/creation
+  copies, AFTER base projection, contiguous-to-store-after lowering, store-after-to-contiguous
+  fallback, contiguous movement view construction, precompiled-call shells, final AFTER assignment
+  collection, input buffer parameter replacement, and `transform_to_call`. The implementation
+  records RSS `AllocCtx`/`CallifyResult` mappings and builds a CALL over a SINK body for supported
+  graphs; full PatternMatcher parity, tag tuple semantics, exact precompiled-output rewriting, and
+  schedule-cache normalization remain later fidelity work.
 - `uop/vminmax.rss`, `uop/alu.rss`, `uop/symbolic.rss`, `runtime/ops_python.rss`: small
   interpreter/simplifier pieces. The evaluator now passes through boundary data movement nodes
   `CONTIGUOUS`, `CONTIGUOUS_BACKWARD`, `DETACH`, and `COPY`. The symbolic layer now includes integer vmin/vmax, rewrite
@@ -1192,11 +1203,16 @@ Major missing integrated work:
   and exact tinygrad semantics are still incomplete.
 - `function.py` and `gradient.py`: autograd is partially integrated for scalar symbolic UOp
   graphs, simple Tensor movement/reduce graphs including slice/pad, mask selection, max, and
-  selected unary/math VJPs. `tensor_gradient` now wraps the supported implicit scalar-gradient
-  and explicit incoming-gradient paths for a list of target UOps, `backward` forwards to those
-  explicit-target paths, and RSS `TensorState` helpers model `.grad` discovery/set/clear/accumulation
-  for explicit state lists, but full Function-style APIs, complete VJP coverage, Python weakref-driven
-  Tensor discovery and in-place Python object mutation, and exact tinygrad gradient semantics are still missing.
+  selected unary/math VJPs. Source-shaped gradient entry points are present for reduce gradients,
+  compacting params, call gradients, deep-walk path discovery, and compute-gradient maps.
+  `tensor_gradient` now wraps the supported implicit scalar-gradient and explicit incoming-gradient
+  paths for a list of target UOps, `backward` forwards to those explicit-target paths, and RSS
+  `TensorState` helpers model `.grad` discovery/set/clear/accumulation for explicit state lists,
+  but full Function-style APIs, complete VJP coverage, Python weakref-driven Tensor discovery and
+  in-place Python object mutation, and exact tinygrad gradient semantics are still missing.
+- `callify.py`: source-shaped entry points are present and build CALL metadata for supported SINK
+  graphs, but exact PatternMatcher rewrite parity, Python tag tuple semantics, precompiled-output
+  redirection, and cache-key buffer replacement semantics are still incomplete.
 - `uop/ops.py`, `uop/upat.py`, `uop/symbolic.py`, `uop/divandmod.py`, `uop/decompositions.py`, `uop/render.py`, `uop/spec.py`, `uop/validate.py`: full
   source-aligned implementation. UPat/rewrite and a broader method-helper/alias slice are integrated now, but
   the full upstream method surface, symbolic/decomposition/divmod coverage, exact symbolic shape

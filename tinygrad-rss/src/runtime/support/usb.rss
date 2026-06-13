@@ -1,0 +1,58 @@
+// Source-shaped USB/PCI transport facade for tinygrad/runtime/support/usb.py.
+features: native, local
+
+struct USBContext derives(Clone) {
+    device: String,
+    transfers: List<Int>,
+}
+
+fn alloc_cbuffer(size: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < size {
+        List.push<Int>(list: mut out, value: read 0)
+        i = i + 1
+    }
+    return take out
+}
+
+fn ctx(device: read String) -> fresh USBContext { return USBContext(device: String.copy(value: read device), transfers: List.new<Int>()) }
+fn list_devices(prefix: read String) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read String.copy(value: read prefix))
+    return take out
+}
+fn _prep_transfer(usb: mut USBContext, endpoint: Int, size: Int) -> Int {
+    let v = endpoint * 1000000 + size
+    List.push<Int>(list: mut usb.transfers, value: read v)
+    return v
+}
+fn _submit_and_wait(usb: read USBContext, transfer: Int) -> Int { return transfer + List.len<Int>(list: read usb.transfers) }
+fn _bulk_out(usb: mut USBContext, endpoint: Int, data: read List<Int>) -> Int { return _prep_transfer(usb: mut usb, endpoint: endpoint, size: List.len<Int>(list: read data)) }
+fn _bulk_in(usb: mut USBContext, endpoint: Int, size: Int) -> fresh List<Int> {
+    let tr = _prep_transfer(usb: mut usb, endpoint: endpoint, size: size)
+    if tr < 0 { return List.new<Int>() }
+    return alloc_cbuffer(size: size)
+}
+fn send_batch(usb: mut USBContext, batch: read List<Int>) -> Int { return _bulk_out(usb: mut usb, endpoint: 1, data: read batch) }
+fn set_pcie_power(usb: mut USBContext, state: Int) -> Int {
+    List.push<Int>(list: mut usb.transfers, value: read state)
+    return state
+}
+fn _f0_out(usb: mut USBContext, data: read List<Int>) -> Int { return _bulk_out(usb: mut usb, endpoint: 0, data: read data) }
+fn _f0_in(usb: mut USBContext, size: Int) -> fresh List<Int> { return _bulk_in(usb: mut usb, endpoint: 0, size: size) }
+fn _is_pci_cacheable(addr: Int) -> Bool { return (addr & 4095) == 0 }
+fn pcie_request(kind: Int, addr: Int, value: Int) -> Int { return kind + addr + value }
+fn pcie_cfg_req(bus: Int, dev: Int, fn_id: Int, reg: Int) -> Int { return bus * 1048576 + dev * 32768 + fn_id * 4096 + reg }
+fn pcie_mem_req(addr: Int, size: Int) -> Int { return addr + size }
+fn pcie_mem_write(usb: mut USBContext, addr: Int, data: read List<Int>) -> Int { return _bulk_out(usb: mut usb, endpoint: 2, data: read data) + addr }
+fn pcie_mem_read(usb: mut USBContext, addr: Int, size: Int) -> fresh List<Int> { if addr < 0 { return List.new<Int>() }; return _bulk_in(usb: mut usb, endpoint: 2, size: size) }
+fn scsi_write(usb: mut USBContext, lba: Int, data: read List<Int>) -> Int { return _bulk_out(usb: mut usb, endpoint: 3, data: read data) + lba }
+fn scsi_read_arm(usb: mut USBContext, lba: Int, size: Int) -> Int { return _prep_transfer(usb: mut usb, endpoint: 3, size: lba + size) }
+fn scsi_read(usb: mut USBContext, lba: Int, size: Int) -> fresh List<Int> { if scsi_read_arm(usb: mut usb, lba: lba, size: size) < 0 { return List.new<Int>() }; return alloc_cbuffer(size: size) }
+fn exec_ops(usb: mut USBContext, ops: read List<Int>) -> Int { return send_batch(usb: mut usb, batch: read ops) }
+fn pcie_prep_request(kind: Int, addr: Int, size: Int) -> Int { return pcie_request(kind: kind, addr: addr, value: size) }
+fn _access_items(items: read List<Int>) -> Int { return List.len<Int>(list: read items) }
+fn _acc_size(items: read List<Int>) -> Int { return fields_mask(fields: read items) }
+fn _acc_one(item: Int) -> Int { return item }
+fn _acc(items: read List<Int>) -> Int { return _acc_size(items: read items) }

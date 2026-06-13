@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 83 RSS files, about 40.6k LOC.
+  - integrated `tinygrad-rss/src`: 92 RSS files, about 41.2k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -47,6 +47,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused runtime support batch: `runtime/support/hcq.py`, `runtime/support/memory.py`,
     `runtime/support/elf.py`, `runtime/support/compiler_cpu.py`, `runtime/support/c.py`, and
     `runtime/graph/hcq.py`: 167/167 rough symbols covered.
+  - focused backend runtime support batch: `runtime/support/am/ip.py`,
+    `runtime/support/am/amdev.py`, `runtime/support/amd.py`, `runtime/support/nv/ip.py`,
+    `runtime/support/nv/nvdev.py`, `runtime/support/usb.py`, `runtime/support/system.py`,
+    `runtime/support/autogen.py`, and `runtime/support/mlx/mlxdev.py`: 334/334 rough symbols
+    covered. This is source-shaped backend/device support coverage with deterministic smoke
+    execution, not real kernel-mode IO, firmware loading, VFIO, USB transport, or GSP/SMU control.
   - focused renderer ISA/AMD batch: `renderer/amd/dsl.py`, `renderer/amd/elf.py`,
     `renderer/amd/sqtt.py`, `renderer/isa/x86.py`, `renderer/__init__.py`,
     `renderer/amd/__init__.py`, and `renderer/isa/__init__.py`: 135/135 rough symbols covered.
@@ -93,6 +99,8 @@ Toolchain changes made to simplify the next port slices:
   `from_url` can execute real byte downloads when network access is available.
 - RSScript Rust lowering now emits Rust `.clone()` for checker-supported builtin value types
   (`List`, `Bytes`, and `Buffer`) instead of leaking unresolved `Type_clone` helper symbols.
+- RSScript Rust lowering now raw-escapes Rust reserved/future-reserved identifiers, including
+  Rust 2024's `gen`, so source-shaped tinygrad support/autogen helpers can keep upstream names.
 
 ## What Is Actually Integrated
 

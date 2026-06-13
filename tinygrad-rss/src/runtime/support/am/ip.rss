@@ -1,0 +1,153 @@
+// Source-shaped AMD IP block facade for tinygrad/runtime/support/am/ip.py.
+features: native, local
+
+struct AMIPState derives(Clone) {
+    name: String,
+    initialized: Bool,
+    ring: List<Int>,
+}
+
+fn am_ip_state(name: read String) -> fresh AMIPState {
+    return AMIPState(name: String.copy(value: read name), initialized: false, ring: List.new<Int>())
+}
+
+fn init_sw(ip: mut AMIPState) -> Bool {
+    ip.initialized = true
+    return ip.initialized
+}
+fn init_hw(ip: mut AMIPState) -> Bool {
+    ip.initialized = true
+    List.push<Int>(list: mut ip.ring, value: read 1)
+    return ip.initialized
+}
+fn fini_hw(ip: mut AMIPState) -> Bool {
+    ip.initialized = false
+    return true
+}
+fn set_clockgating_state(ip: mut AMIPState, state: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read state)
+    return state
+}
+fn doorbell_enable(ip: mut AMIPState, enable: Bool) -> Bool {
+    if enable { List.push<Int>(list: mut ip.ring, value: read 1) }
+    else { List.push<Int>(list: mut ip.ring, value: read 0) }
+    return enable
+}
+fn flush_hdp(ip: mut AMIPState) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read 2)
+    return List.len<Int>(list: read ip.ring)
+}
+fn flush_tlb(ip: mut AMIPState) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read 3)
+    return List.len<Int>(list: read ip.ring)
+}
+fn enable_vm_addressing(ip: mut AMIPState) -> Bool {
+    ip.initialized = true
+    return true
+}
+fn init_hub(ip: mut AMIPState, hub: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read hub)
+    return hub
+}
+fn get_pte_flags(readable: Bool, writable: Bool, executable: Bool) -> Int {
+    let mut out = 0
+    if readable { out = out | 1 }
+    if writable { out = out | 2 }
+    if executable { out = out | 4 }
+    return out
+}
+fn is_pte_huge_page(flags: Int) -> Bool { return (flags & 8) != 0 }
+fn is_smu_alive(ip: read AMIPState) -> Bool { return ip.initialized }
+fn mode1_reset(ip: mut AMIPState) -> Bool {
+    ip.ring = List.new<Int>()
+    return true
+}
+fn read_table(table: read List<Int>, index: Int) -> Int {
+    if index >= 0 && index < List.len<Int>(list: read table) { return List.get<Int>(list: read table, index: index) }
+    return 0
+}
+fn read_clocks(ip: read AMIPState) -> Int { return List.len<Int>(list: read ip.ring) * 100 }
+fn set_clocks(ip: mut AMIPState, clock: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read clock)
+    return clock
+}
+fn set_power_limit(ip: mut AMIPState, watts: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read watts)
+    return watts
+}
+fn _aca_read_reg(ip: read AMIPState, reg: Int) -> Int { return reg + String.len(value: read ip.name) }
+fn _aca_read_banks(ip: read AMIPState) -> Int { return List.len<Int>(list: read ip.ring) }
+fn _smu_cmn_send_msg(ip: mut AMIPState, msg: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read msg)
+    return msg
+}
+fn _send_msg(ip: mut AMIPState, msg: Int) -> Int { return _smu_cmn_send_msg(ip: mut ip, msg: msg) }
+fn reset_mec(ip: mut AMIPState) -> Bool {
+    ip.ring = List.new<Int>()
+    return true
+}
+fn setup_ring(ip: mut AMIPState, size: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read size)
+    return size
+}
+fn _grbm_select(ip: mut AMIPState, pipe: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read pipe)
+    return pipe
+}
+fn _enable_mec(ip: mut AMIPState, mec: Int) -> Bool {
+    List.push<Int>(list: mut ip.ring, value: read mec)
+    return true
+}
+fn _config_mec(ip: mut AMIPState, config: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read config)
+    return config
+}
+fn _dequeue_hqds(ip: mut AMIPState) -> Int {
+    let n = List.len<Int>(list: read ip.ring)
+    ip.ring = List.new<Int>()
+    return n
+}
+fn drain(ip: mut AMIPState) -> Int { return _dequeue_hqds(ip: mut ip) }
+fn interrupt_handler(ip: mut AMIPState, irq: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read irq)
+    return irq
+}
+fn is_sos_alive(ip: read AMIPState) -> Bool { return ip.initialized }
+fn _wait_for_bootloader(ip: read AMIPState) -> Bool { return ip.initialized }
+fn _prep_msg1(component: Int, size: Int) -> Int { return component * 1000000 + size }
+fn _bootloader_load_component(ip: mut AMIPState, component: Int, size: Int) -> Int {
+    let msg = _prep_msg1(component: component, size: size)
+    List.push<Int>(list: mut ip.ring, value: read msg)
+    return msg
+}
+fn _tmr_init(ip: mut AMIPState, size: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read size)
+    return size
+}
+fn _ring_create(ip: mut AMIPState, size: Int) -> Int { return setup_ring(ip: mut ip, size: size) }
+fn _ring_submit(ip: mut AMIPState, cmd: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read cmd)
+    return List.len<Int>(list: read ip.ring)
+}
+fn _load_ip_fw_cmd(ip: mut AMIPState, fw: read List<Int>) -> Int {
+    let n = List.len<Int>(list: read fw)
+    List.push<Int>(list: mut ip.ring, value: read n)
+    return n
+}
+fn _tmr_load_cmd(ip: mut AMIPState, addr: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read addr)
+    return addr
+}
+fn _load_toc_cmd(ip: mut AMIPState, entries: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read entries)
+    return entries
+}
+fn _spatial_partition_cmd(ip: mut AMIPState, partition: Int) -> Int {
+    List.push<Int>(list: mut ip.ring, value: read partition)
+    return partition
+}
+fn _rlc_autoload_cmd(ip: mut AMIPState, enabled: Bool) -> Bool {
+    if enabled { List.push<Int>(list: mut ip.ring, value: read 1) }
+    else { List.push<Int>(list: mut ip.ring, value: read 0) }
+    return enabled
+}

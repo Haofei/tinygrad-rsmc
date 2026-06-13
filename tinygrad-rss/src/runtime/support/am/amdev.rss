@@ -1,0 +1,125 @@
+// Source-shaped AMD device support facade for tinygrad/runtime/support/am/amdev.py.
+features: native, local
+
+struct AMRegisterBank derives(Clone) {
+    base: Int,
+    values: List<Int>,
+}
+
+struct AMPageEntry derives(Clone) {
+    value: Int,
+    huge: Bool,
+}
+
+struct AMDeviceSupport derives(Clone) {
+    name: String,
+    regs: AMRegisterBank,
+    hive: Bool,
+}
+
+fn am_reg_bank(base: Int) -> fresh AMRegisterBank { return AMRegisterBank(base: base, values: List.new<Int>()) }
+
+fn add_field(value: Int, shift: Int, width: Int) -> Int {
+    let mask = (1 << width) - 1
+    return (value & mask) << shift
+}
+
+fn with_base(offset: Int, base: Int) -> Int { return base + offset }
+
+fn read_bitfields(value: Int, mask: Int, shift: Int) -> Int { return (value & mask) >> shift }
+
+fn update(value: Int, mask: Int, replacement: Int) -> Int { return (value & (0 - 1 - mask)) | (replacement & mask) }
+
+fn mask(bits: Int) -> Int {
+    if bits <= 0 { return 0 }
+    return (1 << bits) - 1
+}
+
+fn load_fw(name: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read name))
+    return take out
+}
+
+fn desc(name: read String, value: Int) -> fresh String {
+    return String.concat(left: read name, right: read String.concat(left: read ":", right: read Int.to_string(value: read value)))
+}
+
+fn set_entry(addr: Int, flags: Int) -> fresh AMPageEntry {
+    let v = addr | flags
+    return AMPageEntry(value: v, huge: flags != 0)
+}
+fn entry(e: read AMPageEntry) -> Int { return e.value }
+fn valid(e: read AMPageEntry) -> Bool { return e.value != 0 }
+fn address(e: read AMPageEntry) -> Int { return e.value & (0 - 4096) }
+fn is_page(e: read AMPageEntry) -> Bool { return valid(e: read e) }
+fn supports_huge_page(e: read AMPageEntry) -> Bool { return e.huge }
+fn _is_dual_pde(e: read AMPageEntry) -> Bool { return e.huge && valid(e: read e) }
+
+fn read_fields(values: read List<Int>) -> Int { return fields_mask(fields: read values) }
+
+fn fini(dev: mut AMDeviceSupport) -> Unit {
+    dev.hive = false
+    return Unit
+}
+
+fn recover(dev: mut AMDeviceSupport) -> Bool {
+    dev.hive = true
+    return dev.hive
+}
+
+fn is_hive(dev: read AMDeviceSupport) -> Bool { return dev.hive }
+fn paddr2mc(addr: Int) -> Int { return addr + 4096 }
+fn paddr2xgmi(addr: Int) -> Int { return addr + 8192 }
+fn xgmi2paddr(addr: Int) -> Int { return addr - 8192 }
+
+fn rreg(bank: read AMRegisterBank, reg: Int) -> Int {
+    let idx = reg - bank.base
+    if idx >= 0 && idx < List.len<Int>(list: read bank.values) { return List.get<Int>(list: read bank.values, index: idx) }
+    return 0
+}
+
+fn wreg_pair(bank: mut AMRegisterBank, reg: Int, lo: Int, hi: Int) -> Int {
+    let v = lo + hi * 4294967296
+    List.push<Int>(list: mut bank.values, value: read v)
+    return reg
+}
+
+fn indirect_rreg(bank: read AMRegisterBank, reg: Int) -> Int { return rreg(bank: read bank, reg: reg) }
+fn indirect_wreg(bank: mut AMRegisterBank, reg: Int, value: Int) -> Int {
+    List.push<Int>(list: mut bank.values, value: read value)
+    return reg
+}
+fn indirect_wreg_pcie(bank: mut AMRegisterBank, reg: Int, value: Int) -> Int { return indirect_wreg(bank: mut bank, reg: reg, value: value) }
+
+fn _read_vram(addr: Int, size: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < size {
+        List.push<Int>(list: mut out, value: read ((addr + i) & 255))
+        i = i + 1
+    }
+    return take out
+}
+
+fn _run_discovery(dev: read AMDeviceSupport) -> Int { return String.len(value: read dev.name) + List.len<Int>(list: read dev.regs.values) }
+
+fn hwid_names() -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read "GC")
+    List.push<String>(list: mut out, value: read "SDMA")
+    return take out
+}
+
+fn _ip_module(name: read String) -> fresh String { return String.concat(left: read "am.ip.", right: read name) }
+fn _build_regs(base: Int, count: Int) -> fresh AMRegisterBank {
+    return AMRegisterBank(base: base, values: regs(base: base, count: count))
+}
+
+fn _early_ip_init(dev: mut AMDeviceSupport) -> Int {
+    dev.hive = true
+    return 1
+}
+fn _early_mmu_init(dev: read AMDeviceSupport) -> Int { return String.len(value: read dev.name) }
+fn _alloc_boot_mem(size: Int) -> fresh RuntimeBufferState { return runtime_buffer_new(handle: size, size: size, offset: 0, device: read "BOOT") }
+fn include(path: read String) -> Bool { return String.len(value: read path) > 0 }

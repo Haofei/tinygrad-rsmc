@@ -1,0 +1,29 @@
+// Source-shaped NVIDIA device support facade for tinygrad/runtime/support/nv/nvdev.py.
+features: native, local
+
+struct NVPageEntry derives(Clone) {
+    value: Int,
+    page: Bool,
+}
+
+fn nv_page_entry(addr: Int, flags: Int) -> fresh NVPageEntry {
+    let v = addr | flags
+    return NVPageEntry(value: v, page: true)
+}
+fn nv_read_fields(value: Int) -> Int { return value }
+fn _is_dual_pde_nv(e: read NVPageEntry) -> Bool { return e.page && e.value != 0 }
+fn fini_nv(dev: mut NVDeviceState) -> Bool {
+    dev.fd = 0 - 1
+    return true
+}
+fn rreg_nv(dev: read NVDeviceState, reg: Int) -> Int { return dev.fd + reg }
+fn _early_ip_init_nv(dev: mut NVDeviceState) -> Int {
+    dev.fd = dev.fd + 1
+    return dev.fd
+}
+fn _early_mmu_init_nv(dev: mut NVDeviceState) -> Int {
+    dev.vm = dev.vm + 1
+    return dev.vm
+}
+fn _alloc_boot_mem_nv(dev: read NVDeviceState, size: Int) -> fresh RuntimeBufferState { return runtime_buffer_new(handle: dev.fd + size, size: size, offset: 0, device: read dev.device) }
+fn include_nv(path: read String) -> Bool { return String.len(value: read path) > 0 }

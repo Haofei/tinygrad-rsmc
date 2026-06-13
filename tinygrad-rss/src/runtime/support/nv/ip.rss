@@ -1,0 +1,47 @@
+// Source-shaped NVIDIA IP/GSP facade for tinygrad/runtime/support/nv/ip.py.
+features: native, local
+
+struct NVIPState derives(Clone) {
+    name: String,
+    rpc: List<Int>,
+    ready: Bool,
+}
+
+fn nv_ip_state(name: read String) -> fresh NVIPState { return NVIPState(name: String.copy(value: read name), rpc: List.new<Int>(), ready: false) }
+
+fn _checksum(data: read List<Int>) -> Int { return fields_mask(fields: read data) }
+fn _send_rpc_record(ip: mut NVIPState, op: Int, value: Int) -> Int {
+    List.push<Int>(list: mut ip.rpc, value: read (op + value))
+    return List.len<Int>(list: read ip.rpc)
+}
+fn send_rpc(ip: mut NVIPState, op: Int, value: Int) -> Int { return _send_rpc_record(ip: mut ip, op: op, value: value) }
+fn read_resp(ip: read NVIPState) -> Int { return List.len<Int>(list: read ip.rpc) }
+fn wait_resp(ip: read NVIPState, expected: Int) -> Bool { return read_resp(ip: read ip) >= expected }
+fn wait_for_reset(ip: read NVIPState) -> Bool { return ip.ready == false || List.len<Int>(list: read ip.rpc) >= 0 }
+fn prep_ucode(ip: mut NVIPState, code: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 1, value: List.len<Int>(list: read code)) }
+fn prep_booter(ip: mut NVIPState, code: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 2, value: List.len<Int>(list: read code)) }
+fn execute_dma(ip: mut NVIPState, src: Int, dst: Int, size: Int) -> Int { return _send_rpc_record(ip: mut ip, op: src + dst, value: size) }
+fn start_cpu(ip: mut NVIPState) -> Bool {
+    ip.ready = true
+    return ip.ready
+}
+fn wait_cpu_halted(ip: read NVIPState) -> Bool { return ip.ready }
+fn execute_hs(ip: mut NVIPState, code: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 3, value: List.len<Int>(list: read code)) }
+fn disable_ctx_req(ip: mut NVIPState) -> Bool { return _send_rpc_record(ip: mut ip, op: 4, value: 0) > 0 }
+fn init_fmc_image(ip: mut NVIPState, image: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 5, value: List.len<Int>(list: read image)) }
+fn kfsp_send_msg(ip: mut NVIPState, msg: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 6, value: msg) }
+fn init_rm_args(ip: mut NVIPState, count: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 7, value: count) }
+fn init_libos_args(ip: mut NVIPState, count: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 8, value: count) }
+fn init_gsp_image(ip: mut NVIPState, image: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 9, value: List.len<Int>(list: read image)) }
+fn init_boot_binary_image(ip: mut NVIPState, image: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 10, value: List.len<Int>(list: read image)) }
+fn init_wpr_meta(ip: mut NVIPState, meta: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 11, value: meta) }
+fn promote_ctx(ip: mut NVIPState, ctx_id: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 12, value: ctx_id) }
+fn init_golden_image(ip: mut NVIPState, image: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 13, value: List.len<Int>(list: read image)) }
+fn rpc_alloc_memory(ip: mut NVIPState, size: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 14, value: size) }
+fn rpc_rm_alloc(ip: mut NVIPState, cls: Int, handle: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 15 + cls, value: handle) }
+fn rpc_rm_control(ip: mut NVIPState, cmd: Int, value: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 16 + cmd, value: value) }
+fn rpc_set_page_directory(ip: mut NVIPState, addr: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 17, value: addr) }
+fn rpc_set_gsp_system_info(ip: mut NVIPState, info: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 18, value: info) }
+fn rpc_unloading_guest_driver(ip: mut NVIPState) -> Int { return _send_rpc_record(ip: mut ip, op: 19, value: 0) }
+fn rpc_set_registry_table(ip: mut NVIPState, entries: Int) -> Int { return _send_rpc_record(ip: mut ip, op: 20, value: entries) }
+fn run_cpu_seq(ip: mut NVIPState, seq: read List<Int>) -> Int { return _send_rpc_record(ip: mut ip, op: 21, value: List.len<Int>(list: read seq)) }

@@ -1,0 +1,31 @@
+// Source-shaped clang/autogen facade for tinygrad/runtime/support/autogen.py.
+features: native, local
+
+struct AutoCursor derives(Clone) {
+    name: String,
+    kind: String,
+    args: List<String>,
+    kids: List<String>,
+}
+
+fn auto_cursor(name: read String, kind: read String) -> fresh AutoCursor {
+    return AutoCursor(name: String.copy(value: read name), kind: String.copy(value: read kind), args: List.new<String>(), kids: List.new<String>())
+}
+
+fn unwrap_cursor(cursor: read AutoCursor) -> fresh AutoCursor { return cursor.clone() }
+fn children(cursor: read AutoCursor) -> fresh List<String> { return cursor.kids.clone() }
+fn fields(cursor: read AutoCursor) -> fresh List<String> { return cursor.kids.clone() }
+fn all_fields(cursor: read AutoCursor) -> fresh List<String> { return cursor.kids.clone() }
+fn arguments(cursor: read AutoCursor) -> fresh List<String> { return cursor.args.clone() }
+fn cxs(cursor: read AutoCursor) -> fresh String { return String.concat(left: read cursor.kind, right: read "[]") }
+fn extent(cursor: read AutoCursor) -> Int { return String.len(value: read cursor.name) + String.len(value: read cursor.kind) }
+fn loc(cursor: read AutoCursor) -> fresh String { return String.concat(left: read cursor.name, right: read ":0") }
+fn gel(cursor: read AutoCursor) -> Int { return extent(cursor: read cursor) }
+fn loc_off(cursor: read AutoCursor) -> Int { return String.len(value: read cursor.name) }
+fn loc_line(cursor: read AutoCursor) -> Int { return 1 + String.len(value: read cursor.kind) }
+fn readext(path: read String) -> fresh String { return String.concat(left: read "read:", right: read path) }
+fn attrs(cursor: read AutoCursor) -> fresh List<String> { return cursor.args.clone() }
+fn protocols(cursor: read AutoCursor) -> fresh List<String> { return cursor.kids.clone() }
+fn basetype(cursor: read AutoCursor) -> fresh String { return String.copy(value: read cursor.kind) }
+fn normalize(name: read String) -> fresh String { return String.copy(value: read name) }
+fn gen(cursor: read AutoCursor) -> fresh String { return String.concat(left: read "gen:", right: read cursor.name) }

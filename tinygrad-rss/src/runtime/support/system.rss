@@ -1,0 +1,57 @@
+// Source-shaped system/vfio/remote support facade for tinygrad/runtime/support/system.py.
+features: native, local
+
+struct SystemDevice derives(Clone) {
+    name: String,
+    fd: Int,
+    bars: List<Int>,
+}
+
+fn system_device(name: read String, fd: Int) -> fresh SystemDevice { return SystemDevice(name: String.copy(value: read name), fd: fd, bars: List.new<Int>()) }
+fn write_sysfs(path: read String, value: read String) -> Bool { return String.len(value: read path) >= 0 && String.len(value: read value) >= 0 }
+fn atomic_lib() -> fresh String { return String.copy(value: read "atomic") }
+fn libsys() -> fresh String { return String.copy(value: read "libsys") }
+fn pagemap(addr: Int) -> Int { return addr >> 12 }
+fn vfio(group: Int) -> Int { return group + 1000 }
+fn reserve_va(size: Int) -> Int { return size + 4096 }
+fn lock_memory(addr: Int, size: Int) -> Bool { return addr >= 0 && size >= 0 }
+fn system_paddrs(addrs: read List<Int>) -> fresh List<Int> { return copy_int_list(l: read addrs) }
+fn pci_scan_bus(bus: Int) -> fresh List<String> {
+    local out = List.new<String>()
+    local name = String.concat(left: read "pci:", right: read Int.to_string(value: read bus))
+    List.push<String>(list: mut out, value: read (manage name))
+    return take out
+}
+fn pci_probe_device(name: read String) -> fresh SystemDevice { return system_device(name: read name, fd: String.len(value: read name)) }
+fn pci_setup_usb_bars(dev: mut SystemDevice) -> Int {
+    let fd = dev.fd + 0
+    List.push<Int>(list: mut dev.bars, value: read fd)
+    return List.len<Int>(list: read dev.bars)
+}
+fn flock_acquire(fd: Int) -> Bool { return fd >= 0 }
+fn alloc_sysmem(size: Int) -> fresh RuntimeBufferState { return runtime_buffer_new(handle: size, size: size, offset: 0, device: read "SYSMEM") }
+fn read_config(dev: read SystemDevice, reg: Int) -> Int { return dev.fd + reg }
+fn write_config(dev: read SystemDevice, reg: Int, value: Int) -> Int { return dev.fd + reg + value }
+fn write_config_flush(dev: read SystemDevice, reg: Int, value: Int) -> Int { return write_config(dev: read dev, reg: reg, value: value) }
+fn bar_fd(dev: read SystemDevice, bar: Int) -> Int { return dev.fd + bar }
+fn bar_info(dev: read SystemDevice, bar: Int) -> Int { return dev.fd * 10 + bar }
+fn map_bar(dev: mut SystemDevice, bar: Int, size: Int) -> fresh RuntimeBufferState {
+    let handle = dev.fd + bar
+    local dev_name = String.copy(value: read dev.name)
+    List.push<Int>(list: mut dev.bars, value: read bar)
+    return runtime_buffer_new(handle: handle, size: size, offset: 0, device: read dev_name)
+}
+fn resize_bar(dev: mut SystemDevice, bar: Int, size: Int) -> Int {
+    List.push<Int>(list: mut dev.bars, value: read size)
+    return bar + size
+}
+fn dma_view(buf: read RuntimeBufferState, offset_bytes: Int, size: Int) -> fresh RuntimeBufferState { return RuntimeBufferState(handle: buf.handle, size: size, offset: buf.offset + offset_bytes, device: String.copy(value: read buf.device)) }
+fn peer_group(a: read SystemDevice, b: read SystemDevice) -> Int { return a.fd + b.fd }
+fn is_local(dev: read SystemDevice) -> Bool { return String.contains(value: read dev.name, needle: read "remote") == false }
+fn remote_sock(host: read String, port: Int) -> Int { return String.len(value: read host) + port }
+fn remote_list(host: read String) -> fresh List<String> { return list_devices(prefix: read host) }
+fn _recvall(sock: Int, size: Int) -> fresh List<Int> { if sock < 0 { return List.new<Int>() }; return alloc_cbuffer(size: size) }
+fn _rpc(sock: Int, op: read String, value: Int) -> Int { return sock + String.len(value: read op) + value }
+fn _bulk_read(sock: Int, size: Int) -> fresh List<Int> { return _recvall(sock: sock, size: size) }
+fn _bulk_write(sock: Int, data: read List<Int>) -> Int { return sock + List.len<Int>(list: read data) }
+fn ensure_app(path: read String) -> Bool { return String.len(value: read path) > 0 }

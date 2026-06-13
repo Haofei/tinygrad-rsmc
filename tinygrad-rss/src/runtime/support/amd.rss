@@ -1,0 +1,27 @@
+// Source-shaped AMD support facade for tinygrad/runtime/support/amd.py.
+features: native, local
+
+fn fields_mask(fields: read List<Int>) -> Int {
+    let mut out = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read fields) {
+        out = out | List.get<Int>(list: read fields, index: i)
+        i = i + 1
+    }
+    return out
+}
+
+fn regs(base: Int, count: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < count {
+        List.push<Int>(list: mut out, value: read (base + i * 4))
+        i = i + 1
+    }
+    return take out
+}
+
+fn import_module(name: read String) -> fresh String { return String.concat(left: read "module:", right: read name) }
+fn import_soc(name: read String) -> fresh String { return String.concat(left: read "soc:", right: read name) }
+fn import_pmc(name: read String) -> fresh String { return String.concat(left: read "pmc:", right: read name) }
+fn import_asic_regs(name: read String) -> fresh String { return String.concat(left: read "asic:", right: read name) }

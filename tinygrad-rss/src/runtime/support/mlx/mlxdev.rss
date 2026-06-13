@@ -1,0 +1,74 @@
+// Source-shaped Mellanox device support facade for tinygrad/runtime/support/mlx/mlxdev.py.
+features: native, local
+
+struct MLXDevice derives(Clone) {
+    name: String,
+    regs: List<Int>,
+}
+
+fn mlx_device(name: read String) -> fresh MLXDevice { return MLXDevice(name: String.copy(value: read name), regs: List.new<Int>()) }
+fn ipv4_to_gid(a: Int, b: Int, c: Int, d: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read a)
+    List.push<Int>(list: mut out, value: read b)
+    List.push<Int>(list: mut out, value: read c)
+    List.push<Int>(list: mut out, value: read d)
+    return take out
+}
+fn udp_sport(src: Int, dst: Int) -> Int { return 1024 + ((src + dst) & 32767) }
+fn ifc_get(fields: read List<Int>, index: Int) -> Int { return read_table(table: read fields, index: index) }
+fn ifc_set(fields: mut List<Int>, index: Int, value: Int) -> Int {
+    if index >= 0 && index < List.len<Int>(list: read fields) { List.set<Int>(list: mut fields, index: index, value: read value) }
+    else { List.push<Int>(list: mut fields, value: read value) }
+    return value
+}
+fn ifc_fields(count: Int) -> fresh List<Int> { return regs(base: 0, count: count) }
+fn ifc_subfield(value: Int, shift: Int, width: Int) -> Int {
+    let shifted_mask = mask(bits: width) << shift
+    return read_bitfields(value: value, mask: shifted_mask, shift: shift)
+}
+fn fill_ifc(fields: mut List<Int>, value: Int) -> Int {
+    List.push<Int>(list: mut fields, value: read value)
+    return List.len<Int>(list: read fields)
+}
+fn ifc_decode(fields: read List<Int>) -> Int { return fields_mask(fields: read fields) }
+fn create_mbox_chain(count: Int, size: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < count {
+        List.push<Int>(list: mut out, value: read size)
+        i = i + 1
+    }
+    return take out
+}
+fn iseg_r(dev: read MLXDevice, reg: Int) -> Int { return String.len(value: read dev.name) + reg }
+fn iseg_w(dev: mut MLXDevice, reg: Int, value: Int) -> Int {
+    List.push<Int>(list: mut dev.regs, value: read (reg + value))
+    return value
+}
+fn register_mem(dev: mut MLXDevice, buf: read RuntimeBufferState) -> Int {
+    List.push<Int>(list: mut dev.regs, value: read buf.handle)
+    return buf.handle
+}
+fn unregister_mem(dev: mut MLXDevice, handle: Int) -> Bool {
+    List.push<Int>(list: mut dev.regs, value: read (0 - handle))
+    return true
+}
+fn provide_pages(dev: mut MLXDevice, count: Int) -> Int {
+    List.push<Int>(list: mut dev.regs, value: read count)
+    return count
+}
+fn hca_query_cap(dev: read MLXDevice) -> Int { return String.len(value: read dev.name) + List.len<Int>(list: read dev.regs) }
+fn hca_set_cap(dev: mut MLXDevice, cap: Int) -> Int {
+    List.push<Int>(list: mut dev.regs, value: read cap)
+    return cap
+}
+fn init_hca(dev: mut MLXDevice) -> Bool {
+    List.push<Int>(list: mut dev.regs, value: read 1)
+    return true
+}
+fn qp_op(dev: mut MLXDevice, qpn: Int, op: Int) -> Int {
+    let v = qpn + op
+    List.push<Int>(list: mut dev.regs, value: read v)
+    return v
+}

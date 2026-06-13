@@ -468,6 +468,17 @@ fn devectorizer_rewrite(cache: mut UOpCache, id: Int) -> Option<Int> {
         Some(r) => { return Some(r) }
         None => {}
     }
+    if node_op(cache: read cache, id: id) == LOAD || node_op(cache: read cache, id: id) == STORE {
+        if node_num_src(cache: read cache, id: id) > 0 {
+            let idx = devectorizer_index_base_for_split(cache: read cache, ptr: node_src_id(cache: read cache, id: id, k: 0))
+            if idx >= 0 {
+                match split_load_store(cache: mut cache, ls: id, idx: idx) {
+                    Some(r) => { return Some(r) }
+                    None => {}
+                }
+            }
+        }
+    }
     match devectorizer_no_vectorized_wmma(cache: mut cache, id: id) {
         Some(r) => { return Some(r) }
         None => {}
@@ -572,10 +583,20 @@ fn gep_on_store(cache: mut UOpCache, gep: Int, st: Int) -> Option<Int> {
     return Some(devectorizer_store_with_ptr_value(cache: mut cache, id: st, ptr: base, value: ndata))
 }
 
+fn devectorizer_index_base_for_split(cache: read UOpCache, ptr: Int) -> Int {
+    if node_op(cache: read cache, id: ptr) == INDEX { return ptr }
+    if node_op(cache: read cache, id: ptr) == CAST && node_num_src(cache: read cache, id: ptr) == 1 {
+        let inner = node_src_id(cache: read cache, id: ptr, k: 0)
+        if node_op(cache: read cache, id: inner) == INDEX { return inner }
+    }
+    return 0 - 1
+}
+
 fn split_load_store(cache: mut UOpCache, ls: Int, idx: Int) -> Option<Int> {
     let op = node_op(cache: read cache, id: ls)
     if op != LOAD && op != STORE { return None }
-    let sz = node_full_dtype(cache: read cache, id: node_src_id(cache: read cache, id: ls, k: 0)).count
+    let ptr0 = node_src_id(cache: read cache, id: ls, k: 0)
+    let sz = node_full_dtype(cache: read cache, id: ptr0).count
     if sz <= 1 { return None }
     if node_op(cache: read cache, id: idx) != INDEX || node_num_src(cache: read cache, id: idx) < 2 { return None }
     let buf = node_src_id(cache: read cache, id: idx, k: 0)
@@ -591,13 +612,22 @@ fn split_load_store(cache: mut UOpCache, ls: Int, idx: Int) -> Option<Int> {
         if op == LOAD {
             let ldt = dtype_scalar(d: read node_full_dtype(cache: read cache, id: ls))
             local extras = List.new<Int>()
+            let mut extra_i = 1
+            while extra_i < node_num_src(cache: read cache, id: ls) {
+                List.push<Int>(list: mut extras, value: read node_src_id(cache: read cache, id: ls, k: extra_i))
+                extra_i = extra_i + 1
+            }
             List.push<Int>(list: mut pieces, value: read mk_load(cache: mut cache, ptr: ptr, srcs: read extras, dt: read ldt))
         } else {
             let data = node_src_id(cache: read cache, id: ls, k: 1)
             local one = List.new<Int>()
             List.push<Int>(list: mut one, value: read lane)
             let val = mk_gep(cache: mut cache, x: data, idxs: read one)
-            List.push<Int>(list: mut pieces, value: read mk_store(cache: mut cache, ptr: ptr, value: val, gate: read None))
+            if node_num_src(cache: read cache, id: ls) >= 3 {
+                List.push<Int>(list: mut pieces, value: read mk_store(cache: mut cache, ptr: ptr, value: val, gate: read Some(node_src_id(cache: read cache, id: ls, k: 2))))
+            } else {
+                List.push<Int>(list: mut pieces, value: read mk_store(cache: mut cache, ptr: ptr, value: val, gate: read None))
+            }
         }
         lane = lane + 1
     }

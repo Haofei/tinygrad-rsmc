@@ -411,11 +411,12 @@ Integrated pieces:
   becomes a `STACK` of lane `GEP`s, `GEP(x, 0)` on scalar `x` unwraps, and one-element `STACK`
   unwraps. The context-free `load_store_folding` rules for `INDEX(STACK(bufs), vec_idx)`,
   `GEP` after `LOAD`, `GEP` on `STORE`, `PTRCAT` after `LOAD`, and `PTRCAT` after `STORE`
-  are also integrated, along with the `pm_add_loads` rules that insert `LOAD` for
+  are also integrated, including vector load/store splitting through cast-backed `INDEX`
+  pointers while preserving load extras and store gates, along with the `pm_add_loads` rules that insert `LOAD` for
   non-pointer `INDEX` nodes and clean nested `LOAD(LOAD(ptr))` and `STORE(LOAD(ptr), value)`.
   Source-shaped facades also include conservative folded-index/image entry points, scalar
   DEFINE_LOCAL/DEFINE_REG buffer devectorization, simple CAST-backed index lane expansion,
-  naive vector load/store splitting, and no-range `reduce_to_acc` delegation. Full ImageDType
+  and no-range `reduce_to_acc` delegation. Full ImageDType
   handling, exact folded-index regrouping, and range-backed DEFINE_ACC lowering remain later
   devectorizer slices.
 - `codegen/__init__.rss`: first integrated source-shaped `tinygrad/codegen/__init__.py` slice,
@@ -1019,7 +1020,7 @@ Current integrated demo:
   scalarize into `STACK` nodes of scalar lane operations and pass the integrated UOp spec
   verifier. It also validates the first `pm_render` normalizations for vector `CONST`,
   multi-lane `GEP`, scalar `GEP(0)`, and single-source `STACK`, plus the first context-free
-  load/store folding rules for stack-backed `INDEX`, `GEP`, and `PTRCAT`.
+  load/store folding rules for stack-backed `INDEX`, `GEP`, `PTRCAT`, and vector load/store splitting.
 - validates the first `do_linearize` wrapper by appending a cleaned `LINEAR` child to a
   `PROGRAM(SINK, DEVICE)` and passing the integrated UOp spec verifier.
 - validates the first `do_estimates` wrapper by adding `PROGRAM` estimate metadata for the sample

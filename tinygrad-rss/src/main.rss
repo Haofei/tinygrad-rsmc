@@ -1629,6 +1629,39 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mdev_split_ptr = mk_cast(cache: mut mcache, x: mdev_ptr0, dt: read mdev_ptrcat_dt)
+    let mdev_split_load = mk_load(cache: mut mcache, ptr: mdev_split_ptr, srcs: read mdev_empty_src, dt: read mdev_ptrcat_dt)
+    let mut mdev_split_load_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_split_load) {
+        Some(r) => {
+            let l0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let l1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let lptr0 = node_src_id(cache: read mcache, id: l0, k: 0)
+            let lptr1 = node_src_id(cache: read mcache, id: l1, k: 0)
+            let split_load_root_ok = node_op(cache: read mcache, id: r) == VCAT && node_num_src(cache: read mcache, id: r) == 2
+            let split_load_src_ok = node_op(cache: read mcache, id: l0) == LOAD && node_op(cache: read mcache, id: l1) == LOAD
+            let split_load_ptr_ok = node_op(cache: read mcache, id: lptr0) == INDEX && node_op(cache: read mcache, id: lptr1) == INDEX
+            mdev_split_load_ok = split_load_root_ok && split_load_src_ok && split_load_ptr_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
+    let mdev_split_gate = mk_const_int(cache: mut mcache, dt: read dt_bool(), v: 1)
+    let mdev_split_store = mk_store(cache: mut mcache, ptr: mdev_split_ptr, value: mgep2, gate: read Some(mdev_split_gate))
+    let mut mdev_split_store_ok = false
+    match devectorizer_rewrite(cache: mut mcache, id: mdev_split_store) {
+        Some(r) => {
+            let s0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let s1 = node_src_id(cache: read mcache, id: r, k: 1)
+            let sptr0 = node_src_id(cache: read mcache, id: s0, k: 0)
+            let sptr1 = node_src_id(cache: read mcache, id: s1, k: 0)
+            let split_store_root_ok = node_op(cache: read mcache, id: r) == GROUP && node_num_src(cache: read mcache, id: r) == 2
+            let split_store_src_ok = node_op(cache: read mcache, id: s0) == STORE && node_op(cache: read mcache, id: s1) == STORE
+            let split_store_gate_ok = node_num_src(cache: read mcache, id: s0) == 3 && node_num_src(cache: read mcache, id: s1) == 3
+            let split_store_ptr_ok = node_op(cache: read mcache, id: sptr0) == INDEX && node_op(cache: read mcache, id: sptr1) == INDEX
+            mdev_split_store_ok = split_store_root_ok && split_store_src_ok && split_store_gate_ok && split_store_ptr_ok && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     let mdev_inner_load = mk_load(cache: mut mcache, ptr: mdev_ptr0, srcs: read mdev_empty_src, dt: read i32)
     let mdev_load_load = mk_load(cache: mut mcache, ptr: mdev_inner_load, srcs: read mdev_empty_src, dt: read i32)
     let mut mdev_load_load_ok = false
@@ -1697,6 +1730,8 @@ fn main() -> Unit {
     showb(label: read "codegen.devectorizer folds gep on store = ", v: mdev_store_gep_ok)
     showb(label: read "codegen.devectorizer folds ptrcat load = ", v: mdev_load_ptrcat_ok)
     showb(label: read "codegen.devectorizer folds ptrcat store = ", v: mdev_store_ptrcat_ok)
+    showb(label: read "codegen.devectorizer splits vector load = ", v: mdev_split_load_ok)
+    showb(label: read "codegen.devectorizer splits vector store = ", v: mdev_split_store_ok)
     showb(label: read "codegen.devectorizer adds load to value index = ", v: mdev_add_load_ok)
     showb(label: read "codegen.devectorizer removes nested load load = ", v: mdev_load_load_ok)
     showb(label: read "codegen.devectorizer removes nested store load = ", v: mdev_store_load_ok)

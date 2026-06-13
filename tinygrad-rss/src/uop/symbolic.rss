@@ -1482,42 +1482,169 @@ fn symbolic_mul_product(cache: mut UOpCache, dt: read DType, parts: read List<In
     return out
 }
 
+fn symbolic_find_expr_index(exprs: read List<Int>, expr: Int) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read exprs) {
+        if List.get<Int>(list: read exprs, index: i) == expr { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn symbolic_contains_node(cache: read UOpCache, root: Int, want: Int) -> Bool {
+    if root == want { return true }
+    local nodes = backward_slice_with_self(cache: read cache, id: root)
+    return uop_ints_contains(vals: read nodes, v: want)
+}
+
+fn symbolic_simplex_part_ok(cache: read UOpCache, id: Int) -> Bool {
+    let op = node_op(cache: read cache, id: id)
+    if op == DEFINE_VAR || op == RANGE || op == SPECIAL || op == PARAM { return true }
+    return false
+}
+
 fn uop_given_valid(cache: mut UOpCache, valid: Int, uop: Int, try_simplex: Bool) -> Int {
     if const_bool_eq(cache: read cache, id: valid, k: 1) { return uop }
     local clauses = uop_split_by_op(cache: read cache, id: valid, sep: AND)
-    let mut lower_seen = false
-    let mut upper_seen = false
-    let mut lower = 0
-    let mut upper = 0
+    local exprs = List.new<Int>()
+    local lower_seen = List.new<Bool>()
+    local upper_seen = List.new<Bool>()
+    local lowers = List.new<Int>()
+    local uppers = List.new<Int>()
     let mut i = 0
     while i < List.len<Int>(list: read clauses) {
         let p = parse_valid(cache: read cache, v: List.get<Int>(list: read clauses, index: i))
-        if p.ok && p.expr == uop {
+        if p.ok {
+            let mut bi = symbolic_find_expr_index(exprs: read exprs, expr: p.expr)
+            if bi < 0 {
+                List.push<Int>(list: mut exprs, value: read p.expr)
+                List.push<Bool>(list: mut lower_seen, value: read false)
+                List.push<Bool>(list: mut upper_seen, value: read false)
+                List.push<Int>(list: mut lowers, value: read 0)
+                List.push<Int>(list: mut uppers, value: read 0)
+                bi = List.len<Int>(list: read exprs) - 1
+            }
             if p.is_upper {
-                upper_seen = true
-                upper = p.c
+                List.set<Bool>(list: mut upper_seen, index: bi, value: read true)
+                List.set<Int>(list: mut uppers, index: bi, value: read p.c)
             } else {
-                lower_seen = true
-                lower = p.c
+                List.set<Bool>(list: mut lower_seen, index: bi, value: read true)
+                List.set<Int>(list: mut lowers, index: bi, value: read p.c)
             }
         }
         i = i + 1
     }
-    if lower_seen && upper_seen && lower == upper {
-        let dt = node_dtype(cache: read cache, id: uop)
-        return mk_const_int(cache: mut cache, dt: read dt, v: lower)
+    let exact_i = symbolic_find_expr_index(exprs: read exprs, expr: uop)
+    if exact_i >= 0 {
+        if List.get<Bool>(list: read lower_seen, index: exact_i) && List.get<Bool>(list: read upper_seen, index: exact_i) {
+            let lower = List.get<Int>(list: read lowers, index: exact_i)
+            let upper = List.get<Int>(list: read uppers, index: exact_i)
+            if lower == upper {
+                let dt = node_dtype(cache: read cache, id: uop)
+                return mk_const_int(cache: mut cache, dt: read dt, v: lower)
+            }
+        }
     }
-    return uop
+    local all_old = List.new<Int>()
+    local all_new = List.new<Int>()
+    let mut out_uop = uop
+    let mut bi = 0
+    while bi < List.len<Int>(list: read exprs) {
+        let expr = List.get<Int>(list: read exprs, index: bi)
+        local rng = uop_min_max(cache: read cache, id: expr)
+        let mut v0 = rng.lo
+        let mut v1 = rng.hi
+        if List.get<Bool>(list: read lower_seen, index: bi) { v0 = List.get<Int>(list: read lowers, index: bi) }
+        if List.get<Bool>(list: read upper_seen, index: bi) { v1 = List.get<Int>(list: read uppers, index: bi) }
+        let fake = uop_variable(cache: mut cache, name: read String.concat(left: read "fake", right: read Int.to_string(value: read bi)), min_val: v0, max_val: v1, dt: read node_dtype(cache: read cache, id: expr))
+        List.push<Int>(list: mut all_old, value: read expr)
+        List.push<Int>(list: mut all_new, value: read fake)
+        let subbed = uop_substitute(cache: mut cache, id: out_uop, old_id: expr, new_id: fake)
+        if subbed != out_uop {
+            let sim = uop_simplify(cache: mut cache, id: subbed)
+            let restored = uop_substitute(cache: mut cache, id: sim, old_id: fake, new_id: expr)
+            let resim = uop_simplify(cache: mut cache, id: restored)
+            out_uop = resim
+        }
+        if try_simplex && node_op(cache: read cache, id: expr) == ADD && v0 == 1 {
+            local parts = uop_split_by_op(cache: read cache, id: expr, sep: ADD)
+            let mut parts_ok = List.len<Int>(list: read parts) > 0
+            let mut pi = 0
+            while pi < List.len<Int>(list: read parts) {
+                if symbolic_simplex_part_ok(cache: read cache, id: List.get<Int>(list: read parts, index: pi)) == false { parts_ok = false }
+                pi = pi + 1
+            }
+            if parts_ok {
+                local newuops = List.new<Int>()
+                pi = 0
+                while pi < List.len<Int>(list: read parts) {
+                    let part = List.get<Int>(list: read parts, index: pi)
+                    local prng = uop_min_max(cache: read cache, id: part)
+                    let pfake = uop_variable(cache: mut cache, name: read String.concat(left: read "fakep", right: read Int.to_string(value: read pi)), min_val: 1, max_val: prng.hi, dt: read node_dtype(cache: read cache, id: part))
+                    let psub = uop_substitute(cache: mut cache, id: out_uop, old_id: part, new_id: pfake)
+                    if psub != out_uop {
+                        let psim = uop_simplify(cache: mut cache, id: psub)
+                        let prest = uop_substitute(cache: mut cache, id: psim, old_id: pfake, new_id: part)
+                        List.push<Int>(list: mut newuops, value: read uop_simplify(cache: mut cache, id: prest))
+                    }
+                    pi = pi + 1
+                }
+                if List.len<Int>(list: read newuops) == List.len<Int>(list: read parts) {
+                    if all_same(items: read newuops) {
+                        out_uop = List.get<Int>(list: read newuops, index: 0)
+                    } else {
+                        if node_op(cache: read cache, id: out_uop) == STACK && node_num_src(cache: read cache, id: out_uop) == 2 {
+                            let mut lane0_same = true
+                            let mut lane1_same = true
+                            let u0 = node_src_id(cache: read cache, id: List.get<Int>(list: read newuops, index: 0), k: 0)
+                            let u1 = node_src_id(cache: read cache, id: List.get<Int>(list: read newuops, index: 0), k: 1)
+                            let mut ni = 1
+                            while ni < List.len<Int>(list: read newuops) {
+                                let nu = List.get<Int>(list: read newuops, index: ni)
+                                if node_src_id(cache: read cache, id: nu, k: 0) != u0 { lane0_same = false }
+                                if node_src_id(cache: read cache, id: nu, k: 1) != u1 { lane1_same = false }
+                                ni = ni + 1
+                            }
+                            if lane0_same || lane1_same {
+                                local srcs = List.new<Int>()
+                                if lane0_same { List.push<Int>(list: mut srcs, value: read u0) } else { List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: out_uop, k: 0)) }
+                                if lane1_same { List.push<Int>(list: mut srcs, value: read u1) } else { List.push<Int>(list: mut srcs, value: read node_src_id(cache: read cache, id: out_uop, k: 1)) }
+                                out_uop = uop_stack(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: out_uop), srcs: read srcs)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        bi = bi + 1
+    }
+    let all_subbed = uop_substitute_many(cache: mut cache, id: out_uop, old_ids: read all_old, new_ids: read all_new)
+    if all_subbed != out_uop {
+        let all_sim = uop_simplify(cache: mut cache, id: all_subbed)
+        let restored = uop_substitute_many(cache: mut cache, id: all_sim, old_ids: read all_new, new_ids: read all_old)
+        out_uop = uop_simplify(cache: mut cache, id: restored)
+    }
+    return out_uop
 }
 
 fn _valid_priority(cache: read UOpCache, v: Int, valids: read List<Int>) -> Int {
     let parsed = parse_valid(cache: read cache, v: v)
-    if parsed.ok { return 0 - node_num_src(cache: read cache, id: parsed.expr) }
+    if parsed.ok {
+        let mut pri = 0
+        let mut i = 0
+        while i < List.len<Int>(list: read valids) {
+            let other = List.get<Int>(list: read valids, index: i)
+            if other != v && symbolic_contains_node(cache: read cache, root: other, want: parsed.expr) { pri = pri - 1 }
+            i = i + 1
+        }
+        return pri
+    }
     return 0
 }
 
 fn simplify_valid(cache: mut UOpCache, valid: Int) -> Option<Int> {
     if node_op(cache: read cache, id: valid) != AND { return None }
+    if uop_op_in_backward_slice_with_self(cache: read cache, id: valid, op: INDEX) { return None }
     local clauses0 = uop_split_by_op(cache: read cache, id: valid, sep: AND)
     local clauses = dedup(x: read clauses0)
     local out = List.new<Int>()

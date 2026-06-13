@@ -628,6 +628,26 @@ fn uop_substitute(cache: mut UOpCache, id: Int, old_id: Int, new_id: Int) -> Int
     return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
 }
 
+fn uop_substitute_many(cache: mut UOpCache, id: Int, old_ids: read List<Int>, new_ids: read List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read old_ids) && i < List.len<Int>(list: read new_ids) {
+        if id == List.get<Int>(list: read old_ids, index: i) { return List.get<Int>(list: read new_ids, index: i) }
+        i = i + 1
+    }
+    local new_src = List.new<Int>()
+    let mut j = 0
+    while j < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: j)
+        let repl = uop_substitute_many(cache: mut cache, id: child, old_ids: read old_ids, new_ids: read new_ids)
+        List.push<Int>(list: mut new_src, value: read repl)
+        j = j + 1
+    }
+    let op = node_op(cache: read cache, id: id)
+    let dt = node_full_dtype(cache: read cache, id: id)
+    local arg = node_arg(cache: read cache, id: id)
+    return intern(cache: mut cache, op: op, dt: read dt, src: take new_src, arg: take arg)
+}
+
 fn uop_visit_toposort_with_enter_calls(cache: read UOpCache, id: Int, seen: mut Set<Int>, order: mut List<Int>, enter_calls: Bool) -> Unit {
     if Set.contains(set: read seen, value: read id) { return Unit }
     let op = node_op(cache: read cache, id: id)

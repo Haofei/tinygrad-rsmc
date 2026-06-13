@@ -661,9 +661,11 @@ Integrated pieces:
   `fold_add_divmod_recombine`, `lt_folding`, `canonicalize_simplex`, `fold_bitcast`,
   `gep_through_wmma`, `parse_valid`, `uop_given_valid`, `_valid_priority`, `simplify_valid`,
   `reduce_mul_chain`, `drop_and_clauses`, `where_on_load`, and `gated_given_valid` over the current
-  interned UOp-id representation. Full byte reinterpretation for float bitcasts, exact WMMA/GEP
-  layout pushing, complete valid-condition simplification, and data-dependent load gating remain
-  conservative/partial.
+  interned UOp-id representation. `uop_given_valid` now has the upstream-shaped bounded fake-variable
+  substitution path, multi-substitution support, closer valid-priority ordering, and the INDEX guard
+  in `simplify_valid`, which lets masked index cleanup simplify bounded expressions such as
+  `x % 4 -> x` under `x < 4`. Full byte reinterpretation for float bitcasts, exact WMMA/GEP
+  layout pushing, range-clause dropping, and data-dependent load gating remain conservative/partial.
   The evaluator now covers the integrated unary math UOps
   `EXP2`, `LOG2`, `SIN`, `SQRT`, `RECIPROCAL`, `NEG`, `TRUNC`, plus binary `POW`, and handles
   scalar-to-tensor `EXPAND` materialization, `FLIP`, `PAD`, graph-backed `SHRINK` slicing, and
@@ -785,7 +787,7 @@ Current integrated demo:
 - validates UOp method helpers for `STACK` splitting/gettuple, source-shaped
   `sink`/`maketuple`/`group`/`vectorize`/`cast`/`bitcast`/`gep`,
   `load`/`store`/`wait`/`end`/`after`/`barrier`, concrete shape extraction,
-  movement base recovery, and movement argument extraction.
+  movement base recovery, movement argument extraction, and multi-node substitution.
 - validates grouped UPat builder helpers for unary/ternary ops and source-shaped
   `cast`/`bitcast`/`gep`/`load`/`store`/`reduce`/`broadcast`/`contiguous`/`after`/`end`
   patterns.
@@ -846,7 +848,8 @@ Current integrated demo:
   skip the out-of-bounds proof.
 - validates UOp symbolic variables and binding: expression extraction, declared vmin/vmax,
   in-range `BIND`, `unbind`, `val`, sorted `variables`, `unbind_all` rewrite with collected
-  bindings, and out-of-range bind rejection.
+  bindings, out-of-range bind rejection, bounded valid simplification of modulo indexes, and
+  `simplify_valid_load` using that stronger symbolic path.
 - validates the integrated source-shaped UOp renderer for precedence-aware symbolic expressions,
   `max`, inference `floordiv`, inference `BITCAST`, compact repeated `STACK`, UOp line output,
   first `pyrender` reconstruction for an ALU expression and bitcast, plus source-shaped render

@@ -1,0 +1,3 @@
+features: local
+
+fn runtime_support_package_marker() -> fresh String { return String.copy(value: read "runtime.support") }

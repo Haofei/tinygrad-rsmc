@@ -1,0 +1,48 @@
+// Source-shaped Mesa compiler support facade for tinygrad/runtime/support/compiler_mesa.py.
+features: native, local
+
+struct MesaCompilerFacade derives(Clone) {
+    arch: String,
+    kind: String,
+}
+
+fn rzalloc(typ_size: Int, ctx: Int) -> Int {
+    return typ_size + ctx
+}
+
+fn deserialize(enc_src: read String, opts: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read enc_src))
+    let mut i = 0
+    while i < List.len<Int>(list: read opts) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read opts, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn lvp_compiler_new(arch: read String) -> fresh MesaCompilerFacade {
+    return MesaCompilerFacade(arch: String.copy(value: read arch), kind: String.copy(value: read "lvp"))
+}
+
+fn warps_per_sm(arch: read String) -> Int {
+    if arch == "sm_86" || arch == "sm_87" || arch == "sm_89" || arch == "sm_120" { return 48 }
+    return 64
+}
+
+fn nak_compiler_new(arch: read String) -> fresh MesaCompilerFacade {
+    return MesaCompilerFacade(arch: String.copy(value: read arch), kind: String.copy(value: read "nak"))
+}
+
+fn disas_adreno(lib: read List<Int>, gpu_id: Int) -> fresh String {
+    let v = gpu_id + List.len<Int>(list: read lib)
+    return String.concat(left: read "adreno:", right: read Int.to_string(value: read v))
+}
+
+fn ir3_compiler_new(arch: read String) -> fresh MesaCompilerFacade {
+    return MesaCompilerFacade(arch: String.copy(value: read arch), kind: String.copy(value: read "ir3"))
+}
+
+fn unpack_lib(lib: read List<Int>) -> fresh List<Int> {
+    return lib.clone()
+}

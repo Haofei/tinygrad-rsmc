@@ -1,0 +1,56 @@
+// Source-shaped CUDA compiler support facade for tinygrad/runtime/support/compiler_cuda.py.
+features: native, local
+
+struct CUDACompilerFacade derives(Clone) {
+    arch: String,
+    ptx: Bool,
+    options: List<String>,
+}
+
+fn _get_bytes(arg: read List<Int>, kind: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read kind))
+    let mut i = 0
+    while i < List.len<Int>(list: read arg) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read arg, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn nvrtc_check(status: Int, ctx: read String) -> Bool {
+    return status == 0 && String.len(value: read ctx) >= 0
+}
+
+fn jitlink_check(status: Int, ctx: read String) -> Bool {
+    return status == 0 && String.len(value: read ctx) >= 0
+}
+
+fn pretty_ptx(s: read String) -> fresh String {
+    return String.concat(left: read "ptx:", right: read s)
+}
+
+fn cuda_disassemble(lib: read List<Int>, arch: read String, ptx: Bool) -> fresh String {
+    let mut suffix = ":cubin"
+    if ptx { suffix = ":ptx" }
+    return String.concat(left: read "cuda-disasm:", right: read String.concat(left: read arch, right: read suffix))
+}
+
+fn nvrtc_compiler_new(arch: read String, ptx: Bool, cache_key: read String) -> fresh CUDACompilerFacade {
+    local opts = List.new<String>()
+    List.push<String>(list: mut opts, value: read String.concat(left: read "--gpu-architecture=", right: read arch))
+    List.push<String>(list: mut opts, value: read String.copy(value: read cache_key))
+    return CUDACompilerFacade(arch: String.copy(value: read arch), ptx: ptx, options: take opts)
+}
+
+fn nvcc_compiler_new(arch: read String, ptx: Bool, extra_options: read List<String>) -> fresh CUDACompilerFacade {
+    return CUDACompilerFacade(arch: String.copy(value: read arch), ptx: ptx, options: extra_options.clone())
+}
+
+fn ptx_compiler_new(arch: read String) -> fresh CUDACompilerFacade {
+    return CUDACompilerFacade(arch: String.copy(value: read arch), ptx: true, options: List.new<String>())
+}
+
+fn nvptx_compiler_new(arch: read String) -> fresh CUDACompilerFacade {
+    return CUDACompilerFacade(arch: String.copy(value: read arch), ptx: false, options: List.new<String>())
+}

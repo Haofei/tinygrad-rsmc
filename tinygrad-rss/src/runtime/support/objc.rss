@@ -1,0 +1,16 @@
+// Source-shaped Objective-C runtime facade for tinygrad/runtime/support/objc.py.
+features: native, local
+
+struct ObjCMessage derives(Clone) {
+    selector: String,
+    retained: Bool,
+    class_method: Bool,
+}
+
+fn returns_retained(selector: read String) -> fresh ObjCMessage {
+    return ObjCMessage(selector: String.copy(value: read selector), retained: true, class_method: false)
+}
+
+fn msg(sel: read String, retain: Bool, clsmeth: Bool) -> fresh ObjCMessage {
+    return ObjCMessage(selector: String.copy(value: read sel), retained: retain, class_method: clsmeth)
+}

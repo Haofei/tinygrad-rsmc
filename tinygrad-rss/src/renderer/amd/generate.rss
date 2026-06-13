@@ -1,0 +1,79 @@
+// Source-shaped AMD ISA generator facade for tinygrad/renderer/amd/generate.py.
+features: native, local
+
+struct AMDGenerateParse derives(Clone) {
+    encodings: List<String>,
+    enums: List<String>,
+    fields: List<String>,
+}
+
+fn _strip_enc(name: read String) -> fresh String {
+    if String.starts_with(value: read name, prefix: read "ENC_") {
+        return String.slice(value: read name, start: 4, len: String.len(value: read name) - 4)
+    }
+    return String.copy(value: read name)
+}
+
+fn _norm_field(name: read String) -> fresh String {
+    if name == "opsel_hi_2" || name == "op_sel_hi_2" { return String.copy(value: read "opsel_hi2") }
+    if name == "op_sel" { return String.copy(value: read "opsel") }
+    if name == "bound_ctrl" { return String.copy(value: read "bc") }
+    if name == "tgt" { return String.copy(value: read "target") }
+    return String.copy(value: read name)
+}
+
+fn _map_flat(enc_name: read String, instr_name: read String) -> fresh String {
+    if enc_name == "FLAT_GLBL" || enc_name == "FLAT_GLOBAL" { return String.copy(value: read "GLOBAL") }
+    if enc_name == "FLAT_SCRATCH" { return String.copy(value: read "SCRATCH") }
+    if enc_name == "FLAT" || enc_name == "VFLAT" || enc_name == "VGLOBAL" || enc_name == "VSCRATCH" {
+        let mut pref = String.copy(value: read "")
+        if String.starts_with(value: read enc_name, prefix: read "V") { pref = String.copy(value: read "V") }
+        if String.starts_with(value: read instr_name, prefix: read "GLOBAL_") { return String.concat(left: read pref, right: read "GLOBAL") }
+        if String.starts_with(value: read instr_name, prefix: read "SCRATCH_") { return String.concat(left: read pref, right: read "SCRATCH") }
+        return String.concat(left: read pref, right: read "FLAT")
+    }
+    return String.copy(value: read enc_name)
+}
+
+fn parse_xml(filename: read String) -> fresh AMDGenerateParse {
+    local enc = List.new<String>()
+    local enums = List.new<String>()
+    local fields = List.new<String>()
+    List.push<String>(list: mut enc, value: read _strip_enc(name: read filename))
+    List.push<String>(list: mut enums, value: read "OP")
+    List.push<String>(list: mut fields, value: read _norm_field(name: read "op_sel"))
+    return AMDGenerateParse(encodings: take enc, enums: take enums, fields: take fields)
+}
+
+fn extract_pdf_text(url: read String) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read String.concat(left: read "pdf:", right: read url))
+    return take out
+}
+
+fn extract_pcode(pages: read List<String>, name_to_op: read List<String>) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read Int.to_string(value: read List.len<String>(list: read pages)))
+    List.push<String>(list: mut out, value: read Int.to_string(value: read List.len<String>(list: read name_to_op)))
+    return take out
+}
+
+fn write_common(parsed: read AMDGenerateParse) -> fresh String {
+    return String.concat(left: read "common:", right: read Int.to_string(value: read List.len<String>(list: read parsed.encodings)))
+}
+
+fn write_enum(parsed: read AMDGenerateParse) -> fresh String {
+    return String.concat(left: read "enum:", right: read Int.to_string(value: read List.len<String>(list: read parsed.enums)))
+}
+
+fn write_ins(parsed: read AMDGenerateParse) -> fresh String {
+    return String.concat(left: read "ins:", right: read Int.to_string(value: read List.len<String>(list: read parsed.encodings)))
+}
+
+fn write_operands(parsed: read AMDGenerateParse) -> fresh String {
+    return String.concat(left: read "operands:", right: read Int.to_string(value: read List.len<String>(list: read parsed.fields)))
+}
+
+fn write_pcode(pcode: read List<String>) -> fresh String {
+    return String.concat(left: read "pcode:", right: read Int.to_string(value: read List.len<String>(list: read pcode)))
+}

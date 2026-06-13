@@ -1,0 +1,49 @@
+// Source-shaped AMD compiler support facade for tinygrad/runtime/support/compiler_amd.py.
+features: native, local
+
+struct HIPCompilerFacade derives(Clone) {
+    arch: String,
+    options: List<String>,
+}
+
+fn _find_llvm_objdump() -> fresh String { return String.copy(value: read "llvm-objdump") }
+
+fn amdgpu_disassemble(lib: read List<Int>) -> fresh String {
+    return String.concat(left: read "amdgpu-disasm:", right: read Int.to_string(value: read List.len<Int>(list: read lib)))
+}
+
+fn _get_comgr_data(data_set: read List<Int>, data_type: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read data_type)
+    let mut i = 0
+    while i < List.len<Int>(list: read data_set) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read data_set, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn set_options(action_info: Int, options: read String) -> Int {
+    return action_info + String.len(value: read options)
+}
+
+fn compile_hip(prg: read String, arch: read String, asm: Bool) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read arch))
+    List.push<Int>(list: mut out, value: read String.len(value: read prg))
+    if asm { List.push<Int>(list: mut out, value: read 1) }
+    else { List.push<Int>(list: mut out, value: read 0) }
+    return take out
+}
+
+fn hip_compiler_new(arch: read String) -> fresh HIPCompilerFacade {
+    return HIPCompilerFacade(arch: String.copy(value: read arch), options: List.new<String>())
+}
+
+fn hipcc_compiler_new(arch: read String, extra_options: read List<String>) -> fresh HIPCompilerFacade {
+    return HIPCompilerFacade(arch: String.copy(value: read arch), options: extra_options.clone())
+}
+
+fn amdllvm_compiler_new(arch: read String) -> fresh HIPCompilerFacade {
+    return HIPCompilerFacade(arch: String.copy(value: read arch), options: List.new<String>())
+}

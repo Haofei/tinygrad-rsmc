@@ -1,0 +1,27 @@
+// Source-shaped CUDA graph facade for tinygrad/runtime/graph/cuda.py.
+features: native, local
+
+struct CUDAGraphState derives(Clone) {
+    nodes: List<Int>,
+    deps: List<Int>,
+}
+
+fn cuda_graph_new() -> fresh CUDAGraphState {
+    return CUDAGraphState(nodes: List.new<Int>(), deps: List.new<Int>())
+}
+
+fn new_node(graph: mut CUDAGraphState, bufs: read List<Int>, write: read List<Int>) -> Int {
+    let id = List.len<Int>(list: read graph.nodes)
+    let mut i = 0
+    while i < List.len<Int>(list: read bufs) {
+        List.push<Int>(list: mut graph.deps, value: read List.get<Int>(list: read bufs, index: i))
+        i = i + 1
+    }
+    let mut j = 0
+    while j < List.len<Int>(list: read write) {
+        List.push<Int>(list: mut graph.deps, value: read List.get<Int>(list: read write, index: j))
+        j = j + 1
+    }
+    List.push<Int>(list: mut graph.nodes, value: read id)
+    return id
+}

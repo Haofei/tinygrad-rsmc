@@ -11,15 +11,50 @@ fn b2i(b: Bool) -> Int { if b { return 1 } return 0 }
 fn imin2(a: Int, b: Int) -> Int { if a < b { return a } return b }
 fn imin4(a: Int, b: Int, c: Int, d: Int) -> Int { return imin2(a: imin2(a: a, b: b), b: imin2(a: c, b: d)) }
 fn imax4(a: Int, b: Int, c: Int, d: Int) -> Int { return imax2(a: imax2(a: a, b: b), b: imax2(a: c, b: d)) }
+fn vmin_int() -> Int { return 0 - 9223372036854775807 - 1 }
+fn vmax_int() -> Int { return 9223372036854775807 }
+fn sat_add_int(a: Int, b: Int) -> Int {
+    if b > 0 && a > vmax_int() - b { return vmax_int() }
+    if b == vmin_int() {
+        if a < 0 { return vmin_int() }
+        return a + b
+    }
+    if b < 0 && a < vmin_int() - b { return vmin_int() }
+    return a + b
+}
+fn sat_sub_int(a: Int, b: Int) -> Int {
+    if b == vmin_int() {
+        if a >= 0 { return vmax_int() }
+        return vmin_int()
+    }
+    return sat_add_int(a: a, b: 0 - b)
+}
+fn sat_mul_int(a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 { return 0 }
+    if a == vmin_int() || b == vmin_int() {
+        if (a > 0 && b == vmin_int()) || (b > 0 && a == vmin_int()) { return vmin_int() }
+        return vmax_int()
+    }
+    let neg = (a < 0 && b > 0) || (a > 0 && b < 0)
+    let mut aa = a
+    if a < 0 { aa = 0 - a }
+    let mut bb = b
+    if b < 0 { bb = 0 - b }
+    if aa > vmax_int() / bb {
+        if neg { return vmin_int() }
+        return vmax_int()
+    }
+    return a * b
+}
 
 // DType.min/max for integers. Signed: [-2^(n-1), 2^(n-1)-1]; unsigned: [0, 2^n-1]; 64-bit clamps to i64.
 fn dtype_imin(d: read DType) -> Int {
     if dtype_is_unsigned(d: read d) { return 0 }
-    if d.bitsize >= 64 { return 0 - 9223372036854775807 - 1 }
+    if d.bitsize >= 64 { return vmin_int() }
     return 0 - (1 << (d.bitsize - 1))
 }
 fn dtype_imax(d: read DType) -> Int {
-    if d.bitsize >= 64 { return 9223372036854775807 }
+    if d.bitsize >= 64 { return vmax_int() }
     if dtype_is_unsigned(d: read d) { return (1 << d.bitsize) - 1 }
     return (1 << (d.bitsize - 1)) - 1
 }
@@ -96,13 +131,13 @@ fn uop_min_max(cache: read UOpCache, id: Int) -> fresh VRange {
             let s1 = node_src_id(cache: read cache, id: id, k: 1)
             let r0 = uop_min_max(cache: read cache, id: s0)
             let r1 = uop_min_max(cache: read cache, id: s1)
-            if op == ADD { return VRange(lo: r0.lo + r1.lo, hi: r0.hi + r1.hi) }
-            if op == SUB { return VRange(lo: r0.lo - r1.hi, hi: r0.hi - r1.lo) }
+            if op == ADD { return VRange(lo: sat_add_int(a: r0.lo, b: r1.lo), hi: sat_add_int(a: r0.hi, b: r1.hi)) }
+            if op == SUB { return VRange(lo: sat_sub_int(a: r0.lo, b: r1.hi), hi: sat_sub_int(a: r0.hi, b: r1.lo)) }
             if op == MUL {
-                let a = r0.lo * r1.lo
-                let b = r0.lo * r1.hi
-                let c = r0.hi * r1.lo
-                let e = r0.hi * r1.hi
+                let a = sat_mul_int(a: r0.lo, b: r1.lo)
+                let b = sat_mul_int(a: r0.lo, b: r1.hi)
+                let c = sat_mul_int(a: r0.hi, b: r1.lo)
+                let e = sat_mul_int(a: r0.hi, b: r1.hi)
                 return VRange(lo: imin4(a: a, b: b, c: c, d: e), hi: imax4(a: a, b: b, c: c, d: e))
             }
             if op == MAX { return VRange(lo: imax2(a: r0.lo, b: r1.lo), hi: imax2(a: r0.hi, b: r1.hi)) }

@@ -1,0 +1,31 @@
+// Source-shaped basics for tinygrad/codegen/opt/__init__.py.
+features: local
+
+sum OptOps derives(Clone, Eq) {
+    OPT_TC
+    OPT_UPCAST
+    OPT_UNROLL
+    OPT_LOCAL
+    OPT_THREAD
+    OPT_GROUP
+    OPT_GROUPTOP
+    OPT_NOLOCALS
+    OPT_PADTO
+    OPT_SWAP
+}
+
+struct Opt derives(Clone) {
+    op: OptOps,
+    axis: Int,
+    has_axis: Bool,
+    arg: Int,
+    has_arg: Bool,
+}
+
+fn opt_new(op: read OptOps, axis: Int, has_axis: Bool, arg: Int, has_arg: Bool) -> fresh Opt {
+    return Opt(op: op.clone(), axis: axis, has_axis: has_axis, arg: arg, has_arg: has_arg)
+}
+
+fn check(cond: Bool, msg: read String) -> Bool {
+    return cond
+}

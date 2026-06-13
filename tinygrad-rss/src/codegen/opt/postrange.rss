@@ -1,0 +1,466 @@
+// Integrated source-shaped slice of tinygrad/codegen/opt/postrange.py.
+//
+// This is the scheduler/axis metadata surface over the current RSS IR. It
+// implements conservative range discovery and simple range shifting; full
+// tensor-core lowering, beam search, and renderer-specific optimization policy
+// remain future fidelity work.
+features: local
+
+struct PostrangeScheduler derives(Clone) {
+    ast: Int,
+    dont_use_locals: Bool,
+    next_range: Int,
+    applied_opts: List<Opt>,
+    has_tensor_core: Bool,
+}
+
+struct PostrangeShiftResult derives(Clone) {
+    ok: Bool,
+    replaced_rng: Int,
+    new_rng: Int,
+}
+
+fn postrange_scheduler_new(cache: read UOpCache, ast: Int) -> fresh PostrangeScheduler {
+    local opts = List.new<Opt>()
+    local tmp = PostrangeScheduler(ast: ast, dont_use_locals: false, next_range: 0, applied_opts: copy_opts(vals: read opts), has_tensor_core: false)
+    local rs = rngs(cache: read cache, sched: read tmp)
+    let mut next = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        let r = List.get<Int>(list: read rs, index: i)
+        if node_range_axis_id(cache: read cache, id: r) >= next { next = node_range_axis_id(cache: read cache, id: r) + 1 }
+        i = i + 1
+    }
+    return PostrangeScheduler(ast: ast, dont_use_locals: false, next_range: next, applied_opts: take opts, has_tensor_core: false)
+}
+
+fn copy_opts(vals: read List<Opt>) -> fresh List<Opt> {
+    local out = List.new<Opt>()
+    let mut i = 0
+    while i < List.len<Opt>(list: read vals) {
+        List.push<Opt>(list: mut out, value: read List.get<Opt>(list: read vals, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn postrange_axis_pos(t: read AxisType) -> Int {
+    return axis_type_ord(t: read t)
+}
+
+fn rngs(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: sched.ast)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == RANGE {
+            let mm = uop_min_max(cache: read cache, id: u)
+            if mm.hi > 0 { List.push<Int>(list: mut out, value: read u) }
+        }
+        i = i + 1
+    }
+    let n = List.len<Int>(list: read out)
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            let ra = List.get<Int>(list: read out, index: a)
+            let rb = List.get<Int>(list: read out, index: b)
+            let pa = postrange_axis_pos(t: read node_range_type(cache: read cache, id: ra))
+            let pb = postrange_axis_pos(t: read node_range_type(cache: read cache, id: rb))
+            if pb < pa || (pb == pa && node_range_axis_id(cache: read cache, id: rb) < node_range_axis_id(cache: read cache, id: ra)) {
+                List.set<Int>(list: mut out, index: a, value: read rb)
+                List.set<Int>(list: mut out, index: b, value: read ra)
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return take out
+}
+
+fn shape_len(cache: read UOpCache, sched: read PostrangeScheduler) -> Int {
+    local rs = rngs(cache: read cache, sched: read sched)
+    return List.len<Int>(list: read rs)
+}
+
+fn full_shape(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local rs = rngs(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        let r = List.get<Int>(list: read rs, index: i)
+        List.push<Int>(list: mut out, value: read gpudims_range_end_int(cache: read cache, r: r))
+        i = i + 1
+    }
+    return take out
+}
+
+fn axis_types(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<AxisType> {
+    local out = List.new<AxisType>()
+    local rs = rngs(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        List.push<AxisType>(list: mut out, value: read node_range_type(cache: read cache, id: List.get<Int>(list: read rs, index: i)))
+        i = i + 1
+    }
+    return take out
+}
+
+fn shape_str(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<String> {
+    local out = List.new<String>()
+    local ats = axis_types(cache: read cache, sched: read sched)
+    local counts = List.new<Int>()
+    let mut i = 0
+    while i < 10 {
+        List.push<Int>(list: mut counts, value: read 0)
+        i = i + 1
+    }
+    i = 0
+    while i < List.len<AxisType>(list: read ats) {
+        let at = List.get<AxisType>(list: read ats, index: i)
+        let ord = axis_type_ord(t: read at)
+        let cnt = List.get<Int>(list: read counts, index: ord)
+        List.set<Int>(list: mut counts, index: ord, value: read (cnt + 1))
+        let s = String.concat(left: read axis_type_letter(t: read at), right: read Int.to_string(value: read cnt))
+        List.push<String>(list: mut out, value: read s)
+        i = i + 1
+    }
+    return take out
+}
+
+fn shape_str_to_axis(cache: read UOpCache, sched: read PostrangeScheduler, nms: read List<String>) -> fresh List<Int> {
+    local ss = shape_str(cache: read cache, sched: read sched)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<String>(list: read nms) {
+        let nm = List.get<String>(list: read nms, index: i)
+        let mut found = 0 - 1
+        let mut j = 0
+        while j < List.len<String>(list: read ss) {
+            if List.get<String>(list: read ss, index: j) == nm { found = j }
+            j = j + 1
+        }
+        List.push<Int>(list: mut out, value: read found)
+        i = i + 1
+    }
+    return take out
+}
+
+fn copy(sched: read PostrangeScheduler) -> fresh PostrangeScheduler {
+    return PostrangeScheduler(ast: sched.ast, dont_use_locals: sched.dont_use_locals, next_range: sched.next_range,
+                              applied_opts: copy_opts(vals: read sched.applied_opts), has_tensor_core: sched.has_tensor_core)
+}
+
+fn get_optimized_ast(cache: mut UOpCache, sched: mut PostrangeScheduler, name_override: read String) -> Int {
+    let rewritten = graph_rewrite(cache: mut cache, id: sched.ast)
+    sched.ast = rewritten
+    return rewritten
+}
+
+fn _output_rngs(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: sched.ast) {
+        let s = node_src_id(cache: read cache, id: sched.ast, k: i)
+        if node_op(cache: read cache, id: s) == END {
+            local er = uop_ended_ranges(cache: read cache, id: s)
+            let mut j = 0
+            while j < List.len<Int>(list: read er) {
+                let r = List.get<Int>(list: read er, index: j)
+                if node_op(cache: read cache, id: r) == RANGE && node_range_type(cache: read cache, id: r) != AXIS_REDUCE {
+                    uop_push_unique(vals: mut out, v: r)
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _globalizable_rngs(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local ors = _output_rngs(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read ors) {
+        let r = List.get<Int>(list: read ors, index: i)
+        if node_range_type(cache: read cache, id: r) == AXIS_LOOP { uop_push_unique(vals: mut out, v: r) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn convert_loop_to_global(cache: mut UOpCache, sched: mut PostrangeScheduler) -> Unit {
+    local gl = _globalizable_rngs(cache: read cache, sched: read sched)
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read gl) {
+        let r = List.get<Int>(list: read gl, index: i)
+        let nr = mk_range_int(cache: mut cache, end: gpudims_range_end_int(cache: read cache, r: r),
+                              axis_id: node_range_axis_id(cache: read cache, id: r), axis_type: read AXIS_GLOBAL,
+                              dt: read node_dtype(cache: read cache, id: r))
+        List.push<Int>(list: mut olds, value: read r)
+        List.push<Int>(list: mut news, value: read nr)
+        i = i + 1
+    }
+    if List.len<Int>(list: read olds) > 0 { sched.ast = memory_replace_many(cache: mut cache, id: sched.ast, olds: read olds, news: read news) }
+    return Unit
+}
+
+fn colors(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<String> {
+    local out = List.new<String>()
+    local rs = rngs(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        let at = node_range_type(cache: read cache, id: List.get<Int>(list: read rs, index: i))
+        List.push<String>(list: mut out, value: read axis_type_name(t: read at))
+        i = i + 1
+    }
+    return take out
+}
+
+fn colored_shape(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh String {
+    local fs = full_shape(cache: read cache, sched: read sched)
+    let mut out = ""
+    let mut i = 0
+    while i < List.len<Int>(list: read fs) {
+        if i > 0 { out = String.concat(left: read out, right: read " ") }
+        out = String.concat(left: read out, right: read Int.to_string(value: read List.get<Int>(list: read fs, index: i)))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn shift_to(cache: mut UOpCache, sched: mut PostrangeScheduler, rng: Int, amount: Int, new_type: read AxisType, top: Bool) -> PostrangeShiftResult {
+    let sz = gpudims_range_end_int(cache: read cache, r: rng)
+    if amount <= 0 || sz % amount != 0 {
+        return PostrangeShiftResult(ok: false, replaced_rng: rng, new_rng: rng)
+    }
+    let old_sz = sz / amount
+    let new_rng = mk_range_int(cache: mut cache, end: amount, axis_id: sched.next_range, axis_type: read new_type, dt: read node_dtype(cache: read cache, id: rng))
+    sched.next_range = sched.next_range + 1
+    let replaced_rng = mk_range_int(cache: mut cache, end: old_sz, axis_id: node_range_axis_id(cache: read cache, id: rng), axis_type: read node_range_type(cache: read cache, id: rng), dt: read node_dtype(cache: read cache, id: rng))
+    let c_old = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: rng), v: old_sz)
+    let c_amt = mk_const_int(cache: mut cache, dt: read node_dtype(cache: read cache, id: rng), v: amount)
+    let mut sub_axis = replaced_rng
+    if top {
+        let mul = mk_alu2(cache: mut cache, op: MUL, dt: read node_dtype(cache: read cache, id: rng), x: new_rng, y: c_old)
+        sub_axis = mk_alu2(cache: mut cache, op: ADD, dt: read node_dtype(cache: read cache, id: rng), x: mul, y: replaced_rng)
+    } else {
+        let mul = mk_alu2(cache: mut cache, op: MUL, dt: read node_dtype(cache: read cache, id: rng), x: replaced_rng, y: c_amt)
+        sub_axis = mk_alu2(cache: mut cache, op: ADD, dt: read node_dtype(cache: read cache, id: rng), x: mul, y: new_rng)
+    }
+    sched.ast = uop_substitute(cache: mut cache, id: sched.ast, old_id: rng, new_id: sub_axis)
+    return PostrangeShiftResult(ok: true, replaced_rng: replaced_rng, new_rng: new_rng)
+}
+
+fn ranges_of(cache: read UOpCache, sched: read PostrangeScheduler, kind: read AxisType) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local rs = rngs(cache: read cache, sched: read sched)
+    let want = kind.clone()
+    let mut i = 0
+    while i < List.len<Int>(list: read rs) {
+        let r = List.get<Int>(list: read rs, index: i)
+        let got = node_range_type(cache: read cache, id: r)
+        if got == want {
+            let v = r
+            List.push<Int>(list: mut out, value: read v)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn axes_of(cache: read UOpCache, sched: read PostrangeScheduler, kind: read AxisType) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local ats = axis_types(cache: read cache, sched: read sched)
+    let want = kind.clone()
+    let mut i = 0
+    while i < List.len<AxisType>(list: read ats) {
+        let got = List.get<AxisType>(list: read ats, index: i)
+        if got == want {
+            let axis = i
+            List.push<Int>(list: mut out, value: read axis)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn upcast_size(cache: read UOpCache, sched: read PostrangeScheduler) -> Int {
+    local fs = full_shape(cache: read cache, sched: read sched)
+    local ats = axis_types(cache: read cache, sched: read sched)
+    let mut out = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read fs) {
+        let at = List.get<AxisType>(list: read ats, index: i)
+        if at == AXIS_UPCAST || at == AXIS_UNROLL { out = out * List.get<Int>(list: read fs, index: i) }
+        i = i + 1
+    }
+    return out
+}
+
+fn upcastable_dims(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local fs = full_shape(cache: read cache, sched: read sched)
+    local ats = axis_types(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read fs) {
+        let at = List.get<AxisType>(list: read ats, index: i)
+        if (at == AXIS_GLOBAL || at == AXIS_LOCAL || at == AXIS_LOOP) && List.get<Int>(list: read fs, index: i) > 1 {
+            List.push<Int>(list: mut out, value: read i)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn unrollable_dims(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local fs = full_shape(cache: read cache, sched: read sched)
+    local ats = axis_types(cache: read cache, sched: read sched)
+    let mut i = 0
+    while i < List.len<Int>(list: read fs) {
+        let at = List.get<AxisType>(list: read ats, index: i)
+        if (at == AXIS_GROUP_REDUCE || at == AXIS_REDUCE) && List.get<Int>(list: read fs, index: i) > 1 {
+            List.push<Int>(list: mut out, value: read i)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn real_axis(cache: read UOpCache, sched: read PostrangeScheduler, op: read OptOps, axis: Int, has_axis: Bool) -> Int {
+    if has_axis == false || op == OPT_TC { return 0 - 1 }
+    if op == OPT_UNROLL {
+        local dims = unrollable_dims(cache: read cache, sched: read sched)
+        if axis >= 0 && axis < List.len<Int>(list: read dims) { return List.get<Int>(list: read dims, index: axis) }
+        return 0 - 1
+    }
+    if op == OPT_GROUP || op == OPT_GROUPTOP {
+        local dims = axes_of(cache: read cache, sched: read sched, kind: read AXIS_REDUCE)
+        if axis >= 0 && axis < List.len<Int>(list: read dims) { return List.get<Int>(list: read dims, index: axis) }
+        return 0 - 1
+    }
+    if axis >= 0 && axis < shape_len(cache: read cache, sched: read sched) { return axis }
+    return 0 - 1
+}
+
+fn apply_opt(cache: mut UOpCache, sched: mut PostrangeScheduler, opt: read Opt, append_opt: Bool) -> PostrangeShiftResult {
+    if opt.op == OPT_NOLOCALS {
+        sched.dont_use_locals = true
+        if append_opt { List.push<Opt>(list: mut sched.applied_opts, value: read opt) }
+        let fallback = sched.ast
+        return PostrangeShiftResult(ok: true, replaced_rng: fallback, new_rng: fallback)
+    }
+    let ax = real_axis(cache: read cache, sched: read sched, op: read opt.op, axis: opt.axis, has_axis: opt.has_axis)
+    if ax < 0 {
+        let fallback = sched.ast
+        return PostrangeShiftResult(ok: false, replaced_rng: fallback, new_rng: fallback)
+    }
+    local rs = rngs(cache: read cache, sched: read sched)
+    if ax >= List.len<Int>(list: read rs) {
+        let fallback = sched.ast
+        return PostrangeShiftResult(ok: false, replaced_rng: fallback, new_rng: fallback)
+    }
+    let r = List.get<Int>(list: read rs, index: ax)
+    let mut amt = gpudims_range_end_int(cache: read cache, r: r)
+    if opt.has_arg { amt = opt.arg }
+    let mut nt = node_range_type(cache: read cache, id: r)
+    if opt.op == OPT_LOCAL { nt = AXIS_LOCAL }
+    else {
+        if opt.op == OPT_UPCAST { nt = AXIS_UPCAST }
+        else {
+            if opt.op == OPT_UNROLL { nt = AXIS_UNROLL }
+            else {
+                if opt.op == OPT_GROUP || opt.op == OPT_GROUPTOP { nt = AXIS_GROUP_REDUCE }
+                else {
+                    if opt.op == OPT_THREAD { nt = AXIS_THREAD }
+                }
+            }
+        }
+    }
+    let shifted = shift_to(cache: mut cache, sched: mut sched, rng: r, amount: amt, new_type: read nt, top: opt.op == OPT_GROUPTOP || opt.op == OPT_THREAD)
+    if shifted.ok && append_opt { List.push<Opt>(list: mut sched.applied_opts, value: read opt) }
+    return shifted
+}
+
+fn _apply_tc_opt(cache: mut UOpCache, sched: mut PostrangeScheduler, use_tensor_cores: Int, axis: Int, tc_select: Int, opt_level: Int) -> Option<List<Int>> {
+    return None
+}
+
+fn reduceops(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: sched.ast)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == REDUCE { List.push<Int>(list: mut out, value: read u) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn reduceop(cache: read UOpCache, sched: read PostrangeScheduler) -> Option<Int> {
+    local rs = reduceops(cache: read cache, sched: read sched)
+    if List.len<Int>(list: read rs) == 0 { return None }
+    return Some(List.get<Int>(list: read rs, index: 0))
+}
+
+fn bufs(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: sched.ast)
+    let mut i = List.len<Int>(list: read topo) - 1
+    while i >= 0 {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == INDEX { List.push<Int>(list: mut out, value: read u) }
+        i = i - 1
+    }
+    return take out
+}
+
+fn output_shape(cache: read UOpCache, sched: read PostrangeScheduler) -> fresh List<Int> {
+    local fs = full_shape(cache: read cache, sched: read sched)
+    local ats = axis_types(cache: read cache, sched: read sched)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read fs) {
+        let at = List.get<AxisType>(list: read ats, index: i)
+        if at == AXIS_REDUCE || at == AXIS_UNROLL || at == AXIS_GROUP_REDUCE { List.push<Int>(list: mut out, value: read 1) }
+        else { List.push<Int>(list: mut out, value: read List.get<Int>(list: read fs, index: i)) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn upcasted(cache: read UOpCache, sched: read PostrangeScheduler) -> Int {
+    local up = axes_of(cache: read cache, sched: read sched, kind: read AXIS_UPCAST)
+    local un = axes_of(cache: read cache, sched: read sched, kind: read AXIS_UNROLL)
+    return List.len<Int>(list: read up) + List.len<Int>(list: read un)
+}
+
+fn group_for_reduces(cache: read UOpCache, sched: read PostrangeScheduler) -> Int {
+    local gr = axes_of(cache: read cache, sched: read sched, kind: read AXIS_GROUP_REDUCE)
+    return List.len<Int>(list: read gr)
+}
+
+fn bufs_from_ast(cache: read UOpCache, ast: Int, dname: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: ast)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: u) == PARAM { uop_push_unique(vals: mut out, v: u) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn apply_opts(cache: mut UOpCache, ast: Int, beam: Int) -> Int {
+    local sched = postrange_scheduler_new(cache: read cache, ast: ast)
+    convert_loop_to_global(cache: mut cache, sched: mut sched)
+    return get_optimized_ast(cache: mut cache, sched: mut sched, name_override: read "")
+}

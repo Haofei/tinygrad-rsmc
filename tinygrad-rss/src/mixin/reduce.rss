@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/reduce.py. ReduceMixin methods are
+// integrated as tensor reduction helpers in tensor.rss.
+features: local
+
+fn mixin_reduce_package_marker() -> fresh String { return String.copy(value: read "mixin.reduce") }

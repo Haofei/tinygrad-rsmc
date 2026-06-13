@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/__init__.py. OpMixin methods are
+// integrated as tensor_* helpers in tensor.rss.
+features: local
+
+fn mixin_package_marker() -> fresh String { return String.copy(value: read "mixin") }

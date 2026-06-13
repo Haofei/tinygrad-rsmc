@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/creation.py. CreationMixin methods are
+// integrated as tensor creation helpers in tensor.rss.
+features: local
+
+fn mixin_creation_package_marker() -> fresh String { return String.copy(value: read "mixin.creation") }

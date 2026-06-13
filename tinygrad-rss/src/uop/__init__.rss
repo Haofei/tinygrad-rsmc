@@ -2,6 +2,10 @@
 // Declaration order matches tinygrad's FastEnum auto() order so ordinals/comparisons agree.
 features: local
 
+fn _generate_next_value_(name: read String, start: Int, count: Int, last_values: read List<Int>) -> Int {
+    return count + 1
+}
+
 sum Ops derives(Clone, Eq, Hash) {
     DEFINE_VAR BIND
     SPECIAL

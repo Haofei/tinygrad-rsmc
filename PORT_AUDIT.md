@@ -22,14 +22,24 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 111 RSS files, 41,547 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 41,871 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
-- rough source coverage inventory:
+  - rough source coverage inventory:
   - command: `python3 tools/port_coverage.py --limit 8`
   - result: `tensor.py` 106/106 symbols, `mixin/__init__.py` 82/82 symbols,
     `uop/ops.py` 221/221 symbols; 409/409 total rough symbols covered.
+  - full handwritten Python inventory, excluding `runtime/autogen`: 118/118 upstream Python
+    source files now have matching RSS source paths, and the rough symbol inventory reports
+    2628/2628 covered. This is a map/inventory milestone only; it does not prove exact tinygrad
+    semantics for every symbol.
+  - focused dtype/helpers/source-map compatibility batch: `dtype.py`, `helpers.py`,
+    `uop/__init__.py`, the source-path-only `mixin/*` modules, `function.py`,
+    `runtime/graph/metal.py`, `runtime/ops_hip.py`, `runtime/ops_npy.py`, and
+    `runtime/support/compiler_qcom.py`: source-path mapping is complete and the rough symbol
+    inventory is 100%. Python runtime-adjacent helpers such as env/diskcache/fetch/profile/tqdm
+    are deterministic RSS facades, not full Python runtime behavior.
   - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
     `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
     the current optimizer/renderer audit set.

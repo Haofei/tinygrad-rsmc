@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/runtime/ops_npy.py. NPY runtime symbols are
+// currently represented by generic buffer/runtime facades.
+features: local
+
+fn runtime_ops_npy_package_marker() -> fresh String { return String.copy(value: read "runtime.ops_npy") }

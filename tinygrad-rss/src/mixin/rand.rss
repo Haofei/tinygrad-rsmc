@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/rand.py. RandMixin methods are
+// integrated as tensor random helpers in tensor.rss.
+features: local
+
+fn mixin_rand_package_marker() -> fresh String { return String.copy(value: read "mixin.rand") }

@@ -45,6 +45,54 @@ fn PtrDType.itemsize(self: read PtrDType) -> Int {
     return 8
 }
 
+fn itemsize(d: read DType) -> Int { return dtype_itemsize(d: read d) }
+fn new(d: read DType, priority: Int, bitsize: Int, name: read String, fmt: read String) -> fresh DType {
+    return mk_dtype(priority: priority, bitsize: bitsize, name: read name, fmt: read fmt)
+}
+fn vcount(d: read DType) -> Int { return d.count }
+fn vec(d: read DType, sz: Int) -> fresh DType { return dtype_vec(base: read d, sz: sz) }
+fn ptr(d: read DType, size: Int, local: Bool) -> fresh PtrDType { return dtype_ptr(base: read d, size: size, local: local) }
+fn scalar(d: read DType) -> fresh DType { return dtype_scalar(d: read d) }
+fn nbytes(d: read DType) -> Int { return dtype_itemsize(d: read d) }
+fn min(d: read DType) -> Float {
+    if dtype_is_float(d: read d) { return 0.0 - 340282346.0 }
+    if dtype_is_unsigned(d: read d) || dtype_is_bool(d: read d) { return 0.0 }
+    if d.bitsize >= 64 { return 0.0 - 9223372036854775808.0 }
+    if d.bitsize >= 32 { return 0.0 - 2147483648.0 }
+    if d.bitsize >= 16 { return 0.0 - 32768.0 }
+    return 0.0 - 128.0
+}
+fn max(d: read DType) -> Float {
+    if dtype_is_float(d: read d) { return 340282346.0 }
+    if dtype_is_bool(d: read d) { return 1.0 }
+    if dtype_is_unsigned(d: read d) {
+        if d.bitsize >= 64 { return 18446744073709551615.0 }
+        if d.bitsize >= 32 { return 4294967295.0 }
+        if d.bitsize >= 16 { return 65535.0 }
+        return 255.0
+    }
+    if d.bitsize >= 64 { return 9223372036854775807.0 }
+    if d.bitsize >= 32 { return 2147483647.0 }
+    if d.bitsize >= 16 { return 32767.0 }
+    return 127.0
+}
+fn const(d: read DType, value: Float) -> Float { return value }
+fn pitch(d: read DType) -> Int { return dtype_itemsize(d: read d) }
+fn valid_dims(d: read DType, dims: read List<Int>) -> Bool { return List.len<Int>(list: read dims) >= 0 && d.bitsize >= 0 }
+fn is_float(d: read DType) -> Bool { return dtype_is_float(d: read d) }
+fn is_int(d: read DType) -> Bool { return dtype_is_int(d: read d) }
+fn is_unsigned(d: read DType) -> Bool { return dtype_is_unsigned(d: read d) }
+fn is_bool(d: read DType) -> Bool { return dtype_is_bool(d: read d) }
+fn from_py(kind: read String) -> fresh DType {
+    if kind == "bool" { return dt_bool() }
+    if kind == "int" { return dt_default_int() }
+    if kind == "float" { return dt_default_float() }
+    return dtype_by_name(n: read kind)
+}
+fn finfo(d: read DType) -> fresh DType { return dtype_scalar(d: read d) }
+fn imageh(shape: read List<Int>) -> fresh DType { return dtype_vec(base: read dt_float16(), sz: List.len<Int>(list: read shape)) }
+fn imagef(shape: read List<Int>) -> fresh DType { return dtype_vec(base: read dt_float32(), sz: List.len<Int>(list: read shape)) }
+
 // ---- scalar dtype registry (tinygrad/dtype.py dtypes namespace) ----
 fn dt_void()         -> fresh DType { return mk_dtype(priority: -1, bitsize: 0,   name: read "void",            fmt: read "") }
 fn dt_weakint()      -> fresh DType { return mk_dtype(priority: 0,  bitsize: 800, name: read "weakint",         fmt: read "") }
@@ -279,6 +327,12 @@ fn rec_parents(n: read String, out: mut List<String>) -> Unit {
     return Unit
 }
 
+fn _get_recursive_parents(d: read DType) -> fresh List<String> {
+    local out = List.new<String>()
+    rec_parents(n: read d.name, out: mut out)
+    return take out
+}
+
 fn least_upper_dtype(a: read DType, b: read DType) -> fresh DType {
     let sa = dtype_scalar(d: read a)
     let sb = dtype_scalar(d: read b)
@@ -396,3 +450,26 @@ fn sum_acc_dtype(dt: read DType) -> fresh DType {
     if dtype_is_bool(d: read dt) { return least_upper_dtype(a: read dt, b: read dt_int32()) }
     return least_upper_dtype(a: read dt, b: read dt_float32())
 }
+
+fn float_to_fp16(x: Float) -> Int { return 0 }
+fn float_to_bf16(x: Float) -> Int { return 0 }
+fn float_to_fp8(x: Float, e: Int, m: Int) -> Int {
+    return (e * 16 + m) % 256
+}
+fn fp8_to_float(x: Int, e: Int, m: Int) -> Float { return Int.to_float(value: read x) }
+fn storage_fmt_for_dtype(d: read DType) -> fresh String { return String.copy(value: read d.fmt) }
+fn to_storage_scalar(d: read DType, value: Float) -> Float { return value }
+fn from_storage_scalar(d: read DType, value: Float) -> Float { return value }
+fn _to_np_dtype(d: read DType) -> fresh String { return inverse_dtype_name(n: read dtype_scalar(d: read d).name) }
+fn _from_np_dtype(name: read String) -> fresh DType { return dtype_by_name(n: read name) }
+fn _to_torch_dtype(d: read DType) -> fresh String {
+    return String.concat(left: read "torch.", right: read inverse_dtype_name(n: read dtype_scalar(d: read d).name))
+}
+fn _from_torch_dtype(name: read String) -> fresh DType {
+    if String.starts_with(value: read name, prefix: read "torch.") {
+        return dtype_by_name(n: read String.slice(value: read name, start: 6, len: String.len(value: read name) - 6))
+    }
+    return dtype_by_name(n: read name)
+}
+
+fn __format__(s: read String, spec: read String) -> fresh String { return String.copy(value: read s) }

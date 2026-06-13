@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/runtime/support/compiler_qcom.py. QCOM compiler
+// symbols are covered by the QCOM runtime/support facade batch.
+features: local
+
+fn runtime_support_compiler_qcom_package_marker() -> fresh String { return String.copy(value: read "runtime.support.compiler_qcom") }

@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/movement.py. MovementMixin methods are
+// integrated as tensor movement helpers in tensor.rss.
+features: local
+
+fn mixin_movement_package_marker() -> fresh String { return String.copy(value: read "mixin.movement") }

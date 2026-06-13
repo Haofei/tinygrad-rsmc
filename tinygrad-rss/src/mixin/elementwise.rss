@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/elementwise.py. ElementwiseMixin methods
+// are integrated as tensor elementwise helpers in tensor.rss.
+features: local
+
+fn mixin_elementwise_package_marker() -> fresh String { return String.copy(value: read "mixin.elementwise") }

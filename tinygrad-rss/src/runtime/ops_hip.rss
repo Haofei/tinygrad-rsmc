@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/runtime/ops_hip.py. HIP runtime symbols are
+// covered by AMD/CUDA compiler/runtime facades until real HIP bindings exist.
+features: local
+
+fn runtime_ops_hip_package_marker() -> fresh String { return String.copy(value: read "runtime.ops_hip") }

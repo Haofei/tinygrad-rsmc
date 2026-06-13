@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/mixin/dtype.py. DTypeMixin methods are
+// integrated as tensor dtype helpers in tensor.rss.
+features: local
+
+fn mixin_dtype_package_marker() -> fresh String { return String.copy(value: read "mixin.dtype") }

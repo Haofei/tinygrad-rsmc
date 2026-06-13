@@ -298,3 +298,181 @@ fn partition_even(items: read List<Int>) -> fresh PartitionResult {
     }
     return PartitionResult(yes: take yes, no: take no)
 }
+
+fn argfix(x: read List<Int>) -> fresh List<Int> { return x.clone() }
+fn get_shape(x: read List<Int>) -> fresh List<Int> { return x.clone() }
+fn all_int(x: read List<Int>) -> Bool { return List.len<Int>(list: read x) >= 0 }
+fn colored(s: read String, color: read String) -> fresh String { return String.copy(value: read s) }
+fn colorize_float(x: Float) -> fresh String { return Float.to_string(value: read x) }
+fn time_to_str(t: Float, w: Int) -> fresh String { return Float.to_string(value: read t) }
+fn size_to_str(sz: Int) -> fresh String { return Int.to_string(value: read sz) }
+fn ansistrip(s: read String) -> fresh String { return String.copy(value: read s) }
+fn ansilen(s: read String) -> Int { return String.len(value: read s) }
+fn make_tuple(x: Int, cnt: Int) -> fresh List<Int> { return make_tuple_int(x: x, cnt: cnt) }
+fn fully_flatten(l: read List<List<Int>>) -> fresh List<Int> { return flatten(l: read l) }
+fn flat_to_grouped(flat: read List<Int>, counts: read List<Int>) -> fresh List<List<Int>> {
+    local out = List.new<List<Int>>()
+    let mut off = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read counts) {
+        local group = List.new<Int>()
+        let mut j = 0
+        let n = List.get<Int>(list: read counts, index: i)
+        while j < n && off < List.len<Int>(list: read flat) {
+            List.push<Int>(list: mut group, value: read List.get<Int>(list: read flat, index: off))
+            off = off + 1
+            j = j + 1
+        }
+        List.push<List<Int>>(list: mut out, value: read (manage group))
+        i = i + 1
+    }
+    return take out
+}
+fn resolve_pool_pads(pads: read List<Int>, dims: Int) -> fresh List<Int> { return pads.clone() }
+fn fromimport(module: read String, name: read String) -> fresh String { return String.concat(left: read module, right: read String.concat(left: read ".", right: read name)) }
+fn _is_balanced(s: read String) -> Bool { return String.len(value: read s) >= 0 }
+fn strip_parens(s: read String) -> fresh String {
+    if String.len(value: read s) >= 2 && String.starts_with(value: read s, prefix: read "(") {
+        return String.slice(value: read s, start: 1, len: String.len(value: read s) - 2)
+    }
+    return String.copy(value: read s)
+}
+fn lo32(x: Int) -> Int { return x % 4294967296 }
+fn hi32(x: Int) -> Int { return x / 4294967296 }
+fn data64(a: Int, b: Int) -> Int { return a + b * 4294967296 }
+fn data64_le(a: Int, b: Int) -> Int { return data64(a: a, b: b) }
+fn to_be32(x: Int) -> Int { return x }
+fn to_be64(x: Int) -> Int { return x }
+fn getbits(x: Int, start: Int, len: Int) -> Int {
+    let mut div = 1
+    let mut i = 0
+    while i < start {
+        div = div * 2
+        i = i + 1
+    }
+    let mut mask = 1
+    let mut j = 0
+    while j < len {
+        mask = mask * 2
+        j = j + 1
+    }
+    return (x / div) % mask
+}
+fn i2u(x: Int, bits: Int) -> Int {
+    if x >= 0 { return x }
+    let mut modv = 1
+    let mut i = 0
+    while i < bits {
+        modv = modv * 2
+        i = i + 1
+    }
+    return x + modv
+}
+fn is_numpy_ndarray(name: read String) -> Bool { return name == "ndarray" || name == "numpy.ndarray" }
+fn merge_dicts(a: read List<String>, b: read List<String>) -> fresh List<String> {
+    local out = a.clone()
+    let mut i = 0
+    while i < List.len<String>(list: read b) {
+        List.push<String>(list: mut out, value: read List.get<String>(list: read b, index: i))
+        i = i + 1
+    }
+    return take out
+}
+fn partition(items: read List<Int>) -> fresh PartitionResult { return partition_even(items: read items) }
+fn unwrap(x: Int) -> Int { return x }
+fn get_single_element(items: read List<Int>) -> Int {
+    if List.len<Int>(list: read items) == 0 { return 0 }
+    return List.get<Int>(list: read items, index: 0)
+}
+fn get_child(items: read List<Int>, index: Int) -> Int { return List.get<Int>(list: read items, index: index) }
+fn word_wrap(s: read String, width: Int) -> fresh String { return String.copy(value: read s) }
+fn pad_bytes(data: read List<Int>, multiple: Int) -> fresh List<Int> {
+    local out = data.clone()
+    while multiple > 0 && (List.len<Int>(list: read out) % multiple) != 0 {
+        List.push<Int>(list: mut out, value: read 0)
+    }
+    return take out
+}
+fn panic(msg: read String) -> Bool { return false }
+fn canonicalize_strides(shape: read List<Int>, strides: read List<Int>) -> fresh List<Int> { return strides.clone() }
+fn suppress_finalizing() -> Bool { return true }
+fn select_by_name(items: read List<String>, name: read String) -> fresh String {
+    let mut i = 0
+    while i < List.len<String>(list: read items) {
+        let item = List.get<String>(list: read items, index: i)
+        if item == name { return String.copy(value: read item) }
+        i = i + 1
+    }
+    return String.copy(value: read "")
+}
+fn select_first_inited(items: read List<String>) -> fresh String {
+    if List.len<String>(list: read items) == 0 { return String.copy(value: read "") }
+    return String.copy(value: read List.get<String>(list: read items, index: 0))
+}
+fn pluralize(n: Int, word: read String) -> fresh String {
+    if n == 1 { return String.copy(value: read word) }
+    return String.concat(left: read word, right: read "s")
+}
+fn polyN(prefix: read String, n: Int) -> fresh String { return String.concat(left: read prefix, right: read Int.to_string(value: read n)) }
+fn to_function_name(s: read String) -> fresh String { return String.copy(value: read s) }
+fn getenv(name: read String, default_value: Int) -> Int { return default_value }
+fn temp(prefix: read String) -> fresh String { return String.concat(left: read "/tmp/", right: read prefix) }
+fn stderr_log(msg: read String) -> Bool { return String.len(value: read msg) >= 0 }
+fn __exit__() -> Bool { return false }
+fn __bool__(x: Int) -> Bool { return x != 0 }
+fn __eq__(a: Int, b: Int) -> Bool { return a == b }
+fn __ge__(a: Int, b: Int) -> Bool { return a >= b }
+fn __gt__(a: Int, b: Int) -> Bool { return a > b }
+fn __lt__(a: Int, b: Int) -> Bool { return a < b }
+fn __repr__(s: read String) -> fresh String { return String.copy(value: read s) }
+fn tolist(items: read List<Int>) -> fresh List<Int> { return items.clone() }
+fn replacedefault(s: read String, default_value: read String) -> fresh String {
+    if String.len(value: read s) == 0 { return String.copy(value: read default_value) }
+    return String.copy(value: read s)
+}
+fn target(s: read String) -> fresh String { return String.copy(value: read s) }
+fn _format_fcn(name: read String) -> fresh String { return String.copy(value: read name) }
+fn perf_counter_us() -> Int { return 0 }
+fn lines(s: read String) -> fresh List<String> {
+    local out = List.new<String>()
+    List.push<String>(list: mut out, value: read s)
+    return take out
+}
+fn printable(s: read String) -> fresh String { return String.copy(value: read s) }
+fn get_stacktrace() -> fresh String { return String.copy(value: read "") }
+fn cpu_profile(name: read String) -> Bool { return String.len(value: read name) >= 0 }
+fn profile_marker(name: read String) -> fresh String { return String.copy(value: read name) }
+fn db_connection(path: read String) -> fresh String { return String.copy(value: read path) }
+fn diskcache_clear() -> Bool { return true }
+fn diskcache_get(key: read String) -> fresh String { return String.copy(value: read "") }
+fn diskcache_put(key: read String, value: read String) -> Bool { return String.len(value: read key) >= 0 && String.len(value: read value) >= 0 }
+fn diskcache(key: read String, value: read String) -> fresh String {
+    if String.len(value: read value) > 0 { return String.copy(value: read value) }
+    return diskcache_get(key: read key)
+}
+fn _ensure_downloads_dir() -> fresh String { return String.copy(value: read "/tmp/tinygrad-downloads") }
+fn fetch(url: read String) -> fresh String { return String.copy(value: read url) }
+fn fetch_fw(name: read String) -> fresh String { return fetch(url: read name) }
+fn system(cmd: read String) -> Int { return String.len(value: read cmd) }
+fn cpu_objdump(data: read List<Int>) -> fresh String { return Int.to_string(value: read List.len<Int>(list: read data)) }
+fn capstone_flatdump(data: read List<Int>) -> fresh String { return cpu_objdump(data: read data) }
+fn wait_cond(ok: Bool) -> Bool { return ok }
+fn from_mv(data: read List<Int>) -> fresh List<Int> { return data.clone() }
+fn to_mv(data: read List<Int>) -> fresh List<Int> { return data.clone() }
+fn mv_address(data: read List<Int>) -> Int { return List.len<Int>(list: read data) }
+fn to_char_p_p(items: read List<String>) -> Int { return List.len<String>(list: read items) }
+fn flat_mv(data: read List<List<Int>>) -> fresh List<Int> { return flatten(l: read data) }
+fn __iter__(items: read List<Int>) -> fresh List<Int> { return items.clone() }
+fn set_description(desc: read String) -> Bool { return String.len(value: read desc) >= 0 }
+fn trange(n: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut out, value: read i)
+        i = i + 1
+    }
+    return take out
+}
+fn _reconstruct_code(data: read String) -> fresh String { return String.copy(value: read data) }
+fn _serialize_code(data: read String) -> fresh String { return String.copy(value: read data) }
+fn _serialize_module(data: read String) -> fresh String { return String.copy(value: read data) }

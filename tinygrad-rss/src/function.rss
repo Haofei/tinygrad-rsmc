@@ -1,0 +1,5 @@
+// Source-path marker for tinygrad/function.py. Function decorator surface is
+// currently implemented through tensor call/callify helpers.
+features: local
+
+fn function_package_marker() -> fresh String { return String.copy(value: read "function") }

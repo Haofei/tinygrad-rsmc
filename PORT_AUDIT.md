@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 42 RSS files, 35,009 LOC.
+  - integrated `tinygrad-rss/src`: 42 RSS files, 35,334 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -35,6 +35,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     the current optimizer/renderer audit set.
   - focused runtime-engine/device/codegen batch: `engine/jit.py`, `engine/realize.py`,
     `device.py`, `renderer/cstyle.py`, and `codegen/opt/*`: 210/210 rough symbols covered.
+  - focused Tensor mixin/function batch: `mixin/creation.py`, `mixin/dtype.py`,
+    `mixin/elementwise.py`, `mixin/movement.py`, `mixin/rand.py`, `mixin/reduce.py`,
+    and `function.py`: 194/194 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -1094,7 +1097,9 @@ future refreshes.
 Major missing integrated work:
 - `tensor.py` and `mixin/*`: broad public Tensor API. Creation, elementwise, movement, reduce,
   explicit-seed random, initializer helpers, and a first graph-level lifecycle/state spine are
-  partially integrated now, but exact upstream class-global RNG mutation/counter identity
+  partially integrated now. Source-shaped mixin/function facade names are now present for dtype
+  aliases, reverse bitwise/mod/shift operators, movement/view helpers, random-bit helpers, `einsum`,
+  and Function context saves, but exact upstream class-global RNG mutation/counter identity
   beyond the explicit RSS state-threaded wrappers,
   Python exception behavior for `__bool__`/`__len__`/`__delitem__`, true ndarray/buffer object parity,
   full Python `Tensor.__init__`/object identity behavior,
@@ -1109,7 +1114,7 @@ Major missing integrated work:
   current direct-conv fallback,
   full symbolic/lazy indexing semantics beyond the current evaluator-backed default-size
   `masked_select`/`nonzero` paths,
-  broader composed math coverage,
+  exact lazy `einsum` contraction parsing, broader composed math coverage,
   full conv/pool semantics including more negative/asymmetric edge cases and broader dimensionality,
   remaining Python-facing method breadth such as exact object magic and
   Python-level overload/exception parity,

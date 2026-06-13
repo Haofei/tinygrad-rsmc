@@ -81,8 +81,32 @@ struct TensorNodeResult derives(Clone) {
     message: String,
 }
 
+struct TensorViewIndex derives(Clone) {
+    ok: Bool,
+    starts: List<Int>,
+    ends: List<Int>,
+    squeeze_axes: List<Int>,
+}
+
+struct FunctionCtx derives(Clone) {
+    saved: List<Int>,
+    precompile: Bool,
+    precompile_backward: Bool,
+    allow_implicit: Bool,
+}
+
 fn tensor_state_new(uop: Int) -> fresh TensorState {
     return TensorState(uop: uop, is_param: false, has_grad: false, grad: 0 - 1)
+}
+
+fn function(precompile: Bool, precompile_backward: Bool, allow_implicit: Bool) -> fresh FunctionCtx {
+    local saved = List.new<Int>()
+    return FunctionCtx(saved: take saved, precompile: precompile, precompile_backward: precompile_backward, allow_implicit: allow_implicit)
+}
+
+fn add_to_ctx(ctx: mut FunctionCtx, x: Int) -> Unit {
+    List.push<Int>(list: mut ctx.saved, value: read x)
+    return Unit
 }
 
 fn tensor_state_with_flags(uop: Int, is_param: Bool, has_grad: Bool, grad: Int) -> fresh TensorState {
@@ -149,6 +173,11 @@ fn tensor_shape(cache: read UOpCache, x: Int) -> fresh List<Int> {
     return uop_shape(cache: read cache, id: x)
 }
 
+fn ndim(cache: read UOpCache, x: Int) -> Int {
+    local sh = tensor_shape(cache: read cache, x: x)
+    return List.len<Int>(list: read sh)
+}
+
 fn tensor_shape_eq(a: read List<Int>, b: read List<Int>) -> Bool {
     if List.len<Int>(list: read a) != List.len<Int>(list: read b) { return false }
     let mut i = 0
@@ -190,6 +219,42 @@ fn tensor_state_numel(cache: read UOpCache, t: read TensorState) -> Int {
 
 fn tensor_state_nbytes(cache: read UOpCache, t: read TensorState) -> Int {
     return tensor_nbytes(cache: read cache, x: t.uop)
+}
+
+fn element_size(cache: read UOpCache, x: Int) -> Int {
+    return DType.itemsize(self: read tensor_dtype(cache: read cache, x: x))
+}
+
+fn is_floating_point(cache: read UOpCache, x: Int) -> Bool {
+    return dtype_is_float(d: read tensor_dtype(cache: read cache, x: x))
+}
+
+fn float(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_float32())
+}
+
+fn half(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_float16())
+}
+
+fn int(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_int32())
+}
+
+fn bfloat16(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_bfloat16())
+}
+
+fn double(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_float64())
+}
+
+fn long(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_int64())
+}
+
+fn short(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_cast(cache: mut cache, x: x, dt: read dt_int16())
 }
 
 fn tensor_manual_seed(seed: Int) -> fresh TensorRngState {
@@ -1476,6 +1541,51 @@ fn tensor_rand_into(n: Int, seed: Int, out: mut List<Float>) -> Unit {
     return Unit
 }
 
+fn _threefry_random_bits(cache: mut UOpCache, key0: Int, key1: Int, counts0: read List<Int>, counts1: read List<Int>) -> Int {
+    local data = List.new<Float>()
+    let n = tensor_min_int(a: List.len<Int>(list: read counts0), b: List.len<Int>(list: read counts1))
+    let mut i = 0
+    while i < n {
+        local o = List.new<Int>()
+        rng_threefry2x32(x0: List.get<Int>(list: read counts0, index: i), x1: List.get<Int>(list: read counts1, index: i), key0: key0, key1: key1, out: mut o)
+        pushf1(l: mut data, a: Int.to_float(value: read List.get<Int>(list: read o, index: 0)))
+        pushf1(l: mut data, a: Int.to_float(value: read List.get<Int>(list: read o, index: 1)))
+        i = i + 1
+    }
+    local shape = shp1(a: List.len<Float>(list: read data))
+    return mk_data_tensor(cache: mut cache, dt: read dt_uint32(), shape: read shape, data: read data)
+}
+
+fn random_bits(cache: mut UOpCache, key0: Int, key1: Int, counter_low: Int, counter_high: Int, num: Int) -> Int {
+    local counts0 = List.new<Int>()
+    local counts1 = List.new<Int>()
+    let half = (num + 1) / 2
+    let mut i = 0
+    while i < half {
+        push1(l: mut counts0, a: counter_low + i)
+        push1(l: mut counts1, a: counter_high + i + half)
+        i = i + 1
+    }
+    let bits = _threefry_random_bits(cache: mut cache, key0: key0, key1: key1, counts0: read counts0, counts1: read counts1)
+    local starts = shp1(a: 0)
+    local ends = shp1(a: num)
+    return tensor_slice(cache: mut cache, x: bits, starts: read starts, ends: read ends)
+}
+
+fn _bits_to_rand(cache: mut UOpCache, bits: Int, shape: read List<Int>, dt: read DType) -> Int {
+    local src = tensor_data(cache: read cache, x: bits)
+    local out = List.new<Float>()
+    let n = numel(shape: read shape)
+    let mut i = 0
+    while i < n {
+        let raw = trunc_float_to_int(v: List.get<Float>(list: read src, index: i))
+        let mant = Int.shift_right(value: raw, bits: 9)
+        pushf1(l: mut out, a: Int.to_float(value: read mant) / 8388608.0)
+        i = i + 1
+    }
+    return mk_data_tensor(cache: mut cache, dt: read dt, shape: read shape, data: read out)
+}
+
 fn tensor_rand(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed: Int) -> Int {
     local data = List.new<Float>()
     tensor_rand_into(n: numel(shape: read shape), seed: seed, out: mut data)
@@ -1901,6 +2011,36 @@ fn tensor_rtruediv(cache: mut UOpCache, x: Int, y: Int) -> Int {
     return tensor_div(cache: mut cache, a: y, b: x)
 }
 
+fn usum(cache: mut UOpCache, x: Int, values: read List<Int>) -> Int {
+    let mut out = x
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        let v = List.get<Int>(list: read values, index: i)
+        if dtype_is_bool(d: read node_dtype(cache: read cache, id: out)) {
+            out = tensor_or(cache: mut cache, a: out, b: v)
+        } else {
+            out = tensor_add(cache: mut cache, a: out, b: v)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn uprod(cache: mut UOpCache, x: Int, values: read List<Int>) -> Int {
+    let mut out = x
+    let mut i = 0
+    while i < List.len<Int>(list: read values) {
+        let v = List.get<Int>(list: read values, index: i)
+        if dtype_is_bool(d: read node_dtype(cache: read cache, id: out)) {
+            out = tensor_and(cache: mut cache, a: out, b: v)
+        } else {
+            out = tensor_mul(cache: mut cache, a: out, b: v)
+        }
+        i = i + 1
+    }
+    return out
+}
+
 fn tensor_maximum(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: MAX, a: a, b: b)
 }
@@ -1957,6 +2097,14 @@ fn tensor_bitwise_xor(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_xor(cache: mut cache, a: a, b: b)
 }
 
+fn __ror__(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_or(cache: mut cache, a: y, b: x)
+}
+
+fn __rxor__(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_xor(cache: mut cache, a: y, b: x)
+}
+
 fn tensor_bitwise_max_for_dtype(dt: read DType) -> Float {
     let bits = dt.bitsize
     if bits <= 1 { return 1.0 }
@@ -1990,12 +2138,20 @@ fn tensor_lshift(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_shl(cache: mut cache, a: a, b: b)
 }
 
+fn __rlshift__(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_lshift(cache: mut cache, a: y, b: x)
+}
+
 fn tensor_shr(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_binary(cache: mut cache, op: SHR, a: a, b: b)
 }
 
 fn tensor_rshift(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_shr(cache: mut cache, a: a, b: b)
+}
+
+fn __rrshift__(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_rshift(cache: mut cache, a: y, b: x)
 }
 
 fn tensor_cdiv(cache: mut UOpCache, a: Int, b: Int) -> Int {
@@ -2018,6 +2174,10 @@ fn tensor_mod(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_floormod(cache: mut cache, a: a, b: b)
 }
 
+fn __rmod__(cache: mut UOpCache, x: Int, y: Int) -> Int {
+    return tensor_mod(cache: mut cache, a: y, b: x)
+}
+
 fn tensor_fmod(cache: mut UOpCache, a: Int, b: Int) -> Int {
     return tensor_cmod(cache: mut cache, a: a, b: b)
 }
@@ -2033,6 +2193,21 @@ fn tensor_rpow(cache: mut UOpCache, x: Int, y: Int) -> Int {
 fn tensor_minimum(cache: mut UOpCache, a: Int, b: Int) -> Int {
     let cond = tensor_lt(cache: mut cache, a: a, b: b)
     return tensor_where(cache: mut cache, cond: cond, x: a, y: b)
+}
+
+fn _inverse(cache: mut UOpCache, x: Int) -> Int {
+    if is_floating_point(cache: read cache, x: x) {
+        return tensor_neg(cache: mut cache, x: x)
+    }
+    return tensor_bitwise_not(cache: mut cache, x: x)
+}
+
+fn threefry(cache: mut UOpCache, x: Int, seed: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    let dt = node_dtype(cache: read cache, id: x)
+    let xs = broadcast_to(cache: mut cache, x: x, target: read shape)
+    let ss = broadcast_to(cache: mut cache, x: seed, target: read shape)
+    return mk_alu2(cache: mut cache, op: THREEFRY, dt: read dt, x: xs, y: ss)
 }
 
 fn tensor_square(cache: mut UOpCache, x: Int) -> Int {
@@ -3097,6 +3272,17 @@ fn tensor_transpose(cache: mut UOpCache, x: Int, dim0: Int, dim1: Int) -> Int {
     return mk_permute(cache: mut cache, x: x, perm: read order)
 }
 
+fn T(cache: mut UOpCache, x: Int) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    if List.len<Int>(list: read shape) < 2 { return x }
+    return tensor_transpose(cache: mut cache, x: x, dim0: List.len<Int>(list: read shape) - 2, dim1: List.len<Int>(list: read shape) - 1)
+}
+
+fn rearrange(cache: mut UOpCache, x: Int, order: read List<Int>, out_shape: read List<Int>) -> Int {
+    let p = tensor_permute(cache: mut cache, x: x, perm: read order)
+    return tensor_reshape(cache: mut cache, x: p, new_shape: read out_shape)
+}
+
 fn tensor_flatten(cache: mut UOpCache, x: Int, start_dim: Int, end_dim: Int) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     let ndim = List.len<Int>(list: read shape)
@@ -3666,6 +3852,52 @@ fn tensor_slice(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read 
     return mk_shrink(cache: mut cache, x: x, starts: read s, ends: read e)
 }
 
+fn _normalize_indices(cache: read UOpCache, x: Int, indices: read List<Int>) -> fresh List<Int> {
+    local shape = uop_shape(cache: read cache, id: x)
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read indices) {
+        let idx = List.get<Int>(list: read indices, index: i)
+        let mut dim = 0
+        if i < List.len<Int>(list: read shape) { dim = List.get<Int>(list: read shape, index: i) }
+        if idx < 0 { push1(l: mut out, a: idx + dim) }
+        else { push1(l: mut out, a: idx) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _parse_view_index(cache: read UOpCache, x: Int, starts: read List<Int>, ends: read List<Int>) -> fresh TensorViewIndex {
+    local shape = uop_shape(cache: read cache, id: x)
+    local s = tensor_slice_normalize_bounds(src_shape: read shape, bounds: read starts)
+    local e = tensor_slice_normalize_bounds(src_shape: read shape, bounds: read ends)
+    local sq = List.new<Int>()
+    return TensorViewIndex(ok: List.len<Int>(list: read s) == List.len<Int>(list: read shape), starts: take s, ends: take e, squeeze_axes: take sq)
+}
+
+fn _apply_view_ops(cache: mut UOpCache, x: Int, starts: read List<Int>, ends: read List<Int>) -> Int {
+    return tensor_slice(cache: mut cache, x: x, starts: read starts, ends: read ends)
+}
+
+fn shrink(cache: mut UOpCache, x: Int, arg: read List<Int>) -> Int {
+    local shape = uop_shape(cache: read cache, id: x)
+    local starts = List.new<Int>()
+    local ends = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        let p = i * 2
+        if p + 1 < List.len<Int>(list: read arg) {
+            push1(l: mut starts, a: List.get<Int>(list: read arg, index: p))
+            push1(l: mut ends, a: List.get<Int>(list: read arg, index: p + 1))
+        } else {
+            push1(l: mut starts, a: 0)
+            push1(l: mut ends, a: List.get<Int>(list: read shape, index: i))
+        }
+        i = i + 1
+    }
+    return tensor_slice(cache: mut cache, x: x, starts: read starts, ends: read ends)
+}
+
 fn tensor_split_sizes(cache: mut UOpCache, x: Int, sizes: read List<Int>, dim: Int) -> fresh List<Int> {
     local shape = uop_shape(cache: read cache, id: x)
     let ndim = List.len<Int>(list: read shape)
@@ -3694,6 +3926,10 @@ fn tensor_split_sizes(cache: mut UOpCache, x: Int, sizes: read List<Int>, dim: I
         i = i + 1
     }
     return take out
+}
+
+fn split(cache: mut UOpCache, x: Int, sizes: read List<Int>, dim: Int) -> fresh List<Int> {
+    return tensor_split_sizes(cache: mut cache, x: x, sizes: read sizes, dim: dim)
 }
 
 fn tensor_split_size(cache: mut UOpCache, x: Int, size: Int, dim: Int) -> fresh List<Int> {
@@ -3785,6 +4021,11 @@ fn tensor_meshgrid_ij(cache: mut UOpCache, tensors: read List<Int>) -> fresh Lis
         i = i + 1
     }
     return tensor_meshgrid_with_basis(cache: mut cache, tensors: read tensors, basis: read basis)
+}
+
+fn meshgrid(cache: mut UOpCache, tensors: read List<Int>, indexing: read String) -> fresh List<Int> {
+    if indexing == "xy" { return tensor_meshgrid_xy(cache: mut cache, tensors: read tensors) }
+    return tensor_meshgrid_ij(cache: mut cache, tensors: read tensors)
 }
 
 fn tensor_meshgrid_xy(cache: mut UOpCache, tensors: read List<Int>) -> fresh List<Int> {
@@ -3983,6 +4224,11 @@ fn tensor_repeat_interleave_flat(cache: mut UOpCache, x: Int, repeats: Int) -> I
     return tensor_repeat_interleave_dim(cache: mut cache, x: xf, repeats: repeats, dim: 0)
 }
 
+fn repeat_interleave(cache: mut UOpCache, x: Int, repeats: Int, dim: Int) -> Int {
+    if dim < 0 { return tensor_repeat_interleave_flat(cache: mut cache, x: x, repeats: repeats) }
+    return tensor_repeat_interleave_dim(cache: mut cache, x: x, repeats: repeats, dim: dim)
+}
+
 fn tensor_repeat(cache: mut UOpCache, x: Int, repeats: read List<Int>) -> Int {
     local shape = uop_shape(cache: read cache, id: x)
     local base_shape = align_left(s: read shape, max_dim: List.len<Int>(list: read repeats))
@@ -4046,6 +4292,11 @@ fn tensor_roll_flat(cache: mut UOpCache, x: Int, shifts: Int) -> Int {
     let xf = tensor_flatten(cache: mut cache, x: x, start_dim: 0, end_dim: 0 - 1)
     let xr = tensor_roll_dim(cache: mut cache, x: xf, shifts: shifts, dim: 0)
     return tensor_reshape(cache: mut cache, x: xr, new_shape: read shape)
+}
+
+fn roll(cache: mut UOpCache, x: Int, shifts: Int, dim: Int) -> Int {
+    if dim < 0 { return tensor_roll_flat(cache: mut cache, x: x, shifts: shifts) }
+    return tensor_roll_dim(cache: mut cache, x: x, shifts: shifts, dim: dim)
 }
 
 fn tensor_pool1d_last_dilated(cache: mut UOpCache, x: Int, size: Int, step: Int, dilation: Int) -> Int {
@@ -4132,6 +4383,10 @@ fn tensor_pool1d_last_dilated(cache: mut UOpCache, x: Int, size: Int, step: Int,
 
 fn tensor_pool1d_last(cache: mut UOpCache, x: Int, size: Int, step: Int) -> Int {
     return tensor_pool1d_last_dilated(cache: mut cache, x: x, size: size, step: step, dilation: 1)
+}
+
+fn _pool(cache: mut UOpCache, x: Int, size: Int, stride: Int, dilation: Int) -> Int {
+    return tensor_pool1d_last_dilated(cache: mut cache, x: x, size: size, step: stride, dilation: dilation)
 }
 
 fn tensor_unfold(cache: mut UOpCache, x: Int, dim: Int, size: Int, step: Int) -> Int {
@@ -5801,6 +6056,23 @@ fn tensor_sum_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
     let reduced = mk_sum(cache: mut cache, x: x, axes: read resolved)
     local dropped = shape_drop_axes(shape: read sh, axes: read resolved)
     return mk_reshape(cache: mut cache, x: reduced, new_shape: read dropped)
+}
+
+fn einsum(cache: mut UOpCache, formula: read String, operands: read List<Int>) -> Int {
+    if List.len<Int>(list: read operands) == 0 {
+        local scalar = List.new<Int>()
+        return tensor_full(cache: mut cache, dt: read dt_default_float(), shape: read scalar, value: 0.0)
+    }
+    if List.len<Int>(list: read operands) == 1 {
+        return List.get<Int>(list: read operands, index: 0)
+    }
+    let mut out = List.get<Int>(list: read operands, index: 0)
+    let mut i = 1
+    while i < List.len<Int>(list: read operands) {
+        out = tensor_mul(cache: mut cache, a: out, b: List.get<Int>(list: read operands, index: i))
+        i = i + 1
+    }
+    return out
 }
 
 fn tensor_sum_all(cache: mut UOpCache, x: Int) -> Int {

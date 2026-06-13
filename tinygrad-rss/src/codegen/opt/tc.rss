@@ -33,23 +33,11 @@ fn tc_axis_name(prefix: read String, idx: Int) -> fresh String {
 }
 
 fn tc_copy_strings(xs: read List<String>) -> fresh List<String> {
-    local out = List.new<String>()
-    let mut i = 0
-    while i < List.len<String>(list: read xs) {
-        List.push<String>(list: mut out, value: read String.copy(value: read List.get<String>(list: read xs, index: i)))
-        i = i + 1
-    }
-    return take out
+    return xs.clone()
 }
 
 fn tc_copy_ints(xs: read List<Int>) -> fresh List<Int> {
-    local out = List.new<Int>()
-    let mut i = 0
-    while i < List.len<Int>(list: read xs) {
-        List.push<Int>(list: mut out, value: read List.get<Int>(list: read xs, index: i))
-        i = i + 1
-    }
-    return take out
+    return xs.clone()
 }
 
 fn tc_concat_strings(a: read List<String>, b: read List<String>, c: read List<String>) -> fresh List<String> {

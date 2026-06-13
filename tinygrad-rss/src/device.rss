@@ -151,7 +151,7 @@ fn canonicalize_device_tuple(devices: read List<String>) -> fresh List<String> {
 }
 
 fn copy_bytes(bytes: read List<Int>) -> fresh List<Int> {
-    return copy_int_list(l: read bytes)
+    return bytes.clone()
 }
 
 fn bytes_zeros(size: Int) -> fresh List<Int> {

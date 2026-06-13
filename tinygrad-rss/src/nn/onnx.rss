@@ -90,14 +90,7 @@ fn onnx_reader_new(data: read List<Int>) -> fresh OnnxReader {
 }
 
 fn onnx_copy_ints(values: read List<Int>) -> fresh List<Int> {
-    local out = List.new<Int>()
-    let mut i = 0
-    while i < List.len<Int>(list: read values) {
-        let v = List.get<Int>(list: read values, index: i)
-        List.push<Int>(list: mut out, value: read v)
-        i = i + 1
-    }
-    return take out
+    return values.clone()
 }
 
 fn onnx_empty_tensor() -> fresh OnnxTensorProto {

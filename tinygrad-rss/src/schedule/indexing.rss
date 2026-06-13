@@ -339,13 +339,7 @@ fn indexing_shape_equals(a: read List<Int>, b: read List<Int>) -> Bool {
 }
 
 fn indexing_copy_ranges(rngs: read List<Int>) -> fresh List<Int> {
-    local out = List.new<Int>()
-    let mut i = 0
-    while i < List.len<Int>(list: read rngs) {
-        List.push<Int>(list: mut out, value: read List.get<Int>(list: read rngs, index: i))
-        i = i + 1
-    }
-    return take out
+    return rngs.clone()
 }
 
 fn indexing_apply_reshape(cache: mut UOpCache, rngs: read List<Int>, in_shape: read List<Int>, out_shape: read List<Int>) -> fresh List<Int> {

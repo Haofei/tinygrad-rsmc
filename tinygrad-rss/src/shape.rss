@@ -327,14 +327,7 @@ struct View derives(Clone) {
 }
 
 fn shape_copy_ints(src: read List<Int>) -> fresh List<Int> {
-    local out = List.new<Int>()
-    let mut i = 0
-    while i < List.len<Int>(list: read src) {
-        let v = List.get<Int>(list: read src, index: i)
-        List.push<Int>(list: mut out, value: read v)
-        i = i + 1
-    }
-    return take out
+    return src.clone()
 }
 
 fn view_create(shape: read List<Int>) -> fresh View {

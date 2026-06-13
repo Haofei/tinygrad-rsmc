@@ -111,14 +111,7 @@ fn numel(shape: read List<Int>) -> Int {
     return p
 }
 fn copy_float_list(l: read List<Float>) -> fresh List<Float> {
-    local out = List.new<Float>()
-    let mut i = 0
-    while i < List.len<Float>(list: read l) {
-        let v = List.get<Float>(list: read l, index: i)
-        List.push<Float>(list: mut out, value: read v)
-        i = i + 1
-    }
-    return take out
+    return l.clone()
 }
 // multi-index coords of a flat index within shape (row-major)
 fn flat_to_multi(flat: Int, shape: read List<Int>) -> fresh List<Int> {

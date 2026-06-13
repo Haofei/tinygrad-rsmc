@@ -348,25 +348,11 @@ fn axis_type_letter(t: read AxisType) -> fresh String {
 }
 
 fn copy_int_list(l: read List<Int>) -> fresh List<Int> {
-    local out = List.new<Int>()
-    let mut i = 0
-    while i < List.len<Int>(list: read l) {
-        let v = List.get<Int>(list: read l, index: i)
-        List.push<Int>(list: mut out, value: read v)
-        i = i + 1
-    }
-    return take out
+    return l.clone()
 }
 
 fn copy_string_list(l: read List<String>) -> fresh List<String> {
-    local out = List.new<String>()
-    let mut i = 0
-    while i < List.len<String>(list: read l) {
-        let v = List.get<String>(list: read l, index: i)
-        List.push<String>(list: mut out, value: read String.copy(value: read v))
-        i = i + 1
-    }
-    return take out
+    return l.clone()
 }
 
 fn device_arg_from_list(devices: read List<String>) -> fresh DeviceArg {

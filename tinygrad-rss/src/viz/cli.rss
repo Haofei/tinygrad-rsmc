@@ -1,0 +1,101 @@
+// Source-shaped profile CLI facade for tinygrad/viz/cli.py.
+features: native, local
+
+struct VizProfileRecord derives(Clone) {
+    key: String,
+    name: String,
+    value: Int,
+    start: Int,
+    end: Int,
+}
+
+struct VizCLIParser derives(Clone) {
+    profile_path: String,
+    sort: String,
+    limit: Int,
+}
+
+fn viz_profile_record(key: read String, name: read String, value: Int, start: Int, end: Int) -> fresh VizProfileRecord {
+    return VizProfileRecord(key: String.copy(value: read key), name: String.copy(value: read name), value: value, start: start, end: end)
+}
+
+fn viz_copy_records(records: read List<VizProfileRecord>) -> fresh List<VizProfileRecord> {
+    local out = List.new<VizProfileRecord>()
+    let mut i = 0
+    while i < List.len<VizProfileRecord>(list: read records) {
+        local r = List.get<VizProfileRecord>(list: read records, index: i)
+        local c = viz_profile_record(key: read r.key, name: read r.name, value: r.value, start: r.start, end: r.end)
+        List.push<VizProfileRecord>(list: mut out, value: read (manage c))
+        i = i + 1
+    }
+    return take out
+}
+
+fn decode_profile(data: read List<Int>) -> fresh List<VizProfileRecord> {
+    local out = List.new<VizProfileRecord>()
+    let mut i = 0
+    while i < List.len<Int>(list: read data) {
+        let v = List.get<Int>(list: read data, index: i)
+        let st = i * 10
+        let en = st + 1 + (v & 15)
+        local rec = viz_profile_record(key: read "event", name: read String.concat(left: read "profile_", right: read Int.to_string(value: read i)), value: v, start: st, end: en)
+        List.push<VizProfileRecord>(list: mut out, value: read (manage rec))
+        i = i + 1
+    }
+    return take out
+}
+
+fn to_str(unit: read String, value: Int) -> fresh String {
+    let mut suffix = String.copy(value: read unit)
+    let mut scaled = value
+    if value >= 1000000000 {
+        scaled = value / 1000000000
+        suffix = String.concat(left: read "G", right: read unit)
+    } else if value >= 1000000 {
+        scaled = value / 1000000
+        suffix = String.concat(left: read "M", right: read unit)
+    } else if value >= 1000 {
+        scaled = value / 1000
+        suffix = String.concat(left: read "K", right: read unit)
+    }
+    return String.concat(left: read Int.to_string(value: read scaled), right: read suffix)
+}
+
+fn fmt_data(name: read String, value: Int, unit: read String) -> fresh String {
+    return String.concat(left: read name, right: read String.concat(left: read "=", right: read to_str(unit: read unit, value: value)))
+}
+
+fn marker_st(record: read VizProfileRecord) -> Int {
+    if record.start < record.end { return record.start }
+    return record.end
+}
+
+fn get(records: read List<VizProfileRecord>, key: read String) -> Int {
+    let mut i = 0
+    while i < List.len<VizProfileRecord>(list: read records) {
+        local r = List.get<VizProfileRecord>(list: read records, index: i)
+        if r.key == key || r.name == key { return r.value }
+        i = i + 1
+    }
+    return 0
+}
+
+fn fmt_top(records: read List<VizProfileRecord>, limit: Int) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<VizProfileRecord>(list: read records) && i < limit {
+        local r = List.get<VizProfileRecord>(list: read records, index: i)
+        if i > 0 { out = String.concat(left: read out, right: read "\n") }
+        out = String.concat(left: read out, right: read fmt_data(name: read r.name, value: r.value, unit: read ""))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn fmt_all(records: read List<VizProfileRecord>) -> fresh String {
+    return fmt_top(records: read records, limit: List.len<VizProfileRecord>(list: read records))
+}
+
+fn get_arg_parser() -> fresh VizCLIParser {
+    return VizCLIParser(profile_path: String.copy(value: read "profile.pkl"), sort: String.copy(value: read "time"), limit: 20)
+}

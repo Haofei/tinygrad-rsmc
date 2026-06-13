@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 81 RSS files, about 40.1k LOC.
+  - integrated `tinygrad-rss/src`: 83 RSS files, about 40.6k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -61,10 +61,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     symbols covered. This is a source-shaped GGUF/tokenizer/model/server facade with tiny smoke
     execution; real GGUF quantized tensor decoding and full transformer execution still require
     deeper tensor/runtime work.
-  - current uncovered audit slice for next work: `viz/cli.py`, `viz/serve.py`, plus already-covered
-    `callify.py`, `gradient.py`, `runtime/ops_hip.py`, `runtime/ops_npy.py`, `nn/onnx.py`, and
-    `llm/*`: 130/176 rough symbols covered (73.9%). The remaining high-count area is viz
-    server/profile tooling.
+  - focused viz facade batch: `viz/cli.py` and `viz/serve.py`: 49/49 rough symbols covered. This is
+    source-shaped profile formatting/server/profile-layout/static-analyzer surface coverage with
+    tiny smoke execution, not the full browser UI/server/runtime trace stack.
+  - current focused audit slice: `llm/*`, `viz/cli.py`, `viz/serve.py`, `callify.py`,
+    `gradient.py`, `runtime/ops_hip.py`, `runtime/ops_npy.py`, and `nn/onnx.py`: 176/176 rough
+    symbols covered (100.0%).
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -89,6 +91,8 @@ Toolchain changes made to simplify the next port slices:
 - RSScript sync `Http.get` now drives the existing reqwest/tokio implementation through the
   native pending executor and preserves raw response bytes alongside text, so current
   `from_url` can execute real byte downloads when network access is available.
+- RSScript Rust lowering now emits Rust `.clone()` for checker-supported builtin value types
+  (`List`, `Bytes`, and `Buffer`) instead of leaking unresolved `Type_clone` helper symbols.
 
 ## What Is Actually Integrated
 

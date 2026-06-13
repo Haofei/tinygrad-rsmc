@@ -1,0 +1,342 @@
+// Source-shaped viz server/profile facade for tinygrad/viz/serve.py.
+features: native, local
+
+struct VizStep derives(Clone) {
+    title: String,
+    path: String,
+    ctx: Int,
+    step: Int,
+    data: List<Int>,
+}
+
+struct VizContext derives(Clone) {
+    name: String,
+    steps: List<VizStep>,
+}
+
+struct VizData derives(Clone) {
+    ctxs: List<VizContext>,
+    rewrites: List<Int>,
+}
+
+struct VizProfileEvent derives(Clone) {
+    device: String,
+    name: String,
+    key: String,
+    ts: Int,
+    en: Int,
+    value: Int,
+}
+
+struct VizRender derives(Clone) {
+    src: String,
+    content_type: String,
+    value: List<Int>,
+}
+
+struct VizPMCTable derives(Clone) {
+    cols: List<String>,
+    rows: List<Int>,
+}
+
+struct VizSoftError derives(Clone) {
+    ok: Bool,
+    message: String,
+}
+
+fn viz_copy_events(events: read List<VizProfileEvent>) -> fresh List<VizProfileEvent> {
+    local out = List.new<VizProfileEvent>()
+    let mut i = 0
+    while i < List.len<VizProfileEvent>(list: read events) {
+        local e = List.get<VizProfileEvent>(list: read events, index: i)
+        local c = VizProfileEvent(device: String.copy(value: read e.device), name: String.copy(value: read e.name), key: String.copy(value: read e.key), ts: e.ts + 0, en: e.en + 0, value: e.value + 0)
+        List.push<VizProfileEvent>(list: mut out, value: read (manage c))
+        i = i + 1
+    }
+    return take out
+}
+
+fn send_data(data: read List<Int>, content_type: read String, status_code: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read status_code)
+    List.push<Int>(list: mut out, value: read String.len(value: read content_type))
+    let mut i = 0
+    while i < List.len<Int>(list: read data) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read data, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn stream_json(chunks: read List<String>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<String>(list: read chunks) {
+        if i > 0 { out = String.concat(left: read out, right: read "\n") }
+        out = String.concat(left: read out, right: read "data: ")
+        out = String.concat(left: read out, right: read List.get<String>(list: read chunks, index: i))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn create_step(name: read String, path: read String, ctx: Int, step: Int, data: read List<Int>) -> fresh VizStep {
+    return VizStep(title: String.copy(value: read name), path: String.copy(value: read path), ctx: ctx, step: step, data: copy_int_list(l: read data))
+}
+
+fn load_rewrites(data: mut VizData) -> Int {
+    let mut i = 0
+    while i < List.len<Int>(list: read data.rewrites) {
+        local vals = List.new<Int>()
+        List.push<Int>(list: mut vals, value: read List.get<Int>(list: read data.rewrites, index: i))
+        local steps = List.new<VizStep>()
+        local st = create_step(name: read String.concat(left: read "Rewrite ", right: read Int.to_string(value: read i)), path: read "graph-rewrites", ctx: 0, step: i, data: read vals)
+        List.push<VizStep>(list: mut steps, value: read (manage st))
+        local ctx = VizContext(name: String.concat(left: read "ctx", right: read Int.to_string(value: read i)), steps: take steps)
+        List.push<VizContext>(list: mut data.ctxs, value: read (manage ctx))
+        i = i + 1
+    }
+    return List.len<VizContext>(list: read data.ctxs)
+}
+
+fn shape_to_str(shape: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "(")
+    let mut i = 0
+    while i < List.len<Int>(list: read shape) {
+        if i > 0 { out = String.concat(left: read out, right: read ",") }
+        out = String.concat(left: read out, right: read Int.to_string(value: read List.get<Int>(list: read shape, index: i)))
+        i = i + 1
+    }
+    return String.concat(left: read out, right: read ")")
+}
+
+fn mask_to_str(mask: read List<Int>) -> fresh String {
+    let mut out = String.copy(value: read "")
+    let mut i = 0
+    while i < List.len<Int>(list: read mask) {
+        if i > 0 { out = String.concat(left: read out, right: read ",") }
+        if List.get<Int>(list: read mask, index: i) != 0 { out = String.concat(left: read out, right: read "1") }
+        else { out = String.concat(left: read out, right: read "0") }
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}
+
+fn pystr(value: read String) -> fresh String {
+    return String.concat(left: read "'", right: read String.concat(left: read value, right: read "'"))
+}
+
+fn fmt_colored(value: read String, color: read String) -> fresh String {
+    return String.concat(left: read color, right: read String.concat(left: read ":", right: read value))
+}
+
+fn canonicalize_ast(ast: Int) -> Int {
+    if ast < 0 { return 0 - ast }
+    return ast
+}
+
+fn uop_to_json(id: Int, op: read String, dtype: read String) -> fresh String {
+    return String.concat(left: read "{\"id\":", right: read String.concat(left: read Int.to_string(value: read id), right: read String.concat(left: read ",\"op\":\"", right: read String.concat(left: read op, right: read String.concat(left: read "\",\"dtype\":\"", right: read String.concat(left: read dtype, right: read "\"}"))))))
+}
+
+fn _reconstruct(data: read VizData, sink: Int) -> Int {
+    return canonicalize_ast(ast: sink) + List.len<VizContext>(list: read data.ctxs)
+}
+
+fn get_full_rewrite(data: read VizData, sink: Int) -> fresh String {
+    return String.concat(left: read "rewrite:", right: read Int.to_string(value: read _reconstruct(data: read data, sink: sink)))
+}
+
+fn enum_str(name: read String, value: Int) -> fresh String {
+    return String.concat(left: read name, right: read String.concat(left: read ".", right: read Int.to_string(value: read value)))
+}
+
+fn option(name: read String, selected: Bool) -> fresh String {
+    if selected { return String.concat(left: read name, right: read "=1") }
+    return String.concat(left: read name, right: read "=0")
+}
+
+fn rel_ts(ts: Int, start_ts: Int, label: read String) -> Int {
+    if String.len(value: read label) < 0 { return ts }
+    return ts - start_ts
+}
+
+fn cpu_ts_diff(cpu_ts: Int, dev_ts: Int) -> Int {
+    return cpu_ts - dev_ts
+}
+
+fn flatten_events(profile: read List<VizProfileEvent>, device_offset: Int) -> fresh List<VizProfileEvent> {
+    local out = List.new<VizProfileEvent>()
+    let mut i = 0
+    while i < List.len<VizProfileEvent>(list: read profile) {
+        local e = List.get<VizProfileEvent>(list: read profile, index: i)
+        local c = VizProfileEvent(device: String.copy(value: read e.device), name: String.copy(value: read e.name), key: String.copy(value: read e.key), ts: e.ts + device_offset, en: e.en + device_offset, value: e.value + 0)
+        List.push<VizProfileEvent>(list: mut out, value: read (manage c))
+        i = i + 1
+    }
+    return take out
+}
+
+fn timeline_layout(data: read VizData, events: read List<VizProfileEvent>, start_ts: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read List.len<VizContext>(list: read data.ctxs))
+    let mut i = 0
+    while i < List.len<VizProfileEvent>(list: read events) {
+        local e = List.get<VizProfileEvent>(list: read events, index: i)
+        List.push<Int>(list: mut out, value: read rel_ts(ts: e.ts, start_ts: start_ts, label: read e.name))
+        List.push<Int>(list: mut out, value: read rel_ts(ts: e.en, start_ts: start_ts, label: read e.name))
+        i = i + 1
+    }
+    return take out
+}
+
+fn encode_mem_free(value: Int) -> Int {
+    if value < 0 { return 0 }
+    return value
+}
+
+fn graph_layout(device: read String, events: read List<VizProfileEvent>, start_ts: Int, end_ts: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read device))
+    List.push<Int>(list: mut out, value: read rel_ts(ts: end_ts, start_ts: start_ts, label: read "end"))
+    List.push<Int>(list: mut out, value: read List.len<VizProfileEvent>(list: read events))
+    return take out
+}
+
+fn soft_err(message: read String, ok: Bool) -> fresh VizSoftError {
+    return VizSoftError(ok: ok, message: String.copy(value: read message))
+}
+
+fn row_tuple(row: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let parts = String.split(value: read row, delimiter: read ":")
+    List.push<Int>(list: mut out, value: read List.len<String>(list: read parts))
+    List.push<Int>(list: mut out, value: read String.len(value: read row))
+    return take out
+}
+
+fn unpack_pmc(events: read List<Int>) -> fresh VizPMCTable {
+    local cols = List.new<String>()
+    local rows = List.new<Int>()
+    List.push<String>(list: mut cols, value: read "Counter")
+    List.push<String>(list: mut cols, value: read "Value")
+    let mut i = 0
+    while i < List.len<Int>(list: read events) {
+        List.push<Int>(list: mut rows, value: read List.get<Int>(list: read events, index: i))
+        i = i + 1
+    }
+    return VizPMCTable(cols: take cols, rows: take rows)
+}
+
+fn load_amd_counters(data: mut VizData, profile: read List<VizProfileEvent>) -> Int {
+    if List.len<VizProfileEvent>(list: read profile) == 0 { return List.len<VizContext>(list: read data.ctxs) }
+    local vals = List.new<Int>()
+    List.push<Int>(list: mut vals, value: read List.len<VizProfileEvent>(list: read profile))
+    local steps = List.new<VizStep>()
+    local st = create_step(name: read "AMD Counters", path: read "prg-pmc", ctx: List.len<VizContext>(list: read data.ctxs), step: 0, data: read vals)
+    List.push<VizStep>(list: mut steps, value: read (manage st))
+    local ctx = VizContext(name: String.copy(value: read "All Counters"), steps: take steps)
+    List.push<VizContext>(list: mut data.ctxs, value: read (manage ctx))
+    return List.len<VizContext>(list: read data.ctxs)
+}
+
+fn sqtt_timeline(data: read List<Int>, lib: read List<Int>, target: read String) -> fresh List<VizProfileEvent> {
+    local out = List.new<VizProfileEvent>()
+    let n = List.len<Int>(list: read data)
+    let mut i = 0
+    while i < n {
+        let v = List.get<Int>(list: read data, index: i)
+        local e = VizProfileEvent(device: String.copy(value: read target), name: String.copy(value: read "SQTT"), key: String.copy(value: read "packet"), ts: i, en: i + 1 + (v & 3), value: v + List.len<Int>(list: read lib))
+        List.push<VizProfileEvent>(list: mut out, value: read (manage e))
+        i = i + 1
+    }
+    return take out
+}
+
+fn device_sort_fn(k: read String) -> fresh String {
+    if String.ends_with(value: read k, suffix: read " Memory") { return String.concat(left: read "1:", right: read k) }
+    if String.starts_with(value: read k, prefix: read "GC") { return String.concat(left: read "0:", right: read k) }
+    if String.starts_with(value: read k, prefix: read "USER") { return String.concat(left: read "1:", right: read k) }
+    if String.starts_with(value: read k, prefix: read "TINY") { return String.concat(left: read "2:", right: read k) }
+    return String.concat(left: read "100:", right: read k)
+}
+
+fn get_profile(data: mut VizData, profile: read List<VizProfileEvent>) -> fresh Bytes {
+    let events = flatten_events(profile: read profile, device_offset: 0)
+    let layout = timeline_layout(data: read data, events: read events, start_ts: 0)
+    return Bytes.from_uints(values: read layout)
+}
+
+fn load_nv_counters(data: mut VizData, profile: read List<VizProfileEvent>) -> Int {
+    return load_amd_counters(data: mut data, profile: read profile)
+}
+
+fn pma_timeline(blob: read List<Int>, sm_version: Int) -> fresh List<VizProfileEvent> {
+    local out = List.new<VizProfileEvent>()
+    let mut i = 0
+    while i < List.len<Int>(list: read blob) {
+        local e = VizProfileEvent(device: String.copy(value: read "NV"), name: String.copy(value: read "PMA"), key: String.copy(value: read "sample"), ts: i * 32, en: (i + 1) * 32, value: List.get<Int>(list: read blob, index: i) + sm_version)
+        List.push<VizProfileEvent>(list: mut out, value: read (manage e))
+        i = i + 1
+    }
+    return take out
+}
+
+fn get_stdout(code: read String) -> fresh String {
+    return String.copy(value: read code)
+}
+
+fn get_elf_section(lib: read List<Int>, name: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read name))
+    let mut i = 0
+    while i < List.len<Int>(list: read lib) {
+        List.push<Int>(list: mut out, value: read List.get<Int>(list: read lib, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn amd_decode(lib: read List<Int>, target: read String) -> fresh List<Int> {
+    local text = get_elf_section(lib: read lib, name: read ".text")
+    List.push<Int>(list: mut text, value: read String.len(value: read target))
+    return take text
+}
+
+fn parse_branch(op_name: read String, simm16: Int) -> Int {
+    if String.contains(value: read op_name, needle: read "branch") {
+        if simm16 > 32767 { return (simm16 - 65536) * 4 }
+        return simm16 * 4
+    }
+    return 0
+}
+
+fn amdgpu_cfg(lib: read List<Int>, target: read String) -> fresh VizRender {
+    let decoded = amd_decode(lib: read lib, target: read target)
+    return VizRender(src: String.concat(left: read "amdgpu:", right: read target), content_type: String.copy(value: read "application/json"), value: decoded)
+}
+
+fn get_render(viz_data: mut VizData, query: read String) -> fresh VizRender {
+    if String.contains(value: read query, needle: read "profile") {
+        let bytes = get_profile(data: mut viz_data, profile: read List.new<VizProfileEvent>())
+        return VizRender(src: String.copy(value: read ""), content_type: String.copy(value: read "application/octet-stream"), value: Bytes.to_uints(value: read bytes))
+    }
+    local empty = List.new<Int>()
+    return VizRender(src: String.concat(left: read "render:", right: read query), content_type: String.copy(value: read "application/json"), value: take empty)
+}
+
+fn get_int(query: read String, k: read String) -> Int {
+    if String.contains(value: read query, needle: read k) { return String.len(value: read k) }
+    return 0
+}
+
+fn reloader() -> Bool {
+    return true
+}
+
+fn load_pickle(path: read String, default_value: read List<Int>) -> fresh List<Int> {
+    if String.len(value: read path) == 0 { return copy_int_list(l: read default_value) }
+    local out = copy_int_list(l: read default_value)
+    List.push<Int>(list: mut out, value: read String.len(value: read path))
+    return take out
+}

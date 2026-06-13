@@ -483,9 +483,95 @@ fn late_buffer_view(cache: mut UOpCache, t: Int, b: Int) -> Option<Int> {
     return Some(intern(cache: mut cache, op: STAGE, dt: read node_full_dtype(cache: read cache, id: b), src: take srcs, arg: take arg))
 }
 
+fn rangeify_limit_device_cap(device: read String) -> Int {
+    if String.starts_with(value: read device, prefix: read "METAL") { return 31 }
+    if String.starts_with(value: read device, prefix: read "WEBGPU") { return 8 }
+    return 0
+}
+
+fn rangeify_limit_is_load_leaf(op: read Ops) -> Bool {
+    if op == STAGE { return true }
+    if op == AFTER { return true }
+    if op == PARAM { return true }
+    if op == MSELECT { return true }
+    if op == MSTACK { return true }
+    if op == DEFINE_VAR { return true }
+    return false
+}
+
+fn rangeify_limit_collect_bufs(cache: read UOpCache, id: Int, bufs: mut List<Int>) -> Unit {
+    let op = node_op(cache: read cache, id: id)
+    if rangeify_limit_is_load_leaf(op: read op) {
+        indexing_add_unique(items: mut bufs, value: id)
+        return Unit
+    }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        rangeify_limit_collect_bufs(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), bufs: mut bufs)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn rangeify_limit_fresh_loop_range(cache: mut UOpCache, ctx: mut IndexingContext, r: Int) -> Int {
+    if node_op(cache: read cache, id: r) != RANGE { return r }
+    local extra = List.new<Int>()
+    let out = mk_range(cache: mut cache, end: node_src_id(cache: read cache, id: r, k: 0), axis_id: ctx.next_range,
+                       axis_type: read AXIS_LOOP, extra_axes: read extra, dt: read node_dtype(cache: read cache, id: r))
+    ctx.next_range = ctx.next_range + 1
+    return out
+}
+
+fn rangeify_limit_stage_child(cache: mut UOpCache, ctx: mut IndexingContext, child: Int) -> Option<Int> {
+    if group_elementwise(op: read node_op(cache: read cache, id: child)) == false { return None }
+    local dev = node_effective_device_name(cache: read cache, id: child, index: 0)
+    if String.len(value: read dev) == 0 { return None }
+    local orig_ranges = uop_ranges(cache: read cache, id: child)
+    if List.len<Int>(list: read orig_ranges) == 0 { return None }
+    local old_ids = List.new<Int>()
+    local new_ids = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read orig_ranges) {
+        let old_r = List.get<Int>(list: read orig_ranges, index: i)
+        let new_r = rangeify_limit_fresh_loop_range(cache: mut cache, ctx: mut ctx, r: old_r)
+        List.push<Int>(list: mut old_ids, value: read old_r)
+        List.push<Int>(list: mut new_ids, value: read new_r)
+        i = i + 1
+    }
+    let subbed = uop_substitute_many(cache: mut cache, id: child, old_ids: read old_ids, new_ids: read new_ids)
+    local opts = mk_bufferize_arg_device(device: read dev, addrspace: read ADDR_GLOBAL, removable: true)
+    let staged = mk_stage(cache: mut cache, x: subbed, ranges: read new_ids, opts: read opts)
+    return Some(mk_index(cache: mut cache, base: staged, srcs: read orig_ranges, ptr: false))
+}
+
 fn limit_bufs(cache: mut UOpCache, ctx: mut IndexingContext, root: Int) -> Option<Int> {
-    if node_num_src(cache: read cache, id: root) < 0 || ctx.next_range < 0 { return None }
-    return None
+    let op = node_op(cache: read cache, id: root)
+    if group_binary(op: read op) == false && group_ternary(op: read op) == false { return None }
+    local device = node_effective_device_name(cache: read cache, id: root, index: 0)
+    if String.len(value: read device) == 0 { return None }
+    let max_bufs = rangeify_limit_device_cap(device: read device)
+    if max_bufs <= 0 { return None }
+    local bufs = List.new<Int>()
+    rangeify_limit_collect_bufs(cache: read cache, id: root, bufs: mut bufs)
+    if List.len<Int>(list: read bufs) <= max_bufs - 1 { return None }
+
+    local srcs = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: root) {
+        let child = node_src_id(cache: read cache, id: root, k: i)
+        match rangeify_limit_stage_child(cache: mut cache, ctx: mut ctx, child: child) {
+            Some(r) => {
+                List.push<Int>(list: mut srcs, value: read r)
+                changed = true
+            }
+            None => { List.push<Int>(list: mut srcs, value: read child) }
+        }
+        i = i + 1
+    }
+    if changed == false { return None }
+    local arg = node_arg(cache: read cache, id: root)
+    return Some(intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: root), src: take srcs, arg: take arg))
 }
 
 fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int, idx: Int, allow_locals: Bool) -> Option<Int> {

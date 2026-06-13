@@ -509,12 +509,13 @@ Integrated pieces:
   `remove_bufferize` and source-shaped `SHAPED_WMMA` lowering into upcast-indexed
   `CONTRACT` inputs, `WMMA`, per-lane `GEP`, and a register `AFTER(STORE...)` result. It also
   resolves `FUNCTION` bodies by gathering PARAM slots and substituting provided arguments with
-  dtype/shape/axis checks, and ports the default large-reduction split rewrite into
-  reshape/permute/reduce/contiguous/reduce/reshape form.
-  It also has `split_store` call wrappers that
+  dtype/shape/axis checks, ports the default large-reduction split rewrite into
+  reshape/permute/reduce/contiguous/reduce/reshape form, and implements the first device buffer
+  cap rewrite for METAL/WEBGPU by staging elementwise children through fresh LOOP ranges when
+  buffer-like inputs exceed the backend cap. It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
-  modeling, partial-PCONTIG/local bufferize cost forms, and full assign-dependency repair
-  remain later rangeify slices.
+  modeling, partial-PCONTIG/local bufferize cost forms, env-configured buffer caps, and full
+  assign-dependency repair remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,

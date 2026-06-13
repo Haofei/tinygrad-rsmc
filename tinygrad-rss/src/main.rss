@@ -2646,6 +2646,17 @@ fn main() -> Unit {
     let gpudims_sink = mk_sink(cache: mut mcache, ids: read gpudims_sink_srcs)
     let gpudims_ctx = gpudims_default_context()
     local gpudims_added = add_gpudims(cache: mut mcache, ctx: read gpudims_ctx, s: gpudims_sink)
+    let gpudims_guard_g = mk_range_int(cache: mut mcache, end: 4, axis_id: 35, axis_type: read AXIS_GLOBAL, dt: read i32)
+    let gpudims_guard_l = mk_range_int(cache: mut mcache, end: 2, axis_id: 36, axis_type: read AXIS_LOCAL, dt: read i32)
+    let gpudims_guard_val = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: gpudims_guard_g, y: gpudims_guard_l)
+    local gpudims_guard_idx_srcs = List.new<Int>()
+    pushi(l: mut gpudims_guard_idx_srcs, v: gpudims_guard_g)
+    let gpudims_guard_ptr = mk_index(cache: mut mcache, base: gpudims_buf, srcs: read gpudims_guard_idx_srcs, ptr: true)
+    let gpudims_guard_store = mk_store(cache: mut mcache, ptr: gpudims_guard_ptr, value: gpudims_guard_val, gate: read None)
+    local gpudims_guard_sink_srcs = List.new<Int>()
+    pushi(l: mut gpudims_guard_sink_srcs, v: gpudims_guard_store)
+    let gpudims_guard_sink = mk_sink(cache: mut mcache, ids: read gpudims_guard_sink_srcs)
+    local gpudims_guarded = add_gpudims(cache: mut mcache, ctx: read gpudims_ctx, s: gpudims_guard_sink)
     local gpudims_group_dims = get_grouped_dims(cache: mut mcache, prefix: read "idx", dims: read gpudims_shape, max_sizes: read gpudims_ctx.global_max, has_max: true, reverse: true)
     local gpudims_group_raw = _group_dims(dims: read shp4(a: 2, b: 2, c: 2, d: 2), max_sizes: read shp3(a: 4, b: 4, c: 4))
     local gpudims_split_raw = _split_dims(dims: read shp1(a: 16), max_sizes: read shp3(a: 4, b: 4, c: 4))
@@ -2657,6 +2668,23 @@ fn main() -> Unit {
     match gpudims_added {
         Some(v) => { showb(label: read "codegen.gpudims add rewrite = ", v: spec_type_verify(cache: read mcache, id: v) && uop_op_in_backward_slice_with_self(cache: read mcache, id: v, op: SPECIAL)) }
         None => { showb(label: read "codegen.gpudims add rewrite = ", v: false) }
+    }
+    match gpudims_guarded {
+        Some(v) => {
+            let guarded_store = node_src_id(cache: read mcache, id: v, k: 0)
+            let guarded_ptr = node_src_id(cache: read mcache, id: guarded_store, k: 0)
+            let guarded_idx = node_src_id(cache: read mcache, id: guarded_ptr, k: 1)
+            match gater_move_gate_from_index(cache: mut mcache, id: guarded_store) {
+                Some(moved) => {
+                    let moved_ptr = node_src_id(cache: read mcache, id: moved, k: 0)
+                    let moved_idx = node_src_id(cache: read mcache, id: moved_ptr, k: 1)
+                    let moved_gate = node_src_id(cache: read mcache, id: moved, k: 2)
+                    showb(label: read "codegen.gpudims guards missing local stores = ", v: node_op(cache: read mcache, id: guarded_idx) == WHERE && node_op(cache: read mcache, id: moved) == STORE && node_num_src(cache: read mcache, id: moved) == 3 && node_op(cache: read mcache, id: moved_idx) != WHERE && node_op(cache: read mcache, id: moved_gate) == CMPEQ && spec_type_verify(cache: read mcache, id: moved))
+                }
+                None => { showb(label: read "codegen.gpudims guards missing local stores = ", v: false) }
+            }
+        }
+        None => { showb(label: read "codegen.gpudims guards missing local stores = ", v: false) }
     }
     match gpudims_group_raw {
         Some(v) => { showb(label: read "codegen.gpudims group helper = ", v: List.len<Int>(list: read v) == 3) }

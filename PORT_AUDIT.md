@@ -518,9 +518,12 @@ Integrated pieces:
   the current all-integer RSS IR: `_dim_max`, `_group_dims`, `_split_dims`, `get_grouped_dims`,
   and `add_gpudims`. It covers max-size grouping, factor splitting, grouped `SPECIAL` index
   creation, flat-to-coordinate reconstruction, and conservative `RANGE -> SPECIAL` substitution
-  for `GLOBAL`/`THREAD` and `WARP`/`LOCAL`/`GROUP_REDUCE` axes. Symbolic `sint.vmax`, renderer
-  product-limit tuning, and the upstream missing-local invalid-store guard remain future fidelity
-  work.
+  for `GLOBAL`/`THREAD` and `WARP`/`LOCAL`/`GROUP_REDUCE` axes. It also ports the upstream
+  missing-local global-store guard: if a global `STORE` index omits local ranges used by the
+  kernel, `add_gpudims` wraps the index in `WHERE(local_idx == 0, idx, INVALID)` so the existing
+  gate-from-index pass can lower it to a gated store. Symbolic `sint.vmax`, renderer product-limit
+  tuning, and graph-wide gpudims/gater orchestration in the CStyle lowering path remain future
+  fidelity work.
 - `codegen/simplify.rss`: first integrated source-shaped `tinygrad/codegen/simplify.py` facade:
   `flatten_range`, `count_divmod`, `simplify_merge_adjacent`, `mark_gated`, `mark_range_mod`,
   `do_substitute`, `no_range`, `reduce_unparented`, `reduce_collapse`, `reduce_load_collapse`,
@@ -1022,6 +1025,9 @@ Current integrated demo:
 - validates the first `do_render`-style wrapper by rendering a cleaned `LINEAR` stream into a
   non-empty `SOURCE` child on `PROGRAM(SINK, DEVICE, LINEAR)`, passing the integrated UOp spec
   verifier, and producing parseable C for the sample gated-store kernel.
+- validates the `codegen.gpudims` missing-local global-store guard: `add_gpudims` creates a
+  `WHERE(..., idx, INVALID)` index when a local range is absent from a global store index, and
+  `gater_move_gate_from_index` lowers that shape to a gated `STORE`.
 - validates `toposort(enter_calls=false)` behavior: call arguments remain visible while
   `CALL`/`FUNCTION` bodies are not traversed.
 - validates `backward_slice` and `op_in_backward_slice_with_self` membership checks over a
@@ -1347,8 +1353,9 @@ Major missing integrated work:
   `PROGRAM` -> `PROGRAM+LINEAR` wrapper, integer upper-bound `do_estimates` metadata,
   first `ProgramInfo.from_sink` metadata derivation including integer `SPECIAL` launch dimensions, and
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
-  IF rejection, remaining late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
-  full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
+  IF rejection, remaining late expansion/devectorization, range simplification, full gpudims/gater
+  pass orchestration, ISA/regalloc, full symbolic estimates, compile/binary, and clear scope for
+  GPU-only optimization passes remain.
 - `renderer/*`: exact target-specific compiler integration, full prefix emission, real LLVM/PTX/
   WGSL/NIR emission, Mesa/LLVM/CUDA native bindings, exact AMD instruction tables, x86 lowering,
   real machine-code assembly/disassembly, and renderer policy beyond the source-shaped facade

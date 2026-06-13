@@ -291,6 +291,75 @@ fn gpudims_find_range_by_axis(cache: read UOpCache, order: read List<Int>, axis:
     return 0 - 1
 }
 
+fn gpudims_expr_contains(cache: read UOpCache, id: Int, target: Int) -> Bool {
+    if id == target { return true }
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        if gpudims_expr_contains(cache: read cache, id: node_src_id(cache: read cache, id: id, k: i), target: target) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn gpudims_index_has_range(cache: read UOpCache, idx: Int, r: Int) -> Bool {
+    if node_op(cache: read cache, id: idx) != INDEX { return false }
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: idx) {
+        if gpudims_expr_contains(cache: read cache, id: node_src_id(cache: read cache, id: idx, k: i), target: r) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn gpudims_missing_local_gate(cache: mut UOpCache, idx: Int, local_ranges: read List<Int>) -> Option<Int> {
+    let mut gate = 0
+    let mut has_gate = false
+    let mut i = 0
+    while i < List.len<Int>(list: read local_ranges) {
+        let r = List.get<Int>(list: read local_ranges, index: i)
+        if gpudims_index_has_range(cache: read cache, idx: idx, r: r) == false {
+            let zero = mk_const_int(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: r), v: 0)
+            let eq = mk_alu2(cache: mut cache, op: CMPEQ, dt: read dt_bool(), x: r, y: zero)
+            if has_gate {
+                gate = mk_alu2(cache: mut cache, op: AND, dt: read dt_bool(), x: gate, y: eq)
+            } else {
+                gate = eq
+                has_gate = true
+            }
+        }
+        i = i + 1
+    }
+    if has_gate { return Some(gate) }
+    return None
+}
+
+fn gpudims_guard_store_index(cache: mut UOpCache, store: Int, local_ranges: read List<Int>) -> Option<Int> {
+    if node_op(cache: read cache, id: store) != STORE { return None }
+    if node_num_src(cache: read cache, id: store) < 2 { return None }
+    let ptr = node_src_id(cache: read cache, id: store, k: 0)
+    if node_op(cache: read cache, id: ptr) != INDEX { return None }
+    if node_addrspace(cache: read cache, id: ptr) != ADDR_GLOBAL { return None }
+    match gpudims_missing_local_gate(cache: mut cache, idx: ptr, local_ranges: read local_ranges) {
+        Some(gate) => {
+            local idx_srcs = List.new<Int>()
+            let mut i = 1
+            while i < node_num_src(cache: read cache, id: ptr) {
+                let raw = node_src_id(cache: read cache, id: ptr, k: i)
+                let guarded = uop_valid(cache: mut cache, id: raw, cond: gate)
+                List.push<Int>(list: mut idx_srcs, value: read guarded)
+                i = i + 1
+            }
+            let new_ptr = mk_index(cache: mut cache, base: node_src_id(cache: read cache, id: ptr, k: 0), srcs: read idx_srcs, ptr: node_index_is_ptr(cache: read cache, id: ptr))
+            let value = node_src_id(cache: read cache, id: store, k: 1)
+            if node_num_src(cache: read cache, id: store) >= 3 {
+                return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read Some(node_src_id(cache: read cache, id: store, k: 2))))
+            }
+            return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read None))
+        }
+        None => { return None }
+    }
+}
+
 fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<Int> {
     local topo = uop_toposort(cache: read cache, id: s)
     let mut i = 0
@@ -314,6 +383,7 @@ fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<
     if List.len<Int>(list: read global_axes) == 0 && List.len<Int>(list: read local_axes) == 0 { return None }
     local global_shape = List.new<Int>()
     local local_shape = List.new<Int>()
+    local local_ranges = List.new<Int>()
     i = 0
     while i < List.len<Int>(list: read global_axes) {
         let r = gpudims_find_range_by_axis(cache: read cache, order: read topo, axis: List.get<Int>(list: read global_axes, index: i))
@@ -324,6 +394,7 @@ fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<
     while i < List.len<Int>(list: read local_axes) {
         let r = gpudims_find_range_by_axis(cache: read cache, order: read topo, axis: List.get<Int>(list: read local_axes, index: i))
         List.push<Int>(list: mut local_shape, value: read gpudims_range_end_int(cache: read cache, r: r))
+        List.push<Int>(list: mut local_ranges, value: read r)
         i = i + 1
     }
     let mut idxs = List.new<Int>()
@@ -366,6 +437,21 @@ fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<
     }
     local olds = List.new<Int>()
     local news = List.new<Int>()
+    local store_olds = List.new<Int>()
+    local store_news = List.new<Int>()
+    i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        match gpudims_guard_store_index(cache: mut cache, store: u, local_ranges: read local_ranges) {
+            Some(guarded) => {
+                List.push<Int>(list: mut store_olds, value: read u)
+                List.push<Int>(list: mut store_news, value: read guarded)
+            }
+            None => {
+            }
+        }
+        i = i + 1
+    }
     i = 0
     while i < List.len<Int>(list: read topo) {
         let r = List.get<Int>(list: read topo, index: i)
@@ -389,7 +475,11 @@ fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<
         i = i + 1
     }
     if List.len<Int>(list: read olds) == 0 { return None }
-    return Some(memory_replace_many(cache: mut cache, id: s, olds: read olds, news: read news))
+    let mut guarded_root = s
+    if List.len<Int>(list: read store_olds) > 0 {
+        guarded_root = memory_replace_many(cache: mut cache, id: s, olds: read store_olds, news: read store_news)
+    }
+    return Some(memory_replace_many(cache: mut cache, id: guarded_root, olds: read olds, news: read news))
 }
 
 fn pm_add_gpudims(cache: mut UOpCache, s: Int) -> Option<Int> {

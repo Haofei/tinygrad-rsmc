@@ -558,3 +558,228 @@ fn cstyle_render_kernel(cache: read UOpCache, sink: Int, function_name: read Str
     local order = uop_toposort(cache: read cache, id: sink)
     return cstyle_render_kernel_order(cache: read cache, order: read order, function_name: read function_name)
 }
+
+struct CStyleRenderParts derives(Clone) {
+    name: String,
+    kernel: String,
+    bufs: List<Int>,
+}
+
+struct CStyleRendererState derives(Clone) {
+    kind: String,
+    arch: String,
+    compiler: String,
+}
+
+fn __init__(kind: read String, arch: read String) -> fresh CStyleRendererState {
+    if kind == "clang" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "clang")) }
+    if kind == "opencl" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "opencl")) }
+    if kind == "metal" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "metal")) }
+    if kind == "cuda" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "cuda")) }
+    if kind == "nvcc" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "nvcc")) }
+    if kind == "hip" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "hip")) }
+    if kind == "hipcc" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "hipcc")) }
+    if kind == "qcom" { return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read "qcom")) }
+    return CStyleRendererState(kind: String.copy(value: read kind), arch: String.copy(value: read arch), compiler: String.copy(value: read ""))
+}
+
+fn render_dtype(dt: read DType, mutable: Bool) -> fresh String {
+    if mutable { return cstyle_dtype_name(dt: read dt) }
+    return cstyle_dtype_name(dt: read dt)
+}
+
+fn render_cast(cache: read UOpCache, u: Int, val: read String) -> fresh String {
+    return cstyle_cast_text(dt: read node_full_dtype(cache: read cache, id: u), val: read val)
+}
+
+fn create_non_native_float_pats(dts: read List<DType>, casting: Bool) -> Bool {
+    return List.len<DType>(list: read dts) >= 0 || casting
+}
+
+fn cast_float_to_bf16(cache: mut UOpCache, x: Int) -> Int {
+    return mk_cast(cache: mut cache, x: x, dt: read dt_bfloat16())
+}
+
+fn cstyle_dtype_contains(xs: read List<DType>, dt: read DType) -> Bool {
+    let mut i = 0
+    while i < List.len<DType>(list: read xs) {
+        let got = List.get<DType>(list: read xs, index: i)
+        if got.name == dt.name && got.count == dt.count && got.bitsize == dt.bitsize && got.scalar_name == dt.scalar_name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn cstyle_push_dtype_unique(xs: mut List<DType>, dt: read DType) -> Unit {
+    let s = dtype_scalar(d: read dt)
+    if cstyle_dtype_contains(xs: read xs, dt: read s) == false { List.push<DType>(list: mut xs, value: read s) }
+    if dt.count > 1 && cstyle_dtype_contains(xs: read xs, dt: read dt) == false { List.push<DType>(list: mut xs, value: read dt) }
+    return Unit
+}
+
+fn uops_to_dtypes(cache: read UOpCache, uops: read List<Int>) -> fresh List<DType> {
+    local out = List.new<DType>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        let id = List.get<Int>(list: read uops, index: i)
+        let dt = node_full_dtype(cache: read cache, id: id)
+        if dt.name != "void" { cstyle_push_dtype_unique(xs: mut out, dt: read dt) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn wmma_args(cache: read UOpCache, uops: read List<Int>) -> fresh List<String> {
+    local out = List.new<String>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        let id = List.get<Int>(list: read uops, index: i)
+        if node_op(cache: read cache, id: id) == WMMA {
+            local vals = node_argints(cache: read cache, id: id)
+            let mut name = String.copy(value: read "WMMA")
+            let mut j = 0
+            while j < List.len<Int>(list: read vals) && j < 3 {
+                name = cstyle_cat(a: read name, b: read "_")
+                name = cstyle_cat(a: read name, b: read Int.to_string(value: read List.get<Int>(list: read vals, index: j)))
+                j = j + 1
+            }
+            if cstyle_dtype_contains(xs: read uops_to_dtypes(cache: read cache, uops: read uops), dt: read node_full_dtype(cache: read cache, id: id)) { name = cstyle_cat(a: read name, b: read "_") }
+            List.push<String>(list: mut out, value: read name)
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn _render(cache: read UOpCache, uops: read List<Int>) -> fresh CStyleRenderParts {
+    local name = String.copy(value: read "test")
+    local kernel = cstyle_render_kernel_order(cache: read cache, order: read uops, function_name: read name)
+    local bufs = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        let id = List.get<Int>(list: read uops, index: i)
+        if node_op(cache: read cache, id: id) == PARAM { uop_push_unique(vals: mut bufs, v: id) }
+        i = i + 1
+    }
+    return CStyleRenderParts(name: take name, kernel: take kernel, bufs: take bufs)
+}
+
+fn _render_defines(cache: read UOpCache, uops: read List<Int>) -> fresh String {
+    local dts = uops_to_dtypes(cache: read cache, uops: read uops)
+    local lines = List.new<String>()
+    let mut i = 0
+    while i < List.len<DType>(list: read dts) {
+        let dt = List.get<DType>(list: read dts, index: i)
+        if dt.count > 1 { List.push<String>(list: mut lines, value: read render_vector_prefix(dt: read dt)) }
+        i = i + 1
+    }
+    return String.join(parts: read lines, separator: read "\n")
+}
+
+fn _render_body(cache: read UOpCache, function_name: read String, kernel: read String, bufs: read List<Int>, uops: read List<Int>, pref: read String) -> fresh String {
+    if List.len<Int>(list: read bufs) < 0 || List.len<Int>(list: read uops) < 0 || String.len(value: read pref) < 0 {
+        return String.copy(value: read kernel)
+    }
+    return cstyle_cat(a: read "void ", b: read cstyle_cat(a: read function_name, b: read cstyle_cat(a: read "() {\n", b: read cstyle_cat(a: read kernel, b: read "\n}"))))
+}
+
+fn _render_entry(function_name: read String, bufs: read List<Int>) -> fresh String {
+    if String.len(value: read function_name) < 0 || List.len<Int>(list: read bufs) < 0 { return String.copy(value: read "") }
+    return String.copy(value: read "")
+}
+
+fn render_kernel(cache: read UOpCache, sink: Int, function_name: read String) -> fresh String {
+    return cstyle_render_kernel(cache: read cache, sink: sink, function_name: read function_name)
+}
+
+fn render(cache: read UOpCache, uops: read List<Int>) -> fresh String {
+    local parts = _render(cache: read cache, uops: read uops)
+    return String.copy(value: read parts.kernel)
+}
+
+fn render_vector_prefix(dt: read DType) -> fresh String {
+    let scalar = cstyle_dtype_name(dt: read dtype_scalar(d: read dt))
+    let vec = cstyle_dtype_name(dt: read dt)
+    let align = DType.itemsize(self: read dt)
+    let mut out = cstyle_cat(a: read "typedef ", b: read scalar)
+    out = cstyle_cat(a: read out, b: read " ")
+    out = cstyle_cat(a: read out, b: read vec)
+    out = cstyle_cat(a: read out, b: read " __attribute__((aligned(")
+    out = cstyle_cat(a: read out, b: read Int.to_string(value: read align))
+    out = cstyle_cat(a: read out, b: read "),ext_vector_type(")
+    out = cstyle_cat(a: read out, b: read Int.to_string(value: read dt.count))
+    return cstyle_cat(a: read out, b: read ")));")
+}
+
+fn supported_dtypes(kind: read String, arch: read String) -> fresh List<DType> {
+    local out = List.new<DType>()
+    List.push<DType>(list: mut out, value: read dt_bool())
+    List.push<DType>(list: mut out, value: read dt_int8())
+    List.push<DType>(list: mut out, value: read dt_uint8())
+    List.push<DType>(list: mut out, value: read dt_int16())
+    List.push<DType>(list: mut out, value: read dt_uint16())
+    List.push<DType>(list: mut out, value: read dt_int32())
+    List.push<DType>(list: mut out, value: read dt_uint32())
+    List.push<DType>(list: mut out, value: read dt_int64())
+    List.push<DType>(list: mut out, value: read dt_uint64())
+    List.push<DType>(list: mut out, value: read dt_float32())
+    if kind != "metal" { List.push<DType>(list: mut out, value: read dt_float64()) }
+    if kind != "qcom" {
+        if kind != "opencl" || String.contains(value: read arch, needle: read "cl_khr_fp16") {
+            List.push<DType>(list: mut out, value: read dt_float16())
+        }
+    }
+    if kind == "cuda" || kind == "nvcc" || kind == "hip" || kind == "hipcc" || kind == "clang" || kind == "metal" {
+        List.push<DType>(list: mut out, value: read dt_bfloat16())
+    }
+    if kind == "cuda" || kind == "nvcc" || kind == "hip" || kind == "hipcc" {
+        List.push<DType>(list: mut out, value: read dt_fp8e4m3())
+        List.push<DType>(list: mut out, value: read dt_fp8e5m2())
+    }
+    return take out
+}
+
+fn aux(cache: read UOpCache, uops: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        let id = List.get<Int>(list: read uops, index: i)
+        if node_op(cache: read cache, id: id) == PARAM {
+            List.push<Int>(list: mut out, value: read i)
+            List.push<Int>(list: mut out, value: read node_param_slot(cache: read cache, id: id))
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn fp8_index(dtype: read DType) -> Int {
+    let s = dtype_scalar(d: read dtype)
+    if s.name == "float8_e4m3" { return 0 }
+    if s.name == "float8_e5m2" { return 1 }
+    return 0 - 1
+}
+
+fn _ocml(op: read String, dtype: read DType, x: read String) -> fresh String {
+    let bits = dtype_scalar(d: read dtype).bitsize
+    let mut out = cstyle_cat(a: read "__ocml_", b: read op)
+    out = cstyle_cat(a: read out, b: read "_f")
+    out = cstyle_cat(a: read out, b: read Int.to_string(value: read bits))
+    return cstyle_cat(a: read out, b: read cstyle_cat(a: read "(", b: read cstyle_cat(a: read x, b: read ")")))
+}
+
+fn is_cdna(arch: read String) -> Bool {
+    return String.starts_with(value: read arch, prefix: read "gfx942") || String.starts_with(value: read arch, prefix: read "gfx950")
+}
+
+fn is_cdna4(arch: read String) -> Bool {
+    return String.starts_with(value: read arch, prefix: read "gfx950")
+}
+
+fn asm(cache: read UOpCache, prg: Int, lin: Int, arch: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    if spec_type_verify(cache: read cache, id: prg) && lin >= 0 && String.len(value: read arch) >= 0 {
+        List.push<Int>(list: mut out, value: read 0)
+    }
+    return take out
+}

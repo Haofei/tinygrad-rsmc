@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 41 RSS files, 34,054 LOC.
+  - integrated `tinygrad-rss/src`: 41 RSS files, 34,294 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -30,10 +30,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - command: `python3 tools/port_coverage.py --limit 8`
   - result: `tensor.py` 103/106 symbols, `mixin/__init__.py` 82/82 symbols,
     `uop/ops.py` 216/221 symbols; 401/409 total rough symbols covered.
-  - focused compiler-opt batch: `codegen/opt/__init__.py` 3/3 symbols,
-    `codegen/opt/postrange.py` 30/31 symbols, `codegen/opt/tc.py` 11/11 symbols,
-    `codegen/opt/heuristic.py` 1/1 symbol, and `codegen/opt/search.py` 8/8 symbols;
-    53/54 total rough symbols covered across the current optimizer audit set.
+  - focused compiler/renderer batch: `codegen/opt/*` 54/54 symbols and
+    `renderer/cstyle.py` 40/40 symbols; 94/94 total rough symbols covered across
+    the current optimizer/renderer audit set.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -212,8 +211,12 @@ Integrated pieces:
   shape-derived array extents such as `float temp0[4];` and `float acc0[4];`. The kernel wrapper
   can now render either a `SINK` toposort or an explicit `LINEAR` op stream, and it preserves a
   shared loop body across duplicated `END` nodes so generated multi-store kernels stay in scope.
-  It still lacks upstream's full linearizer ordering, inline heuristics,
-  vector typedefs, target-specific mutable/read-only parameter effects, target subclasses, and schedule integration.
+  Source-shaped public renderer names now cover non-native float pattern hooks, bf16 cast
+  construction, dtype inventory, WMMA metadata collection, `render_dtype`, `render_cast`,
+  `_render`/`render`/`render_kernel`, vector typedef prefixes, render body/entry helpers,
+  supported dtype sets, OpenCL `aux`, CUDA/HIP fp8/OCML helpers, CDNA arch predicates, and an
+  assembly facade for HIP. It still lacks upstream's full inline heuristics, exact target-specific
+  parameter effects, real target compiler objects, full WMMA prefix emission, and schedule integration.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
   scoring from active ranges, upstream op priorities for `PARAM`/`DEFINE_VAR`/`DEFINE_REG`/
@@ -777,6 +780,11 @@ Current integrated demo:
   declarations, shaped buffer argument names, a scalar `DEFINE_VAR n` kernel argument used as the
   dynamic loop bound, an `IF`/`ENDIF` block around the store, and writable-parameter detection
   that marks the output buffer writable while leaving the input buffer read-only.
+- validates source-shaped C-style renderer facade names over the same graph: renderer state
+  construction, dtype/cast rendering, `_render`/`render`/`render_kernel`, vector typedef prefixes,
+  supported dtype lists, aux parameter metadata, non-native float pattern hooks, bf16 cast node
+  construction, WMMA metadata collection, fp8 index selection, OCML call rendering, CDNA arch
+  predicates, and the HIP assembly facade.
 - validates first integrated codegen linearizer priority ordering over the same real kernel graph,
   producing a dependency-valid linear op stream from `CONST`/`PARAM`/`DEFINE_*` through
   `RANGE`/`INDEX`/`LOAD`/ALU/`STORE`/`END`/`IF`/`ENDIF`/`SINK`.
@@ -1116,8 +1124,8 @@ Major missing integrated work:
   `PROGRAM+LINEAR` -> `PROGRAM+LINEAR+SOURCE` CStyle wrapper are integrated, but pre-existing
   IF rejection, remaining late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
-- `renderer/cstyle.py`: full target-specific MC/C-style kernel renderer on top of the first
-  generic kernel wrapper now in `renderer/cstyle.rss`.
+- `renderer/cstyle.py`: exact target-specific compiler integration, full prefix emission, and
+  renderer policy beyond the source-shaped facade names now in `renderer/cstyle.rss`.
 - `engine/*`, `device.py` beyond the first allocator/metadata slice, `runtime/*`, `runtime/support/*`:
   handwritten execution, device/runtime/compiler layers.
   The generated `runtime/autogen` data has been copied, but handwritten behavior must still be

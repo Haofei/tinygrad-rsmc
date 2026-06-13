@@ -507,7 +507,9 @@ Integrated pieces:
   `pm_syntactic_sugar` cleanup for nested pointer `INDEX` flattening plus elementwise/const
   `INDEX` pushdown before range analysis, plus removable `STAGE` range substitution for
   `remove_bufferize` and source-shaped `SHAPED_WMMA` lowering into upcast-indexed
-  `CONTRACT` inputs, `WMMA`, per-lane `GEP`, and a register `AFTER(STORE...)` result.
+  `CONTRACT` inputs, `WMMA`, per-lane `GEP`, and a register `AFTER(STORE...)` result. It also
+  resolves `FUNCTION` bodies by gathering PARAM slots and substituting provided arguments with
+  dtype/shape/axis checks.
   It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
   modeling, partial-PCONTIG/local bufferize cost forms, and full assign-dependency repair

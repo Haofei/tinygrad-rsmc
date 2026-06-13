@@ -222,11 +222,72 @@ fn split_reduceop(cache: mut UOpCache, reduce: Int, x: Int) -> Option<Int> {
     return None
 }
 
+fn rangeify_param_list_contains(params: read List<Int>, p: Int) -> Bool {
+    let mut i = 0
+    while i < List.len<Int>(list: read params) {
+        if List.get<Int>(list: read params, index: i) == p { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn rangeify_collect_params(cache: read UOpCache, body: Int) -> fresh List<Int> {
+    local params = List.new<Int>()
+    local order = uop_toposort_enter_calls(cache: read cache, id: body, enter_calls: false)
+    let mut i = 0
+    while i < List.len<Int>(list: read order) {
+        let id = List.get<Int>(list: read order, index: i)
+        if node_op(cache: read cache, id: id) == PARAM && rangeify_param_list_contains(params: read params, p: id) == false {
+            List.push<Int>(list: mut params, value: read id)
+        }
+        i = i + 1
+    }
+    return take params
+}
+
+fn rangeify_function_args_dense(cache: read UOpCache, fn_id: Int, params: read List<Int>) -> Bool {
+    let argc = node_num_src(cache: read cache, id: fn_id) - 1
+    let mut i = 0
+    while i < List.len<Int>(list: read params) {
+        let slot = node_param_slot(cache: read cache, id: List.get<Int>(list: read params, index: i))
+        if slot != i || slot < 0 || slot >= argc { return false }
+        i = i + 1
+    }
+    return argc == List.len<Int>(list: read params)
+}
+
+fn rangeify_function_param_matches_arg(cache: read UOpCache, param: Int, arg: Int) -> Bool {
+    if node_full_dtype(cache: read cache, id: param) != node_full_dtype(cache: read cache, id: arg) { return false }
+    local pshape = uop_shape(cache: read cache, id: param)
+    local ashape = uop_shape(cache: read cache, id: arg)
+    if indexing_shape_equals(a: read pshape, b: read ashape) == false { return false }
+    if uop_axis(cache: read cache, id: param) != uop_axis(cache: read cache, id: arg) { return false }
+    return true
+}
+
 fn resolve_function(cache: mut UOpCache, c: Int, allow_param_mismatch: Bool) -> Option<Int> {
     if node_op(cache: read cache, id: c) != FUNCTION { return None }
-    if allow_param_mismatch == false { return None }
-    if node_num_src(cache: read cache, id: c) > 0 { return Some(node_src_id(cache: read cache, id: c, k: 0)) }
-    return None
+    if node_num_src(cache: read cache, id: c) == 0 { return None }
+    let body = node_src_id(cache: read cache, id: c, k: 0)
+    local params = rangeify_collect_params(cache: read cache, body: body)
+    if allow_param_mismatch == false && rangeify_function_args_dense(cache: read cache, fn_id: c, params: read params) == false { return None }
+    local old_ids = List.new<Int>()
+    local new_ids = List.new<Int>()
+    let argc = node_num_src(cache: read cache, id: c) - 1
+    let mut i = 0
+    while i < List.len<Int>(list: read params) {
+        let p = List.get<Int>(list: read params, index: i)
+        let slot = node_param_slot(cache: read cache, id: p)
+        if slot >= 0 && slot < argc {
+            let arg = node_src_id(cache: read cache, id: c, k: slot + 1)
+            if rangeify_function_param_matches_arg(cache: read cache, param: p, arg: arg) == false { return None }
+            List.push<Int>(list: mut old_ids, value: read p)
+            List.push<Int>(list: mut new_ids, value: read arg)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read old_ids) == 0 { return Some(body) }
+    return Some(uop_substitute_many(cache: mut cache, id: body, old_ids: read old_ids, new_ids: read new_ids))
 }
 
 fn cleanup_dead_axes(cache: mut UOpCache, b: Int) -> Option<Int> {

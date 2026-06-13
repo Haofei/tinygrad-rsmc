@@ -199,6 +199,14 @@ fn eval_const_value(cache: read UOpCache, id: Int) -> Float {
     return node_const_float(cache: read cache, id: id)
 }
 
+fn eval_list_value(vals: read List<Float>, index: Int) -> Float {
+    let n = List.len<Float>(list: read vals)
+    if n == 0 { return 0.0 }
+    if index < n { return List.get<Float>(list: read vals, index: index) }
+    if n == 1 { return List.get<Float>(list: read vals, index: 0) }
+    return List.get<Float>(list: read vals, index: index % n)
+}
+
 fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
     let op = node_op(cache: read cache, id: id)
     if op == BUFFER {
@@ -433,12 +441,14 @@ fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
         local c = eval_tensor(cache: read cache, id: cid)
         local a = eval_tensor(cache: read cache, id: xid)
         local b = eval_tensor(cache: read cache, id: yid)
+        local shape = uop_shape(cache: read cache, id: id)
         local out = List.new<Float>()
+        let total = numel(shape: read shape)
         let mut i = 0
-        while i < List.len<Float>(list: read a) {
-            let cv = List.get<Float>(list: read c, index: i)
-            let av = List.get<Float>(list: read a, index: i)
-            let bv = List.get<Float>(list: read b, index: i)
+        while i < total {
+            let cv = eval_list_value(vals: read c, index: i)
+            let av = eval_list_value(vals: read a, index: i)
+            let bv = eval_list_value(vals: read b, index: i)
             if cv != 0.0 {
                 List.push<Float>(list: mut out, value: read av)
             } else {
@@ -473,11 +483,13 @@ fn eval_tensor(cache: read UOpCache, id: Int) -> fresh List<Float> {
         let yid = node_src_id(cache: read cache, id: id, k: 1)
         local a = eval_tensor(cache: read cache, id: xid)
         local b = eval_tensor(cache: read cache, id: yid)
+        local shape = uop_shape(cache: read cache, id: id)
         local out = List.new<Float>()
+        let total = numel(shape: read shape)
         let mut i = 0
-        while i < List.len<Float>(list: read a) {
-            let av = List.get<Float>(list: read a, index: i)
-            let bv = List.get<Float>(list: read b, index: i)
+        while i < total {
+            let av = eval_list_value(vals: read a, index: i)
+            let bv = eval_list_value(vals: read b, index: i)
             let mut r = 0.0
             if op == ADD { r = av + bv }
             if op == SUB { r = av - bv }

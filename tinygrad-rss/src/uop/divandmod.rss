@@ -127,13 +127,15 @@ fn divmod_try_nested(cache: mut UOpCache, id: Int, x: Int, y: Int, c: Int) -> Op
 
 fn divmod_try_fold_binary_numerator(cache: mut UOpCache, id: Int, term: Int, factor: Int, const_part: Int, c: Int) -> Option<Int> {
     let vr = uop_min_max(cache: read cache, id: term)
-    if vr.hi - vr.lo != 1 { return None }
+    if sat_add_int(a: vr.lo, b: 1) != vr.hi { return None }
     let op = node_op(cache: read cache, id: id)
-    let mut y1 = floordiv(x: factor * vr.lo + const_part, y: c)
-    let mut y2 = floordiv(x: factor * vr.hi + const_part, y: c)
+    let lo_num = sat_add_int(a: sat_mul_int(a: factor, b: vr.lo), b: const_part)
+    let hi_num = sat_add_int(a: sat_mul_int(a: factor, b: vr.hi), b: const_part)
+    let mut y1 = floordiv(x: lo_num, y: c)
+    let mut y2 = floordiv(x: hi_num, y: c)
     if op == FLOORMOD {
-        y1 = floormod(x: factor * vr.lo + const_part, y: c)
-        y2 = floormod(x: factor * vr.hi + const_part, y: c)
+        y1 = floormod(x: lo_num, y: c)
+        y2 = floormod(x: hi_num, y: c)
     }
     let dt = node_dtype(cache: read cache, id: id)
     let lo = mk_const_int(cache: mut cache, dt: read dt, v: vr.lo)

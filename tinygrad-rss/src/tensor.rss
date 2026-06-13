@@ -912,7 +912,15 @@ fn tensor_graph_contains_any(cache: read UOpCache, root: Int, needles: read List
 fn tensor_replace_many(cache: mut UOpCache, id: Int, olds: read List<Int>, news: read List<Int>) -> Int {
     let mut i = 0
     while i < List.len<Int>(list: read olds) {
-        if id == List.get<Int>(list: read olds, index: i) { return List.get<Int>(list: read news, index: i) }
+        if id == List.get<Int>(list: read olds, index: i) {
+            let repl = List.get<Int>(list: read news, index: i)
+            local old_shape = uop_shape(cache: read cache, id: id)
+            local new_shape = uop_shape(cache: read cache, id: repl)
+            if tensor_shape_eq(a: read old_shape, b: read new_shape) == false {
+                return broadcast_to(cache: mut cache, x: repl, target: read old_shape)
+            }
+            return repl
+        }
         i = i + 1
     }
     local new_src = List.new<Int>()

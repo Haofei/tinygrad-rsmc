@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 43,553 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 43,595 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -91,6 +91,11 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.
+    The disk runtime facade now follows upstream deterministic lifecycle/view metadata more
+    closely: reopening with a smaller size preserves the original mapping size and increments
+    refcount, larger reopen is exposed as a checked failure, close only releases on the final
+    refcount, `_offset` uses absolute disk offsets, and `_copyout_sharded` emits page-aligned
+    shard metadata with first-shard minor offsets. This is still not real mmap or io_uring IO.
   - focused runtime support batch: `runtime/support/hcq.py`, `runtime/support/memory.py`,
     `runtime/support/elf.py`, `runtime/support/compiler_cpu.py`, `runtime/support/c.py`, and
     `runtime/graph/hcq.py`: 167/167 rough symbols covered.
@@ -957,9 +962,10 @@ Current integrated demo:
   vector/postrender helpers.
 - validates source-shaped CPU/null/disk/Python runtime backend facade names through the active
   smoke and coverage audit: CPU worker/queue/signal/buffer helpers, null transfer/offset surface,
-  disk open/close/io_uring/sharded-copy/offset surface, and the Python `generic_wmma_helper`
-  path over the existing `mk_wmma` graph API. These are deterministic RSS runtime state facades,
-  not real mmap/io_uring/thread/native-kernel execution yet.
+  disk open/close/io_uring/sharded-copy/absolute-offset surface including page-aligned shard
+  metadata, and the Python `generic_wmma_helper` path over the existing `mk_wmma` graph API.
+  These are deterministic RSS runtime state facades, not real mmap/io_uring/thread/native-kernel
+  execution yet.
 - validates first source-shaped target runtime facade batch through the active smoke and coverage
   audit: CUDA argument/time/system synchronization helpers, OpenCL status checks, Metal/WebGPU
   buffer/command helpers, AMD/NV/QCOM packet/register/allocation/profiling helpers, DSP RPC/lib

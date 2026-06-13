@@ -3082,6 +3082,35 @@ fn main() -> Unit {
     local simp_lc_add_arg = ArgOp(value: ADD)
     let simp_lc_add_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_lc_add_srcs, arg: take simp_lc_add_arg)
     local simp_lc_add = reduce_load_index_collapse(cache: mut mcache, red: simp_lc_add_red)
+    let simp_dist_r = mk_range_int(cache: mut mcache, end: 4, axis_id: 50, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_dist_lhs = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: simp_dist_r, y: simp_bc_val)
+    local simp_dist_srcs = List.new<Int>()
+    pushi(l: mut simp_dist_srcs, v: simp_dist_lhs)
+    pushi(l: mut simp_dist_srcs, v: simp_dist_r)
+    local simp_dist_arg = ArgOp(value: ADD)
+    let simp_dist_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_dist_srcs, arg: take simp_dist_arg)
+    local simp_dist = reduce_collapse(cache: mut mcache, red: simp_dist_red, u: simp_dist_lhs)
+    let simp_gate_r = mk_range_int(cache: mut mcache, end: 4, axis_id: 51, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_gate_x = mk_define_var(cache: mut mcache, name: read "simp_gate", min_val: 0, max_val: 1, dt: read dt_bool())
+    let simp_gate_lt = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_gate_r, y: simp_bc_cut2)
+    let simp_gate_and = mk_alu2(cache: mut mcache, op: AND, dt: read dt_bool(), x: simp_gate_x, y: simp_gate_lt)
+    let simp_gate_where = mk_where(cache: mut mcache, dt: read i32, cond: simp_gate_and, tval: simp_bc_val, fval: simp_bc_zero)
+    local simp_gate_srcs = List.new<Int>()
+    pushi(l: mut simp_gate_srcs, v: simp_gate_where)
+    pushi(l: mut simp_gate_srcs, v: simp_gate_r)
+    local simp_gate_arg = ArgOp(value: ADD)
+    let simp_gate_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_gate_srcs, arg: take simp_gate_arg)
+    local simp_gate = reduce_collapse(cache: mut mcache, red: simp_gate_red, u: simp_gate_where)
+    let simp_boolmul_r = mk_range_int(cache: mut mcache, end: 4, axis_id: 52, axis_type: read AXIS_LOOP, dt: read i32)
+    let simp_boolmul_lt = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: simp_boolmul_r, y: simp_bc_cut2)
+    let simp_boolmul_cast = mk_cast(cache: mut mcache, x: simp_boolmul_lt, dt: read i32)
+    let simp_boolmul_mul = mk_alu2(cache: mut mcache, op: MUL, dt: read i32, x: simp_bc_val, y: simp_boolmul_cast)
+    local simp_boolmul_srcs = List.new<Int>()
+    pushi(l: mut simp_boolmul_srcs, v: simp_boolmul_mul)
+    pushi(l: mut simp_boolmul_srcs, v: simp_boolmul_r)
+    local simp_boolmul_arg = ArgOp(value: ADD)
+    let simp_boolmul_red = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take simp_boolmul_srcs, arg: take simp_boolmul_arg)
+    local simp_boolmul = reduce_collapse(cache: mut mcache, red: simp_boolmul_red, u: simp_boolmul_mul)
     showi(label: read "codegen.simplify count divmod = ", v: count_divmod(cache: read mcache, x: simp_divmod))
     match simp_flat {
         Some(v) => { showb(label: read "codegen.simplify flatten range = ", v: node_op(cache: read mcache, id: v) == END && node_num_src(cache: read mcache, id: v) == 3) }
@@ -3159,6 +3188,18 @@ fn main() -> Unit {
             showb(label: read "codegen.simplify load-index add lift = ", v: node_op(cache: read mcache, id: v) == WHERE && node_op(cache: read mcache, id: lc_add_cond) == AND && no_range(cache: read mcache, u: lc_add_tval) && spec_type_verify(cache: read mcache, id: v))
         }
         None => { showb(label: read "codegen.simplify load-index add lift = ", v: false) }
+    }
+    match simp_dist {
+        Some(v) => { showb(label: read "codegen.simplify reduce add distribution = ", v: node_op(cache: read mcache, id: v) == ADD && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify reduce add distribution = ", v: false) }
+    }
+    match simp_gate {
+        Some(v) => { showb(label: read "codegen.simplify reduce and where = ", v: node_op(cache: read mcache, id: v) == MUL && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify reduce and where = ", v: false) }
+    }
+    match simp_boolmul {
+        Some(v) => { showb(label: read "codegen.simplify reduce bool mul gate = ", v: node_op(cache: read mcache, id: v) == MUL && no_range(cache: read mcache, u: v) && spec_type_verify(cache: read mcache, id: v)) }
+        None => { showb(label: read "codegen.simplify reduce bool mul gate = ", v: false) }
     }
     let pr_r0 = mk_range_int(cache: mut mcache, end: 4, axis_id: 61, axis_type: read AXIS_LOOP, dt: read i32)
     let pr_r1 = mk_range_int(cache: mut mcache, end: 3, axis_id: 62, axis_type: read AXIS_REDUCE, dt: read i32)

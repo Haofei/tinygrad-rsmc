@@ -329,6 +329,18 @@ fn reduce_unparented(cache: mut UOpCache, red: Int) -> Option<Int> {
 fn reduce_collapse(cache: mut UOpCache, red: Int, u: Int) -> Option<Int> {
     if node_op(cache: read cache, id: red) != REDUCE { return None }
     if no_range(cache: read cache, u: u) { return Some(graph_rewrite(cache: mut cache, id: u)) }
+    match simplify_reduce_distribute_add(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match simplify_reduce_and_where(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match simplify_reduce_mul_casted_bool(cache: mut cache, red: red) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
     match reduce_bound_collapse(cache: mut cache, red: red) {
         Some(r) => { return Some(r) }
         None => {}
@@ -457,6 +469,96 @@ fn simplify_reduce_count_times_value(cache: mut UOpCache, count: Int, r: Int, va
     let cval = mk_cast(cache: mut cache, x: clamped, dt: read node_dtype(cache: read cache, id: val))
     let mul = mk_alu2(cache: mut cache, op: MUL, dt: read node_full_dtype(cache: read cache, id: val), x: cval, y: val)
     return Some(graph_rewrite(cache: mut cache, id: mul))
+}
+
+fn simplify_rebuild_reduce_value(cache: mut UOpCache, red: Int, value: Int) -> Int {
+    local src = List.new<Int>()
+    List.push<Int>(list: mut src, value: read value)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: red) {
+        List.push<Int>(list: mut src, value: read node_src_id(cache: read cache, id: red, k: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: red)
+    return intern(cache: mut cache, op: REDUCE, dt: read node_full_dtype(cache: read cache, id: value), src: take src, arg: take arg)
+}
+
+fn simplify_reduce_distribute_add(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE || simplify_reduce_is_add(cache: read cache, red: red) == false { return None }
+    if node_num_src(cache: read cache, id: red) < 2 { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    if node_op(cache: read cache, id: value) != ADD || node_num_src(cache: read cache, id: value) != 2 { return None }
+    let x = node_src_id(cache: read cache, id: value, k: 0)
+    let y = node_src_id(cache: read cache, id: value, k: 1)
+    let rx = simplify_rebuild_reduce_value(cache: mut cache, red: red, value: x)
+    let ry = simplify_rebuild_reduce_value(cache: mut cache, red: red, value: y)
+    let add = mk_alu2(cache: mut cache, op: ADD, dt: read node_full_dtype(cache: read cache, id: value), x: rx, y: ry)
+    return Some(graph_rewrite(cache: mut cache, id: add))
+}
+
+fn simplify_reduce_and_where(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE || simplify_reduce_is_add(cache: read cache, red: red) == false { return None }
+    if node_num_src(cache: read cache, id: red) < 2 { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    if node_op(cache: read cache, id: value) != WHERE || node_num_src(cache: read cache, id: value) != 3 { return None }
+    let cond = node_src_id(cache: read cache, id: value, k: 0)
+    let c = node_src_id(cache: read cache, id: value, k: 1)
+    let fval = node_src_id(cache: read cache, id: value, k: 2)
+    if simplify_is_zero_const(cache: read cache, id: fval) == false { return None }
+    if node_op(cache: read cache, id: cond) != AND || node_num_src(cache: read cache, id: cond) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: cond, k: 0)
+    let b = node_src_id(cache: read cache, id: cond, k: 1)
+    let mut x = a
+    let mut y = b
+    if node_op(cache: read cache, id: x) != DEFINE_VAR && node_op(cache: read cache, id: y) == DEFINE_VAR {
+        x = b
+        y = a
+    }
+    if node_op(cache: read cache, id: x) != DEFINE_VAR { return None }
+    let inner_dt = node_full_dtype(cache: read cache, id: c)
+    let inner = mk_where(cache: mut cache, dt: read inner_dt, cond: y, tval: c, fval: fval)
+    let rinner = simplify_rebuild_reduce_value(cache: mut cache, red: red, value: inner)
+    let xcast_dt = node_dtype(cache: read cache, id: c)
+    let xcast = mk_cast(cache: mut cache, x: x, dt: read xcast_dt)
+    let out_dt = node_full_dtype(cache: read cache, id: c)
+    let out = mk_alu2(cache: mut cache, op: MUL, dt: read out_dt, x: rinner, y: xcast)
+    return Some(graph_rewrite(cache: mut cache, id: out))
+}
+
+fn simplify_mul_casted_bool(cache: mut UOpCache, value: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: value) != MUL || node_num_src(cache: read cache, id: value) != 2 { return None }
+    let a = node_src_id(cache: read cache, id: value, k: 0)
+    let b = node_src_id(cache: read cache, id: value, k: 1)
+    let mut x = a
+    let mut gate_cast = b
+    if node_op(cache: read cache, id: gate_cast) != CAST && node_op(cache: read cache, id: x) == CAST {
+        x = b
+        gate_cast = a
+    }
+    if node_op(cache: read cache, id: gate_cast) != CAST || node_num_src(cache: read cache, id: gate_cast) != 1 { return None }
+    let gate = node_src_id(cache: read cache, id: gate_cast, k: 0)
+    if dtype_is_bool(d: read node_dtype(cache: read cache, id: gate)) == false { return None }
+    let zero_dt = node_dtype(cache: read cache, id: x)
+    let zero = mk_const_int(cache: mut cache, dt: read zero_dt, v: 0)
+    let out_dt = node_full_dtype(cache: read cache, id: x)
+    return Some(mk_where(cache: mut cache, dt: read out_dt, cond: gate, tval: x, fval: zero))
+}
+
+fn simplify_reduce_mul_casted_bool(cache: mut UOpCache, red: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: red) != REDUCE { return None }
+    if node_num_src(cache: read cache, id: red) < 2 { return None }
+    let value = node_src_id(cache: read cache, id: red, k: 0)
+    match simplify_mul_casted_bool(cache: mut cache, value: value) {
+        Some(v) => {
+            let new_red = simplify_rebuild_reduce_value(cache: mut cache, red: red, value: v)
+            match reduce_bound_collapse(cache: mut cache, red: new_red) {
+                Some(r) => { return Some(r) }
+                None => { return Some(graph_rewrite(cache: mut cache, id: new_red)) }
+            }
+        }
+        None => {}
+    }
+    return None
 }
 
 fn reduce_bound_collapse(cache: mut UOpCache, red: Int) -> Option<Int> {

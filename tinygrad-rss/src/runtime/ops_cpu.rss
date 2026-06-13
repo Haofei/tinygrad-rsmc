@@ -1,0 +1,160 @@
+features: local
+
+struct RuntimeTask derives(Clone) {
+    name: String,
+    args: List<Int>,
+    threads: Int,
+}
+
+struct CPUWorkerState derives(Clone) {
+    thread_id: Int,
+    tasks: List<RuntimeTask>,
+    error_state: Bool,
+}
+
+struct CPUComputeQueueState derives(Clone) {
+    tasks: List<RuntimeTask>,
+    submitted: Bool,
+}
+
+struct RuntimeSignalState derives(Clone) {
+    value: Int,
+    timestamp_ns: Int,
+    owner_thread: Int,
+    is_timeline: Bool,
+}
+
+struct RuntimeBufferState derives(Clone) {
+    handle: Int,
+    size: Int,
+    offset: Int,
+    device: String,
+}
+
+fn runtime_task_new(name: read String, args: read List<Int>, threads: Int) -> fresh RuntimeTask {
+    local copied = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read args) {
+        List.push<Int>(list: mut copied, value: read List.get<Int>(list: read args, index: i))
+        i = i + 1
+    }
+    return RuntimeTask(name: String.copy(value: read name), args: take copied, threads: threads)
+}
+
+fn cpu_worker_new(thread_id: Int) -> fresh CPUWorkerState {
+    return CPUWorkerState(thread_id: thread_id, tasks: List.new<RuntimeTask>(), error_state: false)
+}
+
+fn cpu_queue_new() -> fresh CPUComputeQueueState {
+    return CPUComputeQueueState(tasks: List.new<RuntimeTask>(), submitted: false)
+}
+
+fn runtime_signal_new(value: Int, owner_thread: Int, is_timeline: Bool) -> fresh RuntimeSignalState {
+    return RuntimeSignalState(value: value, timestamp_ns: 0, owner_thread: owner_thread, is_timeline: is_timeline)
+}
+
+fn runtime_buffer_new(handle: Int, size: Int, offset: Int, device: read String) -> fresh RuntimeBufferState {
+    return RuntimeBufferState(handle: handle, size: size, offset: offset, device: String.copy(value: read device))
+}
+
+fn _sleep(signal: read RuntimeSignalState, time_spent_since_last_sleep_ms: Int) -> Bool {
+    if signal.is_timeline == false { return true }
+    return time_spent_since_last_sleep_ms >= 0 && signal.owner_thread >= 0
+}
+
+fn push_task(worker: mut CPUWorkerState, tid: Int, cmd: read String, args: read List<Int>) -> Unit {
+    let task = runtime_task_new(name: read cmd, args: read args, threads: tid + 1)
+    List.push<RuntimeTask>(list: mut worker.tasks, value: read task)
+    return Unit
+}
+
+fn run(worker: mut CPUWorkerState) -> Unit {
+    worker.error_state = false
+    return Unit
+}
+
+fn _exec(queue: mut CPUComputeQueueState, tid: Int, prg: read String, bufs: Int, args: read List<Int>) -> Int {
+    let task = runtime_task_new(name: read prg, args: read args, threads: tid + 1)
+    List.push<RuntimeTask>(list: mut queue.tasks, value: read task)
+    return bufs + List.len<Int>(list: read args)
+}
+
+fn _signal(signal: mut RuntimeSignalState, value: Int) -> Unit {
+    signal.value = value
+    return Unit
+}
+
+fn _wait(signal: read RuntimeSignalState, value: Int) -> Bool {
+    return signal.value >= value
+}
+
+fn _timestamp(signal: mut RuntimeSignalState, timestamp_ns: Int) -> Unit {
+    signal.timestamp_ns = timestamp_ns
+    return Unit
+}
+
+fn cmd(queue: mut CPUComputeQueueState, name: read String, args: read List<Int>, threads: Int) -> Unit {
+    let task = runtime_task_new(name: read name, args: read args, threads: threads)
+    List.push<RuntimeTask>(list: mut queue.tasks, value: read task)
+    return Unit
+}
+
+fn memory_barrier(queue: read CPUComputeQueueState) -> fresh CPUComputeQueueState {
+    local tasks = List.new<RuntimeTask>()
+    let mut i = 0
+    while i < List.len<RuntimeTask>(list: read queue.tasks) {
+        let task = List.get<RuntimeTask>(list: read queue.tasks, index: i)
+        List.push<RuntimeTask>(list: mut tasks, value: read task)
+        i = i + 1
+    }
+    return CPUComputeQueueState(tasks: take tasks, submitted: queue.submitted)
+}
+
+fn exec(queue: mut CPUComputeQueueState, prg: read String, args: read List<Int>, global_size: Int) -> Unit {
+    let mut threads = global_size
+    if threads < 1 { threads = 1 }
+    cmd(queue: mut queue, name: read prg, args: read args, threads: threads)
+    return Unit
+}
+
+fn wait(queue: mut CPUComputeQueueState, signal: read RuntimeSignalState, value: Int) -> Unit {
+    local args = List.new<Int>()
+    List.push<Int>(list: mut args, value: read signal.value)
+    List.push<Int>(list: mut args, value: read value)
+    cmd(queue: mut queue, name: read "wait", args: read args, threads: 1)
+    return Unit
+}
+
+fn timestamp(queue: mut CPUComputeQueueState, signal: read RuntimeSignalState) -> Unit {
+    local args = List.new<Int>()
+    List.push<Int>(list: mut args, value: read signal.timestamp_ns)
+    cmd(queue: mut queue, name: read "timestamp", args: read args, threads: 1)
+    return Unit
+}
+
+fn signal(queue: mut CPUComputeQueueState, signal_state: read RuntimeSignalState, value: Int) -> Unit {
+    local args = List.new<Int>()
+    List.push<Int>(list: mut args, value: read signal_state.value)
+    List.push<Int>(list: mut args, value: read value)
+    cmd(queue: mut queue, name: read "signal", args: read args, threads: 1)
+    return Unit
+}
+
+fn _submit(queue: mut CPUComputeQueueState, worker: mut CPUWorkerState) -> Unit {
+    let mut i = 0
+    while i < List.len<RuntimeTask>(list: read queue.tasks) {
+        let task = List.get<RuntimeTask>(list: read queue.tasks, index: i)
+        List.push<RuntimeTask>(list: mut worker.tasks, value: read task)
+        i = i + 1
+    }
+    queue.submitted = true
+    return Unit
+}
+
+fn _as_buffer(src: read RuntimeBufferState) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read src.handle)
+    List.push<Int>(list: mut out, value: read src.size)
+    List.push<Int>(list: mut out, value: read src.offset)
+    return take out
+}

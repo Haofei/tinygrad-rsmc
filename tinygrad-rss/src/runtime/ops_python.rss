@@ -92,6 +92,12 @@ fn eval_float(cache: read UOpCache, id: Int) -> Float {
     return 0.0
 }
 
+fn generic_wmma_helper(cache: mut UOpCache, a: Int, b: Int, acc: Int, n: Int, m: Int, k: Int) -> Int {
+    let arg = mk_wmma_arg(n: n, m: m, k: k, threads: 32, a_elems: 1, b_elems: 1, c_elems: 1, axis_fields: 0)
+    let dt = node_dtype(cache: read cache, id: acc)
+    return mk_wmma(cache: mut cache, a_id: a, b_id: b, acc_id: acc, dt: read dt, arg: read arg)
+}
+
 // --- tensor evaluator (CPU interpreter): materialize a node to a flat row-major Float array ---
 
 fn numel(shape: read List<Int>) -> Int {

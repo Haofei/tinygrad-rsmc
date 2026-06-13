@@ -1,0 +1,62 @@
+features: local
+
+struct DiskDeviceState derives(Clone) {
+    device: String,
+    size: Int,
+    refcount: Int,
+    opened: Bool,
+    iouring_ready: Bool,
+}
+
+struct DiskShardCopy derives(Clone) {
+    batch: Int,
+    copied_in: Int,
+    minor_offset: Int,
+    size: Int,
+}
+
+fn disk_device_new(device: read String) -> fresh DiskDeviceState {
+    return DiskDeviceState(device: String.copy(value: read device), size: 0, refcount: 0, opened: false, iouring_ready: false)
+}
+
+fn _might_open(dev: read DiskDeviceState, size: Int) -> fresh DiskDeviceState {
+    let mut new_size = dev.size
+    if size > new_size { new_size = size }
+    return DiskDeviceState(device: String.copy(value: read dev.device), size: new_size, refcount: dev.refcount + 1, opened: true, iouring_ready: dev.iouring_ready)
+}
+
+fn _might_close(dev: read DiskDeviceState) -> fresh DiskDeviceState {
+    let mut rc = dev.refcount - 1
+    if rc < 0 { rc = 0 }
+    let still_open = rc > 0
+    let mut size = dev.size
+    if still_open == false { size = 0 }
+    return DiskDeviceState(device: String.copy(value: read dev.device), size: size, refcount: rc, opened: still_open, iouring_ready: dev.iouring_ready)
+}
+
+fn _iouring_setup(dev: read DiskDeviceState) -> fresh DiskDeviceState {
+    return DiskDeviceState(device: String.copy(value: read dev.device), size: dev.size, refcount: dev.refcount, opened: dev.opened, iouring_ready: true)
+}
+
+fn _copyout_sharded(src: read RuntimeBufferState, size: Int, seg_len: Int) -> fresh List<DiskShardCopy> {
+    local out = List.new<DiskShardCopy>()
+    let mut copied = 0
+    let mut batch = 0
+    let mut minor_offset = src.offset
+    let mut step = seg_len
+    if step < 1 { step = size }
+    if step < 1 { step = 1 }
+    while copied < size {
+        let mut chunk = step
+        if copied + chunk > size { chunk = size - copied }
+        List.push<DiskShardCopy>(list: mut out, value: read DiskShardCopy(batch: batch, copied_in: copied, minor_offset: minor_offset, size: chunk))
+        copied = copied + chunk
+        minor_offset = 0
+        batch = batch + 1
+    }
+    return take out
+}
+
+fn _offset(buf: read RuntimeBufferState, size: Int, offset: Int) -> fresh RuntimeBufferState {
+    return RuntimeBufferState(handle: buf.handle, size: size, offset: buf.offset + offset, device: String.copy(value: read buf.device))
+}

@@ -1,0 +1,17 @@
+features: local
+
+struct NullTransferEvent derives(Clone) {
+    src_device: String,
+    dest_device: String,
+    size: Int,
+}
+
+fn null_transfer_event(src_device: read String, dest_device: read String, size: Int) -> fresh NullTransferEvent {
+    return NullTransferEvent(src_device: String.copy(value: read src_device), dest_device: String.copy(value: read dest_device), size: size)
+}
+
+fn _transfer(dest: read RuntimeBufferState, src: read RuntimeBufferState, sz: Int, src_dev: read String, dest_dev: read String) -> fresh RuntimeBufferState {
+    let mut new_size = dest.size
+    if sz < new_size { new_size = sz }
+    return RuntimeBufferState(handle: dest.handle, size: new_size, offset: dest.offset, device: String.copy(value: read dest_dev))
+}

@@ -461,7 +461,58 @@ fn rangeify_remove_any_reduce_has_buffer(cache: read UOpCache, reduces: read Lis
     return false
 }
 
-fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option<Int> {
+fn rangeify_pcontig_value() -> Int {
+    return getenv(name: read "PCONTIG", default_value: 0)
+}
+
+fn rangeify_numel_sum(cache: read UOpCache, ids: read List<Int>) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read ids) {
+        local shape = uop_shape(cache: read cache, id: List.get<Int>(list: read ids, index: i))
+        total = total + prod(x: read shape)
+        i = i + 1
+    }
+    return total
+}
+
+fn rangeify_collect_local_index_ranges(cache: read UOpCache, indexes: read List<Int>) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read indexes) {
+        let idx = List.get<Int>(list: read indexes, index: i)
+        if node_num_src(cache: read cache, id: idx) > 0 {
+            let base = node_src_id(cache: read cache, id: idx, k: 0)
+            if node_op(cache: read cache, id: base) == STAGE && node_bufferize_addrspace(cache: read cache, id: base) == ADDR_LOCAL {
+                let mut j = 1
+                while j < node_num_src(cache: read cache, id: idx) {
+                    local ranges = uop_ranges(cache: read cache, id: node_src_id(cache: read cache, id: idx, k: j))
+                    let mut k = 0
+                    while k < List.len<Int>(list: read ranges) {
+                        indexing_add_unique(items: mut out, value: List.get<Int>(list: read ranges, index: k))
+                        k = k + 1
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return take out
+}
+
+fn rangeify_expr_has_reduce_range(cache: read UOpCache, id: Int) -> Bool {
+    local ranges = uop_ranges(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read ranges) {
+        let r = List.get<Int>(list: read ranges, index: i)
+        if node_op(cache: read cache, id: r) == RANGE && node_range_type(cache: read cache, id: r) == AXIS_REDUCE { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn remove_bufferize_with_pcontig(cache: mut UOpCache, src: Int, buf: Int, idx: Int, pcontig: Int) -> Option<Int> {
     if node_op(cache: read cache, id: buf) != STAGE { return None }
     if node_op(cache: read cache, id: idx) != INDEX { return None }
     if node_bufferize_removable(cache: read cache, id: buf) == false { return None }
@@ -473,22 +524,48 @@ fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option
     local indexes = List.new<Int>()
     local reduces = List.new<Int>()
     rangeify_remove_collect_cost(cache: read cache, id: src, bufs: mut accessed_buffers, indexes: mut indexes, reduces: mut reduces)
-    if List.len<Int>(list: read accessed_buffers) > 3 { return None }
-    if rangeify_remove_any_reduce_has_buffer(cache: read cache, reduces: read reduces) { return None }
+    if List.len<Int>(list: read accessed_buffers) > 3 && pcontig <= 2 { return None }
+    let reduce_has_buffer = rangeify_remove_any_reduce_has_buffer(cache: read cache, reduces: read reduces)
     local old_ids = List.new<Int>()
     local new_ids = List.new<Int>()
+    local pcontig_old_ids = List.new<Int>()
+    local pcontig_new_ids = List.new<Int>()
+    local exclude_ranges = rangeify_collect_local_index_ranges(cache: read cache, indexes: read indexes)
     let mut i = 1
     while i < node_num_src(cache: read cache, id: buf) {
         let old_range = node_src_id(cache: read cache, id: buf, k: i)
         let new_range = node_src_id(cache: read cache, id: idx, k: i)
         if node_op(cache: read cache, id: old_range) != CONST && uop_is_invalid(cache: read cache, id: new_range) == false {
-            List.push<Int>(list: mut old_ids, value: read old_range)
-            List.push<Int>(list: mut new_ids, value: read new_range)
+            if reduce_has_buffer && (indexing_list_contains(items: read exclude_ranges, value: old_range) || rangeify_expr_has_reduce_range(cache: read cache, id: new_range)) {
+                List.push<Int>(list: mut pcontig_old_ids, value: read old_range)
+                List.push<Int>(list: mut pcontig_new_ids, value: read new_range)
+            } else {
+                List.push<Int>(list: mut old_ids, value: read old_range)
+                List.push<Int>(list: mut new_ids, value: read new_range)
+            }
         }
         i = i + 1
     }
+    if reduce_has_buffer {
+        if pcontig <= 2 { return None }
+        local buf_shape = uop_shape(cache: read cache, id: buf)
+        let out_numel = prod(x: read buf_shape) + 1
+        let in_numel = rangeify_numel_sum(cache: read cache, ids: read accessed_buffers) + 1
+        if out_numel < in_numel * 10 { return None }
+        if List.len<Int>(list: read old_ids) == 0 { return None }
+        if List.len<Int>(list: read pcontig_old_ids) > 0 {
+            let ret = uop_substitute_many(cache: mut cache, id: src, old_ids: read old_ids, new_ids: read new_ids)
+            local opts = mk_bufferize_arg_none(addrspace: read ADDR_LOCAL, removable: true)
+            let stage = mk_stage(cache: mut cache, x: ret, ranges: read pcontig_old_ids, opts: read opts)
+            return Some(mk_index(cache: mut cache, base: stage, srcs: read pcontig_new_ids, ptr: false))
+        }
+    }
     if List.len<Int>(list: read old_ids) == 0 { return None }
     return Some(uop_substitute_many(cache: mut cache, id: src, old_ids: read old_ids, new_ids: read new_ids))
+}
+
+fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option<Int> {
+    return remove_bufferize_with_pcontig(cache: mut cache, src: src, buf: buf, idx: idx, pcontig: rangeify_pcontig_value())
 }
 
 fn remove_noop_bufferize(cache: mut UOpCache, idx: Int, b2: Int) -> Option<Int> {

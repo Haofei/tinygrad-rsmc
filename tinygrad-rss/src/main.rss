@@ -4965,6 +4965,31 @@ fn main() -> Unit {
         Some(r) => { rfac_remove_reduce_ok = false }
         None => { rfac_remove_reduce_ok = true }
     }
+    let rfac_pcontig_r0 = mk_range_int(cache: mut mcache, end: 64, axis_id: 140, axis_type: read AXIS_LOOP, dt: read dt_int32())
+    let rfac_pcontig_r1 = mk_range_int(cache: mut mcache, end: 64, axis_id: 141, axis_type: read AXIS_LOOP, dt: read dt_int32())
+    let rfac_pcontig_new0 = mk_range_int(cache: mut mcache, end: 64, axis_id: 142, axis_type: read AXIS_LOOP, dt: read dt_int32())
+    let rfac_pcontig_new1 = mk_range_int(cache: mut mcache, end: 64, axis_id: 143, axis_type: read AXIS_REDUCE, dt: read dt_int32())
+    local rfac_pcontig_src_shape = shp1(a: 4)
+    let rfac_pcontig_src_buf = mk_param(cache: mut mcache, slot: 70, dt: read dt_float32(), shape: read rfac_pcontig_src_shape, name: read "pcsrc")
+    local rfac_pcontig_reduce_axes = shp1(a: 0)
+    let rfac_pcontig_reduce = mk_sum(cache: mut mcache, x: rfac_pcontig_src_buf, axes: read rfac_pcontig_reduce_axes)
+    local rfac_pcontig_ranges = List.new<Int>()
+    List.push<Int>(list: mut rfac_pcontig_ranges, value: read rfac_pcontig_r0)
+    List.push<Int>(list: mut rfac_pcontig_ranges, value: read rfac_pcontig_r1)
+    let rfac_pcontig_stage = mk_stage(cache: mut mcache, x: rfac_pcontig_reduce, ranges: read rfac_pcontig_ranges, opts: read rfac_remove_opts)
+    local rfac_pcontig_idx_ranges = List.new<Int>()
+    List.push<Int>(list: mut rfac_pcontig_idx_ranges, value: read rfac_pcontig_new0)
+    List.push<Int>(list: mut rfac_pcontig_idx_ranges, value: read rfac_pcontig_new1)
+    let rfac_pcontig_idx = mk_index(cache: mut mcache, base: rfac_pcontig_stage, srcs: read rfac_pcontig_idx_ranges, ptr: false)
+    let mut rfac_pcontig_ok = false
+    match remove_bufferize_with_pcontig(cache: mut mcache, src: rfac_pcontig_reduce, buf: rfac_pcontig_stage, idx: rfac_pcontig_idx, pcontig: 3) {
+        Some(r) => {
+            let local_stage = node_src_id(cache: read mcache, id: r, k: 0)
+            let psrc = node_src_id(cache: read mcache, id: local_stage, k: 0)
+            rfac_pcontig_ok = node_op(cache: read mcache, id: r) == INDEX && node_op(cache: read mcache, id: local_stage) == STAGE && node_bufferize_addrspace(cache: read mcache, id: local_stage) == ADDR_LOCAL && node_num_src(cache: read mcache, id: local_stage) == 2 && node_src_id(cache: read mcache, id: local_stage, k: 1) == rfac_pcontig_r1 && node_src_id(cache: read mcache, id: r, k: 1) == rfac_pcontig_new1 && node_op(cache: read mcache, id: psrc) == REDUCE && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     local rfac_wmma_ctx = indexing_context_new()
     local rfac_wmma_arg = mk_wmma_arg(n: 1, m: 1, k: 1, threads: 1, a_elems: 4, b_elems: 4, c_elems: 4, axis_fields: 0)
     let rfac_shaped_wmma = mk_shaped_wmma(cache: mut mcache, a_id: mstack4, b_id: mstack4, acc_id: mstack4, dt: read mstack4dt, arg: read rfac_wmma_arg)
@@ -5066,7 +5091,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_special_split_ok && rfac_assign_ok && rfac_cycle_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_special_split_ok && rfac_assign_ok && rfac_cycle_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_pcontig_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

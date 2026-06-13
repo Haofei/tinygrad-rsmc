@@ -531,16 +531,18 @@ Integrated pieces:
   `SINK`, and debuf now emits the upstream max-shape param plus shrink-back path for symbolic
   shapes. Assign repair now carries the upstream circular-dependency predicate and avoids adding
   the dependency edge that would create a cycle; exact Python-style exception propagation for this
-  diagnostic remains pending. The later PCONTIG local-buffer fallback and richer symbolic max-shape
-  inference are still intentionally unported.
+  diagnostic remains pending. `remove_bufferize` now carries the upstream `PCONTIG > 2`
+  relaxations for high-buffer-count expressions and reduce-backed partial-contiguous local
+  re-bufferization. Richer symbolic max-shape inference and full env-configured buffer caps remain
+  intentionally unported.
   The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
   stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,
   self-stores, `END(NOOP)`, invalid writes, `AFTER(..., NOOP)`, reshape-through-`MSELECT`/
   `MSTACK`, and reshape argument stripping on `CALL`.
   It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
-  modeling beyond these guards, partial-PCONTIG/local bufferize cost forms, env-configured buffer
-  caps, and full assign-dependency repair remain later rangeify slices.
+  modeling beyond these guards, full env-configured buffer caps, and exact exception propagation
+  remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
   normalizing the input through `CONTIGUOUS`, selecting/copying each shard to the target device,

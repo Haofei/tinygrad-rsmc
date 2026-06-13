@@ -1,0 +1,139 @@
+features: local
+
+struct AMDReg derives(Clone) {
+    offset: Int,
+    size: Int,
+    neg: Bool,
+    abs: Bool,
+    hi: Bool,
+}
+
+struct AMDBitField derives(Clone) {
+    name: String,
+    hi: Int,
+    lo: Int,
+    default: Int,
+}
+
+struct AMDInst derives(Clone) {
+    name: String,
+    raw: Int,
+    fields: List<AMDBitField>,
+    operands: List<AMDReg>,
+}
+
+fn amd_reg(offset: Int, size: Int) -> fresh AMDReg {
+    return AMDReg(offset: offset, size: size, neg: false, abs: false, hi: false)
+}
+
+fn h(reg: read AMDReg) -> fresh AMDReg {
+    return AMDReg(offset: reg.offset, size: reg.size, neg: reg.neg, abs: reg.abs, hi: true)
+}
+
+fn l(reg: read AMDReg) -> fresh AMDReg {
+    return AMDReg(offset: reg.offset, size: reg.size, neg: reg.neg, abs: reg.abs, hi: false)
+}
+
+fn amd_reg_h(reg: read AMDReg) -> fresh AMDReg { return h(reg: read reg) }
+
+fn amd_reg_l(reg: read AMDReg) -> fresh AMDReg { return l(reg: read reg) }
+
+fn fmt(reg: read AMDReg, parens: Bool, upper: Bool) -> fresh String {
+    let mut prefix = "s"
+    if reg.offset >= 256 { prefix = "v" }
+    if reg.offset >= 108 && reg.offset < 124 { prefix = "ttmp" }
+    let mut body = String.concat(left: read prefix, right: read Int.to_string(value: read reg.offset))
+    if reg.size > 1 {
+        body = String.concat(left: read prefix, right: read String.concat(left: read "[", right: read String.concat(left: read Int.to_string(value: read reg.offset), right: read "]")))
+    }
+    if reg.hi { body = String.concat(left: read body, right: read ".h") }
+    if reg.neg { body = String.concat(left: read "-", right: read body) }
+    if parens { return String.concat(left: read "(", right: read String.concat(left: read body, right: read ")")) }
+    return String.copy(value: read body)
+}
+
+fn enum(field: read AMDBitField, enum_name: read String) -> fresh AMDBitField {
+    return AMDBitField(name: String.concat(left: read field.name, right: read String.concat(left: read ":", right: read enum_name)), hi: field.hi, lo: field.lo, default: field.default)
+}
+
+fn decode(raw: Int, field: read AMDBitField) -> Int {
+    let width = field.hi - field.lo + 1
+    let mask = (1 << width) - 1
+    return (raw >> field.lo) & mask
+}
+
+fn _f32(bits: Int) -> Float { return Int.to_float(value: read bits) }
+
+fn _needs_literal(value: Int) -> Bool {
+    if value >= 0 && value <= 64 { return false }
+    if value < 0 && value >= 0 - 16 { return false }
+    return true
+}
+
+fn _get_variant(name: read String, suffix: read String) -> fresh String {
+    return String.concat(left: read name, right: read suffix)
+}
+
+fn _canonical_name(name: read String) -> fresh String {
+    return String.copy(value: read name)
+}
+
+fn __init_subclass__(name: read String) -> fresh String {
+    return String.concat(left: read name, right: read ":fields")
+}
+
+fn amd_inst_new(name: read String, raw: Int) -> fresh AMDInst {
+    return AMDInst(name: String.copy(value: read name), raw: raw, fields: List.new<AMDBitField>(), operands: List.new<AMDReg>())
+}
+
+fn op_name(inst: read AMDInst) -> fresh String {
+    return _canonical_name(name: read inst.name)
+}
+
+fn operands(inst: read AMDInst) -> fresh List<AMDReg> {
+    local out = List.new<AMDReg>()
+    let mut i = 0
+    while i < List.len<AMDReg>(list: read inst.operands) {
+        List.push<AMDReg>(list: mut out, value: read List.get<AMDReg>(list: read inst.operands, index: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn op_bits(inst: read AMDInst) -> Int { return inst.raw }
+
+fn op_regs(inst: read AMDInst) -> Int { return List.len<AMDReg>(list: read inst.operands) }
+
+fn canonical_op_bits(inst: read AMDInst) -> Int { return inst.raw }
+
+fn canonical_operands(inst: read AMDInst) -> fresh List<AMDReg> { return operands(inst: read inst) }
+
+fn canonical_op_regs(inst: read AMDInst) -> Int { return op_regs(inst: read inst) }
+
+fn num_srcs(inst: read AMDInst) -> Int { return List.len<AMDReg>(list: read inst.operands) }
+
+fn disasm(inst: read AMDInst) -> fresh String {
+    return String.concat(left: read op_name(inst: read inst), right: read String.concat(left: read " ", right: read Int.to_string(value: read inst.raw)))
+}
+
+fn _literal(inst: read AMDInst) -> Int {
+    if _needs_literal(value: inst.raw) { return inst.raw }
+    return 0
+}
+
+fn _variant_suffix(inst: read AMDInst) -> fresh String {
+    if _needs_literal(value: inst.raw) { return String.copy(value: read "_LIT") }
+    return String.copy(value: read "")
+}
+
+fn from_bytes(data: read List<Int>) -> fresh AMDInst {
+    let mut raw = 0
+    let mut i = 0
+    while i < List.len<Int>(list: read data) && i < 4 {
+        raw = raw | (List.get<Int>(list: read data, index: i) << (i * 8))
+        i = i + 1
+    }
+    local inst = amd_inst_new(name: read "amd_inst", raw: raw)
+    List.push<AMDReg>(list: mut inst.operands, value: read amd_reg(offset: raw & 255, size: 1))
+    return take inst
+}

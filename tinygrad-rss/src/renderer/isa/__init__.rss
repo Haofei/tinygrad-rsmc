@@ -1,0 +1,66 @@
+features: local
+
+struct ISARegister derives(Clone) {
+    name: String,
+    index: Int,
+    width: Int,
+}
+
+struct ISAInstruction derives(Clone) {
+    op: String,
+    dst: ISARegister,
+    srcs: List<ISARegister>,
+    imm: Int,
+}
+
+fn isa_register(name: read String, index: Int, width: Int) -> fresh ISARegister {
+    return ISARegister(name: String.copy(value: read name), index: index, width: width)
+}
+
+fn isa_instruction(op: read String, dst: read ISARegister, srcs: read List<ISARegister>, imm: Int) -> fresh ISAInstruction {
+    local copied = List.new<ISARegister>()
+    let mut i = 0
+    while i < List.len<ISARegister>(list: read srcs) {
+        List.push<ISARegister>(list: mut copied, value: read List.get<ISARegister>(list: read srcs, index: i))
+        i = i + 1
+    }
+    return ISAInstruction(op: String.copy(value: read op), dst: ISARegister(name: String.copy(value: read dst.name), index: dst.index, width: dst.width), srcs: take copied, imm: imm)
+}
+
+fn cons(reg: read ISARegister) -> fresh List<ISARegister> {
+    local out = List.new<ISARegister>()
+    List.push<ISARegister>(list: mut out, value: read reg)
+    return take out
+}
+
+fn vreg(prefix: read String, index: Int, width: Int) -> fresh ISARegister {
+    return isa_register(name: read String.concat(left: read prefix, right: read Int.to_string(value: read index)), index: index, width: width)
+}
+
+fn is_two_address(inst: read ISAInstruction) -> Bool {
+    return inst.op == "add" || inst.op == "sub" || inst.op == "imul" || inst.op == "idiv"
+}
+
+fn stack_pointer() -> fresh ISARegister { return isa_register(name: read "rsp", index: 4, width: 64) }
+
+fn spill(slot: Int, reg: read ISARegister) -> fresh ISAInstruction {
+    local srcs = cons(reg: read reg)
+    let sp = stack_pointer()
+    return isa_instruction(op: read "spill", dst: read sp, srcs: read srcs, imm: slot)
+}
+
+fn fill(slot: Int, reg: read ISARegister) -> fresh ISAInstruction {
+    local srcs = List.new<ISARegister>()
+    return isa_instruction(op: read "fill", dst: read reg, srcs: read srcs, imm: slot)
+}
+
+fn asm_str(insts: read List<ISAInstruction>, function_name: read String) -> fresh String {
+    let mut out = String.concat(left: read function_name, right: read ":")
+    let mut i = 0
+    while i < List.len<ISAInstruction>(list: read insts) {
+        let inst = List.get<ISAInstruction>(list: read insts, index: i)
+        out = String.concat(left: read out, right: read String.concat(left: read "\n  ", right: read inst.op))
+        i = i + 1
+    }
+    return String.copy(value: read out)
+}

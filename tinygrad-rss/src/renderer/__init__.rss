@@ -1,0 +1,22 @@
+features: local
+
+struct RendererProgram derives(Clone) {
+    name: String,
+    uops: List<Int>,
+    source: String,
+}
+
+fn simplify(src: read String) -> fresh String {
+    return String.copy(value: read src)
+}
+
+fn from_uops(name: read String, uops: read List<Int>) -> fresh RendererProgram {
+    local copied = List.new<Int>()
+    let mut i = 0
+    while i < List.len<Int>(list: read uops) {
+        List.push<Int>(list: mut copied, value: read List.get<Int>(list: read uops, index: i))
+        i = i + 1
+    }
+    local source = String.concat(left: read "program ", right: read name)
+    return RendererProgram(name: String.copy(value: read name), uops: take copied, source: take source)
+}

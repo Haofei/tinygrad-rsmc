@@ -1,0 +1,13 @@
+features: local
+
+fn assemble_linear(lines: read List<String>, arch: read String) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read arch))
+    let mut i = 0
+    while i < List.len<String>(list: read lines) {
+        let line = List.get<String>(list: read lines, index: i)
+        List.push<Int>(list: mut out, value: read String.len(value: read line))
+        i = i + 1
+    }
+    return take out
+}

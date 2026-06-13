@@ -1,0 +1,46 @@
+features: local
+
+struct AMDFormatTable derives(Clone) {
+    archs: List<String>,
+    formats: List<String>,
+}
+
+fn _matches(data: read List<Int>, format_name: read String) -> Bool {
+    return List.len<Int>(list: read data) >= 4 && String.len(value: read format_name) > 0
+}
+
+fn _load_formats() -> fresh AMDFormatTable {
+    local archs = List.new<String>()
+    List.push<String>(list: mut archs, value: read "rdna3")
+    List.push<String>(list: mut archs, value: read "rdna4")
+    List.push<String>(list: mut archs, value: read "cdna")
+    local formats = List.new<String>()
+    List.push<String>(list: mut formats, value: read "VOP1")
+    List.push<String>(list: mut formats, value: read "VOP2")
+    List.push<String>(list: mut formats, value: read "SOPP")
+    return AMDFormatTable(archs: take archs, formats: take formats)
+}
+
+fn detect_format(data: read List<Int>, arch: read String) -> fresh String {
+    let table = _load_formats()
+    let mut i = 0
+    while i < List.len<String>(list: read table.formats) {
+        let f = List.get<String>(list: read table.formats, index: i)
+        if _matches(data: read data, format_name: read f) { return String.copy(value: read f) }
+        i = i + 1
+    }
+    return String.copy(value: read "UNKNOWN")
+}
+
+fn decode_inst(data: read List<Int>, arch: read String) -> fresh AMDInst {
+    local fmt_name = detect_format(data: read data, arch: read arch)
+    let inst = from_bytes(data: read data)
+    local fields = List.new<AMDBitField>()
+    local ops = List.new<AMDReg>()
+    let mut i = 0
+    while i < List.len<AMDReg>(list: read inst.operands) {
+        List.push<AMDReg>(list: mut ops, value: read List.get<AMDReg>(list: read inst.operands, index: i))
+        i = i + 1
+    }
+    return AMDInst(name: take fmt_name, raw: inst.raw, fields: take fields, operands: take ops)
+}

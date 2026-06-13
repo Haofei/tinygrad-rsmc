@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 59 RSS files, about 37.2k LOC.
+  - integrated `tinygrad-rss/src`: 66 RSS files, about 37.7k LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -47,6 +47,9 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused runtime support batch: `runtime/support/hcq.py`, `runtime/support/memory.py`,
     `runtime/support/elf.py`, `runtime/support/compiler_cpu.py`, `runtime/support/c.py`, and
     `runtime/graph/hcq.py`: 167/167 rough symbols covered.
+  - focused renderer ISA/AMD batch: `renderer/amd/dsl.py`, `renderer/amd/elf.py`,
+    `renderer/amd/sqtt.py`, `renderer/isa/x86.py`, `renderer/__init__.py`,
+    `renderer/amd/__init__.py`, and `renderer/isa/__init__.py`: 135/135 rough symbols covered.
   - this is a batching compass only; symbol presence does not prove exact 1:1 semantics.
 
 Toolchain changes made to simplify the next port slices:
@@ -239,6 +242,14 @@ Integrated pieces:
   facades, parameter/prerender/postrender shells, and float-type spelling. These are deterministic
   RSS facades over the current UOp graph and string metadata, not real LLVM/PTX/WGSL/NIR backend
   emitters or native Mesa/LLVM/CUDA compiler integrations yet.
+- `renderer/__init__.rss`, `renderer/isa/__init__.rss`, `renderer/isa/x86.rss`,
+  `renderer/amd/__init__.rss`, `renderer/amd/dsl.rss`, `renderer/amd/elf.rss`, and
+  `renderer/amd/sqtt.rss`: first source-shaped renderer ISA/AMD facade batch. The integrated
+  names cover renderer program metadata, ISA register/instruction helpers, x86 instruction and
+  operand utility names, AMD DSL register/bitfield/instruction metadata, AMD format detection,
+  linear assembly byte shells, and SQTT packet/decode/map/format helper names. These are
+  deterministic state/string/byte facades, not exact x86 lowering, AMD instruction table parity,
+  or real machine-code assembly/disassembly yet.
 - `codegen/late/linearizer.rss`: first integrated source-shaped `tinygrad/codegen/late/linearizer.py`
   slice over interned UOp ids, covering the priority toposort used by `linearize(sink)`: run-count
   scoring from active ranges, upstream op priorities for `PARAM`/`DEFINE_VAR`/`DEFINE_REG`/
@@ -1191,8 +1202,9 @@ Major missing integrated work:
   IF rejection, remaining late expansion/devectorization, range simplification, GPU dims, ISA/regalloc,
   full symbolic estimates, compile/binary, and clear scope for GPU-only optimization passes remain.
 - `renderer/*`: exact target-specific compiler integration, full prefix emission, real LLVM/PTX/
-  WGSL/NIR emission, Mesa/LLVM/CUDA native bindings, and renderer policy beyond the source-shaped
-  facade names now in `renderer/*.rss`.
+  WGSL/NIR emission, Mesa/LLVM/CUDA native bindings, exact AMD instruction tables, x86 lowering,
+  real machine-code assembly/disassembly, and renderer policy beyond the source-shaped facade
+  names now in `renderer/*.rss`.
 - target-specific `runtime/*`, `runtime/support/*`, native device backends, and full JIT graph
   execution: the first source-shaped CPU/null/disk/Python runtime backend facades and HCQ/support
   graph facades are present, but real mmap/io_uring/thread/native-kernel execution, native

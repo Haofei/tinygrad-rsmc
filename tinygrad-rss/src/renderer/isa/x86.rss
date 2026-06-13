@@ -1,0 +1,126 @@
+features: local
+
+fn x86_inst(op: read String, dst: read ISARegister, src0: read ISARegister, src1: read ISARegister, imm_value: Int) -> fresh ISAInstruction {
+    local srcs = List.new<ISARegister>()
+    List.push<ISARegister>(list: mut srcs, value: read src0)
+    List.push<ISARegister>(list: mut srcs, value: read src1)
+    return isa_instruction(op: read op, dst: read dst, srcs: read srcs, imm: imm_value)
+}
+
+fn gated_load(base: read ISARegister, idx: Int, alt: read ISARegister, gate: Bool) -> fresh ISAInstruction {
+    local srcs = List.new<ISARegister>()
+    List.push<ISARegister>(list: mut srcs, value: read base)
+    List.push<ISARegister>(list: mut srcs, value: read alt)
+    let dst = vreg(prefix: read "xmm", index: idx, width: alt.width)
+    if gate { return isa_instruction(op: read "gated_load", dst: read dst, srcs: read srcs, imm: idx) }
+    return isa_instruction(op: read "load_alt", dst: read dst, srcs: read srcs, imm: idx)
+}
+
+fn gated_store(base: read ISARegister, idx: Int, val: read ISARegister, gate: Bool) -> fresh ISAInstruction {
+    local srcs = List.new<ISARegister>()
+    List.push<ISARegister>(list: mut srcs, value: read val)
+    let dst = ISARegister(name: String.copy(value: read base.name), index: base.index, width: base.width)
+    if gate { return isa_instruction(op: read "gated_store", dst: read dst, srcs: read srcs, imm: idx) }
+    return isa_instruction(op: read "store_skip", dst: read dst, srcs: read srcs, imm: idx)
+}
+
+fn is_foldable(use_count: Int, src_count: Int) -> Bool { return use_count == 1 && src_count == 1 }
+
+fn lane(reg: read ISARegister, element: Int) -> Int { return reg.index + element }
+
+fn to_int(dtype_bits: Int) -> Int {
+    if dtype_bits <= 16 { return 16 }
+    if dtype_bits <= 32 { return 32 }
+    return 64
+}
+
+fn def_reg(dtype_bits: Int, name: read String, index: Int) -> fresh ISARegister {
+    return isa_register(name: read name, index: index, width: dtype_bits)
+}
+
+fn imm(dtype_bits: Int, v: Int) -> fresh ISAInstruction {
+    local srcs = List.new<ISARegister>()
+    let dst = isa_register(name: read "imm", index: v, width: dtype_bits)
+    return isa_instruction(op: read "imm", dst: read dst, srcs: read srcs, imm: v)
+}
+
+fn to_imm(v: Int, dtype_bits: Int) -> fresh ISAInstruction { return imm(dtype_bits: dtype_bits, v: v) }
+
+fn cmp(a: read ISARegister, b: read ISARegister) -> fresh ISAInstruction {
+    return x86_inst(op: read "cmp", dst: read a, src0: read a, src1: read b, imm_value: 0)
+}
+
+fn vcmp(a: read ISARegister, b: read ISARegister, predicate: Int) -> fresh ISAInstruction {
+    return x86_inst(op: read "vcmp", dst: read a, src0: read a, src1: read b, imm_value: predicate)
+}
+
+fn vshufps(a: read ISARegister, b: read ISARegister, imm8: Int) -> fresh ISAInstruction {
+    let dst = vreg(prefix: read "xmm", index: a.index, width: 128)
+    return x86_inst(op: read "vshufps", dst: read dst, src0: read a, src1: read b, imm_value: imm8)
+}
+
+fn vshufpd(a: read ISARegister, b: read ISARegister, imm8: Int) -> fresh ISAInstruction {
+    let dst = vreg(prefix: read "xmm", index: a.index, width: 128)
+    return x86_inst(op: read "vshufpd", dst: read dst, src0: read a, src1: read b, imm_value: imm8)
+}
+
+fn vinsertps(dst: read ISARegister, src: read ISARegister, imm8: Int) -> fresh ISAInstruction {
+    return x86_inst(op: read "vinsertps", dst: read dst, src0: read dst, src1: read src, imm_value: imm8)
+}
+
+fn vpins(dst: read ISARegister, src: read ISARegister, lane_id: Int) -> fresh ISAInstruction {
+    return x86_inst(op: read "vpins", dst: read dst, src0: read dst, src1: read src, imm_value: lane_id)
+}
+
+fn vpbroadcast(src: read ISARegister, width: Int) -> fresh ISAInstruction {
+    let dst = vreg(prefix: read "xmm", index: src.index, width: width)
+    return x86_inst(op: read "vpbroadcast", dst: read dst, src0: read src, src1: read src, imm_value: width)
+}
+
+fn idiv(a: read ISARegister, b: read ISARegister) -> fresh ISAInstruction {
+    return x86_inst(op: read "idiv", dst: read a, src0: read a, src1: read b, imm_value: 0)
+}
+
+fn fold_address(base: read ISARegister, offset: Int, scale: Int) -> Int { return base.index + offset * scale }
+
+fn abi(platform: read String) -> fresh List<ISARegister> {
+    local regs = List.new<ISARegister>()
+    List.push<ISARegister>(list: mut regs, value: read isa_register(name: read "rdi", index: 7, width: 64))
+    List.push<ISARegister>(list: mut regs, value: read isa_register(name: read "rsi", index: 6, width: 64))
+    if platform == "win32" {
+        List.push<ISARegister>(list: mut regs, value: read isa_register(name: read "rcx", index: 1, width: 64))
+    }
+    return take regs
+}
+
+fn alloc_vregs(count: Int, prefix: read String) -> fresh List<ISARegister> {
+    local regs = List.new<ISARegister>()
+    let mut i = 0
+    while i < count {
+        List.push<ISARegister>(list: mut regs, value: read vreg(prefix: read prefix, index: i, width: 128))
+        i = i + 1
+    }
+    return take regs
+}
+
+fn flag_rematerialize(inst: read ISAInstruction) -> Bool { return inst.op == "cmp" || inst.op == "vcmp" }
+
+fn lower_range(start: Int, stop: Int, step: Int) -> fresh List<ISAInstruction> {
+    local out = List.new<ISAInstruction>()
+    let r = isa_register(name: read "rcx", index: 1, width: 64)
+    let im = to_imm(v: start, dtype_bits: 64)
+    List.push<ISAInstruction>(list: mut out, value: read im)
+    let end = isa_register(name: read "end", index: stop, width: 64)
+    List.push<ISAInstruction>(list: mut out, value: read cmp(a: read r, b: read end))
+    return take out
+}
+
+fn encode(inst: read ISAInstruction) -> fresh List<Int> {
+    local out = List.new<Int>()
+    List.push<Int>(list: mut out, value: read String.len(value: read inst.op))
+    List.push<Int>(list: mut out, value: read inst.dst.index)
+    List.push<Int>(list: mut out, value: read inst.imm)
+    return take out
+}
+
+fn stack_pointer_x86() -> fresh ISARegister { return stack_pointer() }

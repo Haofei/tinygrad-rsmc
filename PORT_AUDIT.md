@@ -505,9 +505,10 @@ Integrated pieces:
   local stage-to-`DEFINE_LOCAL` lowering with `BARRIER`,
   buffer-to-param placeholder conversion, range renumbering, and the first upstream
   `pm_syntactic_sugar` cleanup for nested pointer `INDEX` flattening plus elementwise/const
-  `INDEX` pushdown before range analysis. It also has `split_store` call wrappers that
+  `INDEX` pushdown before range analysis, plus removable `STAGE` range substitution for
+  `remove_bufferize`. It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
-  modeling, complete local bufferize cost/substitution forms, SHAPED_WMMA lowering, and full assign-dependency repair
+  modeling, partial-PCONTIG/local bufferize cost forms, SHAPED_WMMA lowering, and full assign-dependency repair
   remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
@@ -839,10 +840,10 @@ Current integrated demo:
   partial local staging, and upstream removable rules for always-contiguous vs non-contiguous children.
 - validates the first scheduler rangeify facade slice by calling `get_kernel_graph`,
   `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, `bufferize_to_store`,
-  `remove_noop_bufferize`, and `split_store` against the integrated rangeify smoke graph,
+  `remove_bufferize`, `remove_noop_bufferize`, and `split_store` against the integrated rangeify smoke graph,
   including global stage-to-store, local stage-to-`DEFINE_LOCAL` plus `BARRIER`, `AFTER`
-  buffer reuse, CALL argument exposure, nested `INDEX` flattening, and elementwise `INDEX`
-  pushdown.
+  buffer reuse, removable stage range substitution, CALL argument exposure, nested `INDEX`
+  flattening, and elementwise `INDEX` pushdown.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

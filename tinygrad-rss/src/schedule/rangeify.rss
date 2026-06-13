@@ -224,7 +224,23 @@ fn remove_bufferize(cache: mut UOpCache, src: Int, buf: Int, idx: Int) -> Option
     if node_op(cache: read cache, id: idx) != INDEX { return None }
     if node_bufferize_removable(cache: read cache, id: buf) == false { return None }
     if src < 0 { return None }
-    return Some(src)
+    if node_num_src(cache: read cache, id: buf) != node_num_src(cache: read cache, id: idx) { return None }
+    let src_op = node_op(cache: read cache, id: src)
+    if src_op == CONTIGUOUS || src_op == COPY || src_op == NOOP { return None }
+    local old_ids = List.new<Int>()
+    local new_ids = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: buf) {
+        let old_range = node_src_id(cache: read cache, id: buf, k: i)
+        let new_range = node_src_id(cache: read cache, id: idx, k: i)
+        if node_op(cache: read cache, id: old_range) != CONST && uop_is_invalid(cache: read cache, id: new_range) == false {
+            List.push<Int>(list: mut old_ids, value: read old_range)
+            List.push<Int>(list: mut new_ids, value: read new_range)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read old_ids) == 0 { return None }
+    return Some(uop_substitute_many(cache: mut cache, id: src, old_ids: read old_ids, new_ids: read new_ids))
 }
 
 fn remove_noop_bufferize(cache: mut UOpCache, idx: Int, b2: Int) -> Option<Int> {

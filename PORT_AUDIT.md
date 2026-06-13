@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 42,405 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 42,716 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -69,6 +69,11 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
   - focused nn batch: `nn/__init__.py`, `nn/optim.py`, `nn/state.py`, and `nn/datasets.py`:
     68/68 rough symbols covered. This is source-surface coverage with lightweight RSS facades,
     not full training semantics.
+  - focused NN layer-surface batch: `nn/__init__.py` now has source-shaped state/call helpers for
+    BatchNorm/BatchNorm2d/BatchNorm3d, Conv1d calls, Conv2d, ConvTranspose2d, Linear, LayerNorm,
+    LayerNorm2d, GroupNorm, InstanceNorm, RMSNorm, and Embedding over the integrated tensor layer.
+    These are deterministic tensor-graph layer helpers with active smoke coverage, not full Python
+    class/descriptors, training mode globals, or optimizer-fused module semantics.
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.
@@ -921,6 +926,10 @@ Current integrated demo:
 - validates expanded function/mixin source wrappers through the active smoke: creation, dtype,
   elementwise, movement, RNG, and reduction mixin wrappers now call into the integrated tensor
   layer and are checked for representative dtypes, graph ops, shapes, and evaluated tensor sizes.
+- validates expanded NN layer wrappers through the active smoke: Linear, Conv2d,
+  ConvTranspose2d, BatchNorm, LayerNorm/LayerNorm2d, GroupNorm, InstanceNorm, RMSNorm, and
+  Embedding constructors/calls execute over small integrated tensor graphs and are checked by
+  evaluated output sizes.
 - validates source-shaped LLVM/PTX/WGSL/NIR renderer backend facade names through the active smoke:
   LLVM dtype/constant/cast/WMMA/function/footer helpers, PTX value/memory/WMMA/modifier helpers,
   WGSL packed mask/load/type/nan helpers, and NIR symbol/type/ALU/cast/channel/immediate/param/

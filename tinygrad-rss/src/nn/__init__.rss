@@ -9,12 +9,56 @@ struct BatchNormStats derives(Clone) {
     var: Int,
 }
 
+struct BatchNormLayer derives(Clone) {
+    weight: Int,
+    bias: Int,
+    running_mean: Int,
+    running_var: Int,
+    num_batches_tracked: Int,
+    eps: Float,
+    momentum: Float,
+    affine: Bool,
+    track_running_stats: Bool,
+}
+
 struct Conv1dLayer derives(Clone) {
     weight: Int,
     bias: Int,
     stride: Int,
     padding: Int,
     dilation: Int,
+    groups: Int,
+}
+
+struct Conv2dLayer derives(Clone) {
+    weight: Int,
+    bias: Int,
+    stride_h: Int,
+    stride_w: Int,
+    pad_top: Int,
+    pad_bottom: Int,
+    pad_left: Int,
+    pad_right: Int,
+    dilation_h: Int,
+    dilation_w: Int,
+    groups: Int,
+    output_pad_h: Int,
+    output_pad_w: Int,
+}
+
+struct LinearLayer derives(Clone) {
+    weight: Int,
+    bias: Int,
+    has_bias: Bool,
+}
+
+struct NormLayer derives(Clone) {
+    weight: Int,
+    bias: Int,
+    eps: Float,
+    has_weight: Bool,
+    has_bias: Bool,
+    size: Int,
     groups: Int,
 }
 
@@ -28,6 +72,29 @@ struct EmbeddingLayer derives(Clone) {
     weight: Int,
     vocab_size: Int,
     embed_size: Int,
+}
+
+fn BatchNorm(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormLayer {
+    local shape = shp1(a: sz)
+    let mut weight = 0 - 1
+    let mut bias = 0 - 1
+    if affine {
+        weight = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+        bias = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    }
+    let running_mean = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    let running_var = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    local scalar = List.new<Int>()
+    let batches = tensor_zeros(cache: mut cache, dt: read dt_int64(), shape: read scalar)
+    return BatchNormLayer(weight: weight, bias: bias, running_mean: running_mean, running_var: running_var, num_batches_tracked: batches, eps: eps, momentum: momentum, affine: affine, track_running_stats: track_running_stats)
+}
+
+fn BatchNorm2d(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormLayer {
+    return BatchNorm(cache: mut cache, sz: sz, eps: eps, affine: affine, track_running_stats: track_running_stats, momentum: momentum)
+}
+
+fn BatchNorm3d(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormLayer {
+    return BatchNorm(cache: mut cache, sz: sz, eps: eps, affine: affine, track_running_stats: track_running_stats, momentum: momentum)
 }
 
 fn calc_stats(cache: mut UOpCache, x: Int) -> fresh BatchNormStats {
@@ -45,6 +112,34 @@ fn calc_stats(cache: mut UOpCache, x: Int) -> fresh BatchNormStats {
     return BatchNormStats(mean: mean, var: variance)
 }
 
+fn BatchNorm_calc_stats(cache: mut UOpCache, layer: read BatchNormLayer, x: Int, training: Bool) -> fresh BatchNormStats {
+    if layer.track_running_stats && training == false {
+        return BatchNormStats(mean: layer.running_mean, var: layer.running_var)
+    }
+    return calc_stats(cache: mut cache, x: x)
+}
+
+fn BatchNorm_call(cache: mut UOpCache, layer: mut BatchNormLayer, x: Int, training: Bool) -> Int {
+    local stats = BatchNorm_calc_stats(cache: mut cache, layer: read layer, x: x, training: training)
+    if layer.track_running_stats && training {
+        let one_minus = tensor_const_like_float(cache: mut cache, x: layer.running_mean, value: 1.0 - layer.momentum)
+        let mom = tensor_const_like_float(cache: mut cache, x: stats.mean, value: layer.momentum)
+        let rm0 = tensor_mul(cache: mut cache, a: layer.running_mean, b: one_minus)
+        let rm1 = tensor_mul(cache: mut cache, a: stats.mean, b: mom)
+        layer.running_mean = tensor_add(cache: mut cache, a: rm0, b: rm1)
+        let rv0 = tensor_mul(cache: mut cache, a: layer.running_var, b: one_minus)
+        let rv1 = tensor_mul(cache: mut cache, a: stats.var, b: mom)
+        layer.running_var = tensor_add(cache: mut cache, a: rv0, b: rv1)
+        let one = tensor_const_like_float(cache: mut cache, x: layer.num_batches_tracked, value: 1.0)
+        layer.num_batches_tracked = tensor_add(cache: mut cache, a: layer.num_batches_tracked, b: one)
+    }
+    let eps_t = tensor_const_like_float(cache: mut cache, x: stats.var, value: layer.eps)
+    let var_eps = tensor_add(cache: mut cache, a: stats.var, b: eps_t)
+    let invstd = tensor_rsqrt(cache: mut cache, x: var_eps)
+    local axes = shp1(a: 1)
+    return tensor_batchnorm(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias, mean: stats.mean, invstd: invstd, axes: read axes)
+}
+
 fn Conv1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_size: Int, stride: Int, padding: Int, dilation: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv1dLayer {
     local wshape = List.new<Int>()
     push1(l: mut wshape, a: out_channels)
@@ -58,6 +153,30 @@ fn Conv1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_size:
         bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - scale, high: scale, seed: seed + 1)
     }
     return Conv1dLayer(weight: weight, bias: bias_node, stride: stride, padding: padding, dilation: dilation, groups: groups)
+}
+
+fn Conv1d_call(cache: mut UOpCache, layer: read Conv1dLayer, x: Int) -> Int {
+    local x4_shape = List.new<Int>()
+    local xs = uop_shape(cache: read cache, id: x)
+    push1(l: mut x4_shape, a: List.get<Int>(list: read xs, index: 0))
+    push1(l: mut x4_shape, a: List.get<Int>(list: read xs, index: 1))
+    push1(l: mut x4_shape, a: 1)
+    push1(l: mut x4_shape, a: List.get<Int>(list: read xs, index: 2))
+    let x4 = tensor_reshape(cache: mut cache, x: x, new_shape: read x4_shape)
+    local w4_shape = List.new<Int>()
+    local ws = uop_shape(cache: read cache, id: layer.weight)
+    push1(l: mut w4_shape, a: List.get<Int>(list: read ws, index: 0))
+    push1(l: mut w4_shape, a: List.get<Int>(list: read ws, index: 1))
+    push1(l: mut w4_shape, a: 1)
+    push1(l: mut w4_shape, a: List.get<Int>(list: read ws, index: 2))
+    let w4 = tensor_reshape(cache: mut cache, x: layer.weight, new_shape: read w4_shape)
+    let y4 = tensor_conv2d(cache: mut cache, x: x4, weight: w4, bias: layer.bias, groups: layer.groups, sh: 1, sw: layer.stride, dh: 1, dw: layer.dilation, pad_top: 0, pad_bottom: 0, pad_left: layer.padding, pad_right: layer.padding)
+    local ys = uop_shape(cache: read cache, id: y4)
+    local y3_shape = List.new<Int>()
+    push1(l: mut y3_shape, a: List.get<Int>(list: read ys, index: 0))
+    push1(l: mut y3_shape, a: List.get<Int>(list: read ys, index: 1))
+    push1(l: mut y3_shape, a: List.get<Int>(list: read ys, index: 3))
+    return tensor_reshape(cache: mut cache, x: y4, new_shape: read y3_shape)
 }
 
 fn ConvTranspose1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_size: Int, stride: Int, padding: Int, output_padding: Int, dilation: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv1dLayer {
@@ -75,6 +194,65 @@ fn ConvTranspose1d(cache: mut UOpCache, in_channels: Int, out_channels: Int, ker
     return Conv1dLayer(weight: weight, bias: bias_node, stride: stride, padding: padding, dilation: dilation, groups: groups)
 }
 
+fn Conv2d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_h: Int, kernel_w: Int, stride_h: Int, stride_w: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, dilation_h: Int, dilation_w: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv2dLayer {
+    local wshape = List.new<Int>()
+    push1(l: mut wshape, a: out_channels)
+    push1(l: mut wshape, a: in_channels / groups)
+    push1(l: mut wshape, a: kernel_h)
+    push1(l: mut wshape, a: kernel_w)
+    let scale = 1.0 / Math.sqrt(value: Int.to_float(value: read (in_channels * kernel_h * kernel_w)))
+    let weight = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read wshape, low: 0.0 - scale, high: scale, seed: seed)
+    let mut bias_node = 0 - 1
+    if bias {
+        local bshape = shp1(a: out_channels)
+        bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - scale, high: scale, seed: seed + 1)
+    }
+    return Conv2dLayer(weight: weight, bias: bias_node, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, output_pad_h: 0, output_pad_w: 0)
+}
+
+fn Conv2d_call(cache: mut UOpCache, layer: read Conv2dLayer, x: Int) -> Int {
+    return tensor_conv2d(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias, groups: layer.groups, sh: layer.stride_h, sw: layer.stride_w, dh: layer.dilation_h, dw: layer.dilation_w, pad_top: layer.pad_top, pad_bottom: layer.pad_bottom, pad_left: layer.pad_left, pad_right: layer.pad_right)
+}
+
+fn ConvTranspose2d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_h: Int, kernel_w: Int, stride_h: Int, stride_w: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, output_pad_h: Int, output_pad_w: Int, dilation_h: Int, dilation_w: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv2dLayer {
+    local wshape = List.new<Int>()
+    push1(l: mut wshape, a: in_channels)
+    push1(l: mut wshape, a: out_channels / groups)
+    push1(l: mut wshape, a: kernel_h)
+    push1(l: mut wshape, a: kernel_w)
+    let scale = 1.0 / Math.sqrt(value: Int.to_float(value: read (in_channels * kernel_h * kernel_w)))
+    let weight = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read wshape, low: 0.0 - scale, high: scale, seed: seed)
+    let mut bias_node = 0 - 1
+    if bias {
+        local bshape = shp1(a: out_channels)
+        bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - scale, high: scale, seed: seed + 1)
+    }
+    return Conv2dLayer(weight: weight, bias: bias_node, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, output_pad_h: output_pad_h, output_pad_w: output_pad_w)
+}
+
+fn ConvTranspose2d_call(cache: mut UOpCache, layer: read Conv2dLayer, x: Int) -> Int {
+    return tensor_conv_transpose2d(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias, groups: layer.groups, sh: layer.stride_h, sw: layer.stride_w, dh: layer.dilation_h, dw: layer.dilation_w, pad_top: layer.pad_top, pad_bottom: layer.pad_bottom, pad_left: layer.pad_left, pad_right: layer.pad_right, out_pad_h: layer.output_pad_h, out_pad_w: layer.output_pad_w)
+}
+
+fn Linear(cache: mut UOpCache, in_features: Int, out_features: Int, bias: Bool, seed: Int) -> fresh LinearLayer {
+    local wshape = List.new<Int>()
+    push1(l: mut wshape, a: out_features)
+    push1(l: mut wshape, a: in_features)
+    let bound = 1.0 / Math.sqrt(value: Int.to_float(value: read in_features))
+    let weight = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read wshape, low: 0.0 - bound, high: bound, seed: seed)
+    let mut bias_node = 0 - 1
+    if bias {
+        local bshape = shp1(a: out_features)
+        bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - bound, high: bound, seed: seed + 1)
+    }
+    return LinearLayer(weight: weight, bias: bias_node, has_bias: bias)
+}
+
+fn Linear_call(cache: mut UOpCache, layer: read LinearLayer, x: Int) -> Int {
+    if layer.has_bias { return tensor_linear(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias) }
+    return tensor_dot(cache: mut cache, x: x, w: layer.weight)
+}
+
 fn _norm(cache: mut UOpCache, x: Int, eps: Float) -> Int {
     let sq = tensor_mul(cache: mut cache, a: x, b: x)
     let mean = tensor_mean_dim(cache: mut cache, x: sq, dim: 0 - 1)
@@ -82,6 +260,100 @@ fn _norm(cache: mut UOpCache, x: Int, eps: Float) -> Int {
     let mean_eps = tensor_add(cache: mut cache, a: mean, b: eps_t)
     let denom = tensor_rsqrt(cache: mut cache, x: mean_eps)
     return tensor_mul(cache: mut cache, a: x, b: denom)
+}
+
+fn LayerNorm(cache: mut UOpCache, normalized_size: Int, eps: Float, elementwise_affine: Bool) -> fresh NormLayer {
+    local shape = shp1(a: normalized_size)
+    let mut weight = 0 - 1
+    let mut bias = 0 - 1
+    if elementwise_affine {
+        weight = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+        bias = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    }
+    return NormLayer(weight: weight, bias: bias, eps: eps, has_weight: elementwise_affine, has_bias: elementwise_affine, size: normalized_size, groups: 1)
+}
+
+fn LayerNorm_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
+    local axes = shp1(a: 0 - 1)
+    let y = tensor_layernorm_axes(cache: mut cache, x: x, axes: read axes, eps: layer.eps)
+    if layer.has_weight == false { return y }
+    let yw = tensor_mul(cache: mut cache, a: y, b: layer.weight)
+    return tensor_add(cache: mut cache, a: yw, b: layer.bias)
+}
+
+fn LayerNorm2d_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
+    local p0 = List.new<Int>()
+    push1(l: mut p0, a: 0)
+    push1(l: mut p0, a: 2)
+    push1(l: mut p0, a: 3)
+    push1(l: mut p0, a: 1)
+    let xp = tensor_permute(cache: mut cache, x: x, perm: read p0)
+    let yp = LayerNorm_call(cache: mut cache, layer: read layer, x: xp)
+    local p1 = List.new<Int>()
+    push1(l: mut p1, a: 0)
+    push1(l: mut p1, a: 3)
+    push1(l: mut p1, a: 1)
+    push1(l: mut p1, a: 2)
+    return tensor_permute(cache: mut cache, x: yp, perm: read p1)
+}
+
+fn GroupNorm(cache: mut UOpCache, num_groups: Int, num_channels: Int, eps: Float, affine: Bool) -> fresh NormLayer {
+    local shape = shp1(a: num_channels)
+    let mut weight = 0 - 1
+    let mut bias = 0 - 1
+    if affine {
+        weight = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+        bias = tensor_zeros(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    }
+    return NormLayer(weight: weight, bias: bias, eps: eps, has_weight: affine, has_bias: affine, size: num_channels, groups: num_groups)
+}
+
+fn GroupNorm_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
+    local xs = uop_shape(cache: read cache, id: x)
+    local rshape = List.new<Int>()
+    push1(l: mut rshape, a: List.get<Int>(list: read xs, index: 0))
+    push1(l: mut rshape, a: layer.groups)
+    push1(l: mut rshape, a: 0 - 1)
+    let xr = tensor_reshape(cache: mut cache, x: x, new_shape: read rshape)
+    local axes = shp1(a: 0 - 1)
+    let yn = tensor_layernorm_axes(cache: mut cache, x: xr, axes: read axes, eps: layer.eps)
+    let y = tensor_reshape(cache: mut cache, x: yn, new_shape: read xs)
+    if layer.has_weight == false { return y }
+    local aff_shape = List.new<Int>()
+    push1(l: mut aff_shape, a: 1)
+    push1(l: mut aff_shape, a: layer.size)
+    let mut i = 2
+    while i < List.len<Int>(list: read xs) {
+        push1(l: mut aff_shape, a: 1)
+        i = i + 1
+    }
+    let w = tensor_reshape(cache: mut cache, x: layer.weight, new_shape: read aff_shape)
+    let b = tensor_reshape(cache: mut cache, x: layer.bias, new_shape: read aff_shape)
+    let yw = tensor_mul(cache: mut cache, a: y, b: w)
+    return tensor_add(cache: mut cache, a: yw, b: b)
+}
+
+fn InstanceNorm(cache: mut UOpCache, num_features: Int, eps: Float, affine: Bool) -> fresh NormLayer {
+    return GroupNorm(cache: mut cache, num_groups: num_features, num_channels: num_features, eps: eps, affine: affine)
+}
+
+fn InstanceNorm_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
+    return GroupNorm_call(cache: mut cache, layer: read layer, x: x)
+}
+
+fn RMSNorm(cache: mut UOpCache, dim: Int, eps: Float, elementwise_affine: Bool) -> fresh RMSNormLayer {
+    local shape = shp1(a: dim)
+    let mut weight = 0 - 1
+    if elementwise_affine {
+        weight = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
+    }
+    return RMSNormLayer(weight: weight, eps: eps, has_weight: elementwise_affine)
+}
+
+fn RMSNorm_call(cache: mut UOpCache, layer: read RMSNormLayer, x: Int) -> Int {
+    let y = _norm(cache: mut cache, x: x, eps: layer.eps)
+    if layer.has_weight { return tensor_mul(cache: mut cache, a: y, b: layer.weight) }
+    return y
 }
 
 fn _embedding_fwd(cache: mut UOpCache, weight: Int, idx: Int) -> Int {
@@ -139,4 +411,16 @@ fn _embedding_bwd(cache: mut UOpCache, grad_emb: Int, weight: Int, idx: Int) -> 
 
 fn _embedding_fwd_fxn(cache: mut UOpCache, weight: Int, idx: Int, device: read String) -> Int {
     return _embedding_fwd(cache: mut cache, weight: weight, idx: idx)
+}
+
+fn Embedding(cache: mut UOpCache, vocab_size: Int, embed_size: Int, seed: Int) -> fresh EmbeddingLayer {
+    local shape = List.new<Int>()
+    push1(l: mut shape, a: vocab_size)
+    push1(l: mut shape, a: embed_size)
+    let weight = tensor_glorot_uniform(cache: mut cache, dt: read dt_default_float(), shape: read shape, seed: seed)
+    return EmbeddingLayer(weight: weight, vocab_size: vocab_size, embed_size: embed_size)
+}
+
+fn Embedding_call(cache: mut UOpCache, layer: read EmbeddingLayer, idx: Int) -> Int {
+    return _embedding_fwd(cache: mut cache, weight: layer.weight, idx: idx)
 }

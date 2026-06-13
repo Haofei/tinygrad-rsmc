@@ -322,6 +322,18 @@ fn bufferize_to_store(cache: mut UOpCache, ctx: mut RangeifyLocalContext, x: Int
         if List.len<Int>(list: read deps) == 0 { return Some(buf) }
         return Some(mk_after(cache: mut cache, id: buf, srcs: read deps))
     }
+    if node_bufferize_addrspace(cache: read cache, id: x) == ADDR_LOCAL {
+        if allow_locals == false { return None }
+        let buf = mk_define_local(cache: mut cache, slot: ctx.next_lunique, dt: read node_full_dtype(cache: read cache, id: value), shape: read uop_shape(cache: read cache, id: x))
+        let ptr = mk_index(cache: mut cache, base: buf, srcs: read idx_ranges, ptr: true)
+        let st = mk_store(cache: mut cache, ptr: ptr, value: value, gate: read None)
+        let ended = mk_end(cache: mut cache, id: st, srcs: read idx_ranges)
+        let barrier = mk_barrier(cache: mut cache, id: ended, srcs: read idx_ranges)
+        ctx.next_lunique = ctx.next_lunique + 1
+        local deps = List.new<Int>()
+        List.push<Int>(list: mut deps, value: read barrier)
+        return Some(mk_after(cache: mut cache, id: buf, srcs: read deps))
+    }
     let buf = mk_buffer(cache: mut cache, dt: read node_full_dtype(cache: read cache, id: value), shape: read uop_shape(cache: read cache, id: x))
     let ptr = mk_index(cache: mut cache, base: buf, srcs: read idx_ranges, ptr: true)
     let mut store_value = value

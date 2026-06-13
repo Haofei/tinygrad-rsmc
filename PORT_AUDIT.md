@@ -385,16 +385,17 @@ Integrated pieces:
 - `codegen/late/expander.rss`: integrated source-shaped `tinygrad/codegen/late/expander.py`
   slice, covering the upstream entry point names `_expand_arg_to_idx`, `_choices_from_args`,
   `_swizzle_args`, `do_expand`, `do_contract`, `end_unrolls`, `fix_reduce_unroll`,
-  `fix_store_unroll`, and conservative `fix_group_for_reduce`. It ports axis-size
+  `fix_store_unroll`, and `fix_group_for_reduce`. It ports axis-size
   choice/index helpers and the compact normalization rewrites for
   `CONTRACT`, empty/double `UNROLL`, and `END` consuming `UNROLL` axes. It also has the common
   same/mixed-axis `do_expand` path for non-WMMA roots, including `UNROLL` source stripping,
   mixed-axis `GEP` swizzles, scalar broadcast, vector `VCAT` repetition, range-arg passthrough,
   and `GEP` arg expansion. It also has the first `pm_pre_expander` slice: `UNROLL`/`UPCAST`
   ranges become `UNROLL` constants, and `REDUCE`/`STORE` nodes carrying `UNROLL` tails are
-  contracted before later expansion. WMMA, register-pointer special-casing, and the
-  BufferizeOpts-local `GROUP_REDUCE` rewrite behind `fix_group_for_reduce` remain later
-  expander slices.
+  contracted before later expansion. It also has the first BufferizeOpts-local
+  `GROUP_REDUCE` rewrite: grouped reduce ranges are converted to local `STAGE` storage and
+  final `AXIS_REDUCE` loops while preserving upstream local ranges. WMMA and register-pointer
+  special-casing remain later expander slices.
 - `codegen/late/devectorizer.rss`: integrated source-shaped
   `tinygrad/codegen/late/devectorizer.py` slice, exposing the upstream names
   `_drop_valid_stmts`, `simplify_valid_load`, `simplify_valid_image_load`, `expand_index`,
@@ -501,11 +502,12 @@ Integrated pieces:
   injection, simple hazard contiguity, noop/dead-axis staging cleanup with shrink/reshape/expand
   preservation, disk/tinyfs late buffer views as `SLICE`, global stage-to-buffer store lowering
   through `AFTER(buffer, END(STORE(INDEX(buffer,...), value)))`, reuse of existing `AFTER` buffers,
+  local stage-to-`DEFINE_LOCAL` lowering with `BARRIER`,
   buffer-to-param placeholder conversion, range renumbering, and the first upstream
   `pm_syntactic_sugar` cleanup for nested pointer `INDEX` flattening plus elementwise/const
   `INDEX` pushdown before range analysis. It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
-  modeling, all local bufferize forms, SHAPED_WMMA lowering, and full assign-dependency repair
+  modeling, complete local bufferize cost/substitution forms, SHAPED_WMMA lowering, and full assign-dependency repair
   remain later rangeify slices.
 - `schedule/allreduce.rss`: first integrated source-shaped `tinygrad/schedule/allreduce.py` slice:
   naive allreduce graph construction for supported multi-device `MULTI`/`MSTACK` inputs by
@@ -838,8 +840,9 @@ Current integrated demo:
 - validates the first scheduler rangeify facade slice by calling `get_kernel_graph`,
   `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, `bufferize_to_store`,
   `remove_noop_bufferize`, and `split_store` against the integrated rangeify smoke graph,
-  including global stage-to-store, `AFTER` buffer reuse, CALL argument exposure, nested `INDEX`
-  flattening, and elementwise `INDEX` pushdown.
+  including global stage-to-store, local stage-to-`DEFINE_LOCAL` plus `BARRIER`, `AFTER`
+  buffer reuse, CALL argument exposure, nested `INDEX` flattening, and elementwise `INDEX`
+  pushdown.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.
@@ -1021,7 +1024,8 @@ Current integrated demo:
   `END` consumes `UNROLL` axes through `CONTRACT`, same-axis elementwise `UNROLL` sources are
   expanded, mixed-axis `UNROLL` sources are swizzled through `GEP`, scalar non-unroll sources
   are broadcast, and `GEP` args expand across lanes. It also validates the first
-  `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction.
+  `pm_pre_expander` rules for unrolled ranges plus REDUCE/STORE unroll contraction, and
+  validates `GROUP_REDUCE` lowering through local `STAGE` plus final `AXIS_REDUCE` loops.
 - validates the devectorizer slice: upstream facade names are callable, vector `ADD`, vector `CAST`, and vector `BITCAST`
   scalarize into `STACK` nodes of scalar lane operations and pass the integrated UOp spec
   verifier. It also validates the first `pm_render` normalizations for vector `CONST`,

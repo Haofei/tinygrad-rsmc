@@ -1294,9 +1294,49 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let mgrp_local_range = mk_range_int(cache: mut mcache, end: 2, axis_id: 31, axis_type: read AXIS_LOCAL, dt: read i32)
+    let mgrp_group_range = mk_range_int(cache: mut mcache, end: 4, axis_id: 32, axis_type: read AXIS_GROUP_REDUCE, dt: read i32)
+    let mgrp_src = mk_alu2(cache: mut mcache, op: ADD, dt: read i32, x: mgrp_local_range, y: m2)
+    local mgrp_reduce_src = List.new<Int>()
+    List.push<Int>(list: mut mgrp_reduce_src, value: read mgrp_src)
+    List.push<Int>(list: mut mgrp_reduce_src, value: read mgrp_group_range)
+    local mgrp_reduce_axes = List.new<Int>()
+    local mgrp_reduce_arg0 = ReduceArg(kind: 0, axes: take mgrp_reduce_axes)
+    local mgrp_reduce_arg = ArgReduce(value: take mgrp_reduce_arg0)
+    let mgrp_reduce = intern(cache: mut mcache, op: REDUCE, dt: read i32, src: take mgrp_reduce_src, arg: take mgrp_reduce_arg)
+    let mut mgrp_fix_ok = false
+    let mut mgrp_local_bufferize_ok = false
+    match fix_group_for_reduce(x: mut mcache, id: mgrp_reduce) {
+        Some(r) => {
+            let final_index = node_src_id(cache: read mcache, id: r, k: 0)
+            let final_stage = node_src_id(cache: read mcache, id: final_index, k: 0)
+            let final_reduce_loop = node_src_id(cache: read mcache, id: r, k: 1)
+            let final_index_local = node_src_id(cache: read mcache, id: final_index, k: 1)
+            let final_index_reduce = node_src_id(cache: read mcache, id: final_index, k: 2)
+            let fix_root_ok = node_op(cache: read mcache, id: r) == REDUCE && node_num_src(cache: read mcache, id: r) == 2
+            let fix_stage_ok = node_op(cache: read mcache, id: final_stage) == STAGE && node_bufferize_addrspace(cache: read mcache, id: final_stage) == ADDR_LOCAL
+            let fix_index_ok = node_op(cache: read mcache, id: final_index) == INDEX && final_index_local == mgrp_local_range && final_index_reduce == final_reduce_loop
+            let fix_range_ok = node_op(cache: read mcache, id: final_reduce_loop) == RANGE && node_range_type(cache: read mcache, id: final_reduce_loop) == AXIS_REDUCE
+            mgrp_fix_ok = fix_root_ok && fix_stage_ok && fix_index_ok && fix_range_ok && spec_type_verify(cache: read mcache, id: r)
+            local mgrp_lctx = rangeify_local_context_new()
+            match bufferize_to_store(cache: mut mcache, ctx: mut mgrp_lctx, x: final_stage, idx: final_index, allow_locals: true) {
+                Some(localized) => {
+                    let local_buf = node_src_id(cache: read mcache, id: localized, k: 0)
+                    let local_barrier = node_src_id(cache: read mcache, id: localized, k: 1)
+                    let local_end = node_src_id(cache: read mcache, id: local_barrier, k: 0)
+                    let local_store = node_src_id(cache: read mcache, id: local_end, k: 0)
+                    mgrp_local_bufferize_ok = node_op(cache: read mcache, id: localized) == AFTER && node_op(cache: read mcache, id: local_buf) == DEFINE_LOCAL && node_op(cache: read mcache, id: local_barrier) == BARRIER && node_op(cache: read mcache, id: local_end) == END && node_op(cache: read mcache, id: local_store) == STORE && spec_type_verify(cache: read mcache, id: localized)
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
     showb(label: read "codegen.expander pre range unrolls = ", v: mpre_range_ok)
     showb(label: read "codegen.expander pre reduce contracts unrolls = ", v: mpre_reduce_ok)
     showb(label: read "codegen.expander pre store contracts unrolls = ", v: mpre_store_ok)
+    showb(label: read "codegen.expander fixes group reduce = ", v: mgrp_fix_ok)
+    showb(label: read "schedule.rangeify lowers local bufferize = ", v: mgrp_local_bufferize_ok)
     showb(label: read "codegen.expander expands add unroll = ", v: mex_expand_add_ok)
     showb(label: read "codegen.expander broadcasts scalar source = ", v: mex_expand_broadcast_ok)
     showb(label: read "codegen.expander expands gep args = ", v: mex_expand_gep_ok)

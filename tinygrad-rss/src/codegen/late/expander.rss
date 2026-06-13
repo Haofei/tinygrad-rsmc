@@ -2,8 +2,9 @@
 //
 // This slice ports the axis-size choice/index helpers, the compact
 // CONTRACT/UNROLL/END normalization rules, the common do_expand path, and the
-// first pm_pre_expander rewrites. WMMA, register-pointer INDEX special-casing,
-// and BufferizeOpts-local group-for-reduce rewrites remain later slices.
+// first pm_pre_expander rewrites, plus the first BufferizeOpts-local
+// group-for-reduce lowering. WMMA and register-pointer INDEX special-casing
+// remain later slices.
 features: local
 
 fn expander_pairs_concat(a: read List<Int>, b: read List<Int>) -> fresh List<Int> {
@@ -604,10 +605,83 @@ fn fix_store_unroll(x: mut UOpCache, id: Int) -> Option<Int> {
     return expander_pre_store_unroll(cache: mut x, id: id)
 }
 
+fn expander_push_unique_range(cache: read UOpCache, out: mut List<Int>, r: Int) -> Unit {
+    let mut i = 0
+    while i < List.len<Int>(list: read out) {
+        if List.get<Int>(list: read out, index: i) == r { return Unit }
+        i = i + 1
+    }
+    if node_op(cache: read cache, id: r) == RANGE { List.push<Int>(list: mut out, value: read r) }
+    return Unit
+}
+
 fn fix_group_for_reduce(x: mut UOpCache, id: Int) -> Option<Int> {
-    // The upstream rewrite lowers GROUP_REDUCE ranges through local BufferizeOpts.
-    // This port still lacks that local-memory bufferize path, so keep the
-    // source-shaped entry point conservative until rangeify/gpudims land.
     if node_op(cache: read x, id: id) != REDUCE { return None }
-    return None
+    if node_num_src(cache: read x, id: id) < 2 { return None }
+    local reduce_gfr = List.new<Int>()
+    local reduce_r = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read x, id: id) {
+        let s = node_src_id(cache: read x, id: id, k: i)
+        if node_op(cache: read x, id: s) == RANGE && node_range_type(cache: read x, id: s) == AXIS_GROUP_REDUCE {
+            List.push<Int>(list: mut reduce_gfr, value: read s)
+        } else {
+            List.push<Int>(list: mut reduce_r, value: read s)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read reduce_gfr) == 0 { return None }
+    local upstream_locals = List.new<Int>()
+    local topo = uop_toposort(cache: read x, id: id)
+    i = 0
+    while i < List.len<Int>(list: read topo) {
+        let u = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read x, id: u) == RANGE && node_range_type(cache: read x, id: u) == AXIS_LOCAL {
+            expander_push_unique_range(cache: read x, out: mut upstream_locals, r: u)
+        }
+        i = i + 1
+    }
+    local early_src = List.new<Int>()
+    List.push<Int>(list: mut early_src, value: read node_src_id(cache: read x, id: id, k: 0))
+    i = 0
+    while i < List.len<Int>(list: read reduce_r) {
+        List.push<Int>(list: mut early_src, value: read List.get<Int>(list: read reduce_r, index: i))
+        i = i + 1
+    }
+    local early_arg = node_arg(cache: read x, id: id)
+    let early_reduce = intern(cache: mut x, op: REDUCE, dt: read node_full_dtype(cache: read x, id: id), src: take early_src, arg: take early_arg)
+    local stage_ranges = copy_int_list(l: read upstream_locals)
+    i = 0
+    while i < List.len<Int>(list: read reduce_gfr) {
+        List.push<Int>(list: mut stage_ranges, value: read List.get<Int>(list: read reduce_gfr, index: i))
+        i = i + 1
+    }
+    local reduce_loop = List.new<Int>()
+    i = 0
+    while i < List.len<Int>(list: read reduce_gfr) {
+        let r = List.get<Int>(list: read reduce_gfr, index: i)
+        let mm = uop_min_max(cache: read x, id: r)
+        let rr = mk_range_int(cache: mut x, end: mm.hi + 1, axis_id: node_range_axis_id(cache: read x, id: r) + 100, axis_type: read AXIS_REDUCE, dt: read node_dtype(cache: read x, id: r))
+        List.push<Int>(list: mut reduce_loop, value: read rr)
+        i = i + 1
+    }
+    let first_group = List.get<Int>(list: read reduce_gfr, index: 0)
+    local opts = mk_bufferize_arg_device_int(device: node_range_axis_id(cache: read x, id: first_group), addrspace: read ADDR_LOCAL, removable: true)
+    let staged = mk_stage(cache: mut x, x: early_reduce, ranges: read stage_ranges, opts: read opts)
+    local idx_ranges = copy_int_list(l: read upstream_locals)
+    i = 0
+    while i < List.len<Int>(list: read reduce_loop) {
+        List.push<Int>(list: mut idx_ranges, value: read List.get<Int>(list: read reduce_loop, index: i))
+        i = i + 1
+    }
+    let indexed = mk_index(cache: mut x, base: staged, srcs: read idx_ranges, ptr: false)
+    local final_src = List.new<Int>()
+    List.push<Int>(list: mut final_src, value: read indexed)
+    i = 0
+    while i < List.len<Int>(list: read reduce_loop) {
+        List.push<Int>(list: mut final_src, value: read List.get<Int>(list: read reduce_loop, index: i))
+        i = i + 1
+    }
+    local final_arg = node_arg(cache: read x, id: id)
+    return Some(intern(cache: mut x, op: REDUCE, dt: read node_full_dtype(cache: read x, id: id), src: take final_src, arg: take final_arg))
 }

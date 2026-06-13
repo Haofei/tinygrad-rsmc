@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 42,716 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 42,845 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -74,6 +74,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     LayerNorm2d, GroupNorm, InstanceNorm, RMSNorm, and Embedding over the integrated tensor layer.
     These are deterministic tensor-graph layer helpers with active smoke coverage, not full Python
     class/descriptors, training mode globals, or optimizer-fused module semantics.
+  - focused NN optimizer semantics batch: `nn/optim.py` now carries optimizer kind,
+    hyperparameters, and per-parameter momentum/Adam state buffers for SGD, Muon, Adam, and AdamW.
+    `_step` computes graph-level weight decay, momentum/Nesterov, Muon update routing, and
+    Adam/AdamW moments plus bias correction. The active smoke exercises these state updates; this
+    is still not fused optimizer scheduling, training globals, device movement, LARS/LAMB trust
+    ratios, or exact tinygrad optimizer execution.
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.

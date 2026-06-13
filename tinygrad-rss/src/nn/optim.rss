@@ -4,13 +4,28 @@ features: local
 struct OptimizerState derives(Clone) {
     params: List<TensorState>,
     buffers: List<TensorState>,
+    moments: List<TensorState>,
+    velocities: List<TensorState>,
+    kind: String,
     lr: Float,
+    momentum: Float,
+    weight_decay: Float,
+    b1: Float,
+    b2: Float,
+    eps: Float,
+    b1_power: Float,
+    b2_power: Float,
+    ns_steps: Int,
+    nesterov: Bool,
+    classic: Bool,
     step_count: Int,
 }
 
-fn optimizer_new(params: read List<TensorState>, lr: Float) -> fresh OptimizerState {
+fn optimizer_make(params: read List<TensorState>, lr: Float, kind: read String, momentum: Float, weight_decay: Float, b1: Float, b2: Float, eps: Float, ns_steps: Int, nesterov: Bool, classic: Bool) -> fresh OptimizerState {
     local ps = List.new<TensorState>()
     local bufs = List.new<TensorState>()
+    local moments = List.new<TensorState>()
+    local velocities = List.new<TensorState>()
     let mut i = 0
     while i < List.len<TensorState>(list: read params) {
         local p = List.get<TensorState>(list: read params, index: i)
@@ -18,7 +33,11 @@ fn optimizer_new(params: read List<TensorState>, lr: Float) -> fresh OptimizerSt
         else { List.push<TensorState>(list: mut bufs, value: read (manage p)) }
         i = i + 1
     }
-    return OptimizerState(params: take ps, buffers: take bufs, lr: lr, step_count: 0)
+    return OptimizerState(params: take ps, buffers: take bufs, moments: take moments, velocities: take velocities, kind: String.copy(value: read kind), lr: lr, momentum: momentum, weight_decay: weight_decay, b1: b1, b2: b2, eps: eps, b1_power: 1.0, b2_power: 1.0, ns_steps: ns_steps, nesterov: nesterov, classic: classic, step_count: 0)
+}
+
+fn optimizer_new(params: read List<TensorState>, lr: Float) -> fresh OptimizerState {
+    return optimizer_make(params: read params, lr: lr, kind: read "sgd", momentum: 0.0, weight_decay: 0.0, b1: 0.0, b2: 0.0, eps: 0.00000001, ns_steps: 0, nesterov: false, classic: false)
 }
 
 fn _new_optim_param(cache: mut UOpCache, opt: read OptimizerState) -> fresh List<TensorState> {
@@ -33,6 +52,26 @@ fn _new_optim_param(cache: mut UOpCache, opt: read OptimizerState) -> fresh List
         i = i + 1
     }
     return take out
+}
+
+fn optimizer_ensure_state(cache: mut UOpCache, opt: mut OptimizerState) -> Unit {
+    while List.len<TensorState>(list: read opt.moments) < List.len<TensorState>(list: read opt.params) {
+        local p = List.get<TensorState>(list: read opt.params, index: List.len<TensorState>(list: read opt.moments))
+        local shape = tensor_state_shape(cache: read cache, t: read p)
+        local dtype = tensor_state_dtype(cache: read cache, t: read p)
+        let z = tensor_zeros(cache: mut cache, dt: read dtype, shape: read shape)
+        local st = tensor_state_new(uop: z)
+        List.push<TensorState>(list: mut opt.moments, value: read (manage st))
+    }
+    while List.len<TensorState>(list: read opt.velocities) < List.len<TensorState>(list: read opt.params) {
+        local p = List.get<TensorState>(list: read opt.params, index: List.len<TensorState>(list: read opt.velocities))
+        local shape = tensor_state_shape(cache: read cache, t: read p)
+        local dtype = tensor_state_dtype(cache: read cache, t: read p)
+        let z = tensor_zeros(cache: mut cache, dt: read dtype, shape: read shape)
+        local st = tensor_state_new(uop: z)
+        List.push<TensorState>(list: mut opt.velocities, value: read (manage st))
+    }
+    return Unit
 }
 
 fn zero_grad(opt: mut OptimizerState) -> Unit {
@@ -53,20 +92,106 @@ fn _apply_update(cache: mut UOpCache, t: read TensorState, up: Int, lr: Float) -
     return tensor_state_assign(cache: mut cache, t: read t, value: updated)
 }
 
-fn _step(cache: mut UOpCache, opt: read OptimizerState) -> fresh List<Int> {
+fn optimizer_param_grad(cache: mut UOpCache, p: read TensorState) -> Int {
+    if p.has_grad { return p.grad }
+    return tensor_zeros_like_same(cache: mut cache, x: p.uop)
+}
+
+fn optimizer_apply_weight_decay(cache: mut UOpCache, p: read TensorState, g: Int, weight_decay: Float) -> Int {
+    if weight_decay <= 0.0 { return g }
+    let detached = tensor_detach(cache: mut cache, x: p.uop)
+    let wd = tensor_const_like_float(cache: mut cache, x: detached, value: weight_decay)
+    let decayed = tensor_mul(cache: mut cache, a: detached, b: wd)
+    return tensor_add(cache: mut cache, a: g, b: decayed)
+}
+
+fn optimizer_momentum_update(cache: mut UOpCache, opt: mut OptimizerState, index: Int, g: Int) -> Int {
+    if opt.momentum <= 0.0 { return g }
+    local b = List.get<TensorState>(list: read opt.moments, index: index)
+    let mom = tensor_const_like_float(cache: mut cache, x: b.uop, value: opt.momentum)
+    let mb = tensor_mul(cache: mut cache, a: b.uop, b: mom)
+    let nb = tensor_add(cache: mut cache, a: mb, b: g)
+    local nb_state = tensor_state_new(uop: nb)
+    List.set<TensorState>(list: mut opt.moments, index: index, value: read (manage nb_state))
+    if opt.nesterov {
+        let ng = tensor_mul(cache: mut cache, a: nb, b: mom)
+        return tensor_add(cache: mut cache, a: g, b: ng)
+    }
+    return nb
+}
+
+fn optimizer_sgd_update(cache: mut UOpCache, opt: mut OptimizerState, index: Int, p: read TensorState, grad: Int) -> Int {
+    let mut g = grad
+    if opt.classic {
+        g = optimizer_apply_weight_decay(cache: mut cache, p: read p, g: g, weight_decay: opt.weight_decay)
+    }
+    g = optimizer_momentum_update(cache: mut cache, opt: mut opt, index: index, g: g)
+    if opt.kind == "muon" && opt.ns_steps > 0 {
+        g = tensor_newton_schulz(cache: mut cache, x: g, steps: opt.ns_steps, p0: 3.4445, p1: 0.0 - 4.775, p2: 2.0315, eps: 0.0000001)
+    }
+    if opt.classic == false {
+        g = optimizer_apply_weight_decay(cache: mut cache, p: read p, g: g, weight_decay: opt.weight_decay)
+    }
+    return g
+}
+
+fn optimizer_adam_update(cache: mut UOpCache, opt: mut OptimizerState, index: Int, p: read TensorState, grad: Int) -> Int {
+    local m = List.get<TensorState>(list: read opt.moments, index: index)
+    local v = List.get<TensorState>(list: read opt.velocities, index: index)
+    let b1c = tensor_const_like_float(cache: mut cache, x: m.uop, value: opt.b1)
+    let one_minus_b1 = tensor_const_like_float(cache: mut cache, x: grad, value: 1.0 - opt.b1)
+    let m0 = tensor_mul(cache: mut cache, a: m.uop, b: b1c)
+    let m1 = tensor_mul(cache: mut cache, a: grad, b: one_minus_b1)
+    let new_m = tensor_add(cache: mut cache, a: m0, b: m1)
+    let b2c = tensor_const_like_float(cache: mut cache, x: v.uop, value: opt.b2)
+    let one_minus_b2 = tensor_const_like_float(cache: mut cache, x: grad, value: 1.0 - opt.b2)
+    let g2 = tensor_mul(cache: mut cache, a: grad, b: grad)
+    let v0 = tensor_mul(cache: mut cache, a: v.uop, b: b2c)
+    let v1 = tensor_mul(cache: mut cache, a: g2, b: one_minus_b2)
+    let new_v = tensor_add(cache: mut cache, a: v0, b: v1)
+    local m_state = tensor_state_new(uop: new_m)
+    local v_state = tensor_state_new(uop: new_v)
+    List.set<TensorState>(list: mut opt.moments, index: index, value: read (manage m_state))
+    List.set<TensorState>(list: mut opt.velocities, index: index, value: read (manage v_state))
+    let mh_denom = tensor_const_like_float(cache: mut cache, x: new_m, value: 1.0 - opt.b1_power)
+    let vh_denom = tensor_const_like_float(cache: mut cache, x: new_v, value: 1.0 - opt.b2_power)
+    let m_hat = tensor_div(cache: mut cache, a: new_m, b: mh_denom)
+    let v_hat = tensor_div(cache: mut cache, a: new_v, b: vh_denom)
+    let root = tensor_sqrt(cache: mut cache, x: v_hat)
+    let eps_t = tensor_const_like_float(cache: mut cache, x: root, value: opt.eps)
+    let denom = tensor_add(cache: mut cache, a: root, b: eps_t)
+    let base = tensor_div(cache: mut cache, a: m_hat, b: denom)
+    if opt.kind == "adamw" {
+        return optimizer_apply_weight_decay(cache: mut cache, p: read p, g: base, weight_decay: opt.weight_decay)
+    }
+    return base
+}
+
+fn _step(cache: mut UOpCache, opt: mut OptimizerState) -> fresh List<Int> {
+    optimizer_ensure_state(cache: mut cache, opt: mut opt)
+    if opt.kind == "adam" || opt.kind == "adamw" {
+        opt.b1_power = opt.b1_power * opt.b1
+        opt.b2_power = opt.b2_power * opt.b2
+    }
     local updates = List.new<Int>()
     let mut i = 0
     while i < List.len<TensorState>(list: read opt.params) {
         local p = List.get<TensorState>(list: read opt.params, index: i)
-        if p.has_grad { push1(l: mut updates, a: p.grad) }
-        else { push1(l: mut updates, a: tensor_zeros_like_same(cache: mut cache, x: p.uop)) }
+        let grad = optimizer_param_grad(cache: mut cache, p: read p)
+        let mut up = grad
+        if opt.kind == "adam" || opt.kind == "adamw" {
+            up = optimizer_adam_update(cache: mut cache, opt: mut opt, index: i, p: read p, grad: grad)
+        } else {
+            up = optimizer_sgd_update(cache: mut cache, opt: mut opt, index: i, p: read p, grad: grad)
+        }
+        push1(l: mut updates, a: up)
         i = i + 1
     }
     return take updates
 }
 
 fn schedule_step(cache: mut UOpCache, opt: mut OptimizerState) -> fresh List<TensorState> {
-    local updates = _step(cache: mut cache, opt: read opt)
+    local updates = _step(cache: mut cache, opt: mut opt)
     local out = List.new<TensorState>()
     let mut i = 0
     while i < List.len<TensorState>(list: read opt.params) {
@@ -86,17 +211,17 @@ fn step(cache: mut UOpCache, opt: mut OptimizerState) -> fresh List<TensorState>
 }
 
 fn SGD(params: read List<TensorState>, lr: Float, momentum: Float, weight_decay: Float, nesterov: Bool, classic: Bool) -> fresh OptimizerState {
-    return optimizer_new(params: read params, lr: lr)
+    return optimizer_make(params: read params, lr: lr, kind: read "sgd", momentum: momentum, weight_decay: weight_decay, b1: 0.0, b2: 0.0, eps: 0.00000001, ns_steps: 0, nesterov: nesterov, classic: classic)
 }
 
 fn Muon(params: read List<TensorState>, lr: Float, momentum: Float, weight_decay: Float, ns_steps: Int) -> fresh OptimizerState {
-    return optimizer_new(params: read params, lr: lr)
+    return optimizer_make(params: read params, lr: lr, kind: read "muon", momentum: momentum, weight_decay: weight_decay, b1: 0.0, b2: 0.0, eps: 0.00000001, ns_steps: ns_steps, nesterov: true, classic: false)
 }
 
 fn AdamW(params: read List<TensorState>, lr: Float, b1: Float, b2: Float, eps: Float, weight_decay: Float) -> fresh OptimizerState {
-    return optimizer_new(params: read params, lr: lr)
+    return optimizer_make(params: read params, lr: lr, kind: read "adamw", momentum: 0.0, weight_decay: weight_decay, b1: b1, b2: b2, eps: eps, ns_steps: 0, nesterov: false, classic: false)
 }
 
 fn Adam(params: read List<TensorState>, lr: Float, b1: Float, b2: Float, eps: Float) -> fresh OptimizerState {
-    return optimizer_new(params: read params, lr: lr)
+    return optimizer_make(params: read params, lr: lr, kind: read "adam", momentum: 0.0, weight_decay: 0.0, b1: b1, b2: b2, eps: eps, ns_steps: 0, nesterov: false, classic: false)
 }

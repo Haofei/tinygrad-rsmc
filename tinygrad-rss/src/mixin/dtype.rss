@@ -19,3 +19,7 @@ fn mixin_dtype_bfloat16(cache: mut UOpCache, x: Int) -> Int { return bfloat16(ca
 fn mixin_dtype_double(cache: mut UOpCache, x: Int) -> Int { return double(cache: mut cache, x: x) }
 fn mixin_dtype_long(cache: mut UOpCache, x: Int) -> Int { return long(cache: mut cache, x: x) }
 fn mixin_dtype_short(cache: mut UOpCache, x: Int) -> Int { return short(cache: mut cache, x: x) }
+fn mixin_dtype_cast(cache: mut UOpCache, x: Int, dt: read DType) -> Int { return tensor_cast(cache: mut cache, x: x, dt: read dt) }
+fn mixin_dtype_dtype(cache: read UOpCache, x: Int) -> fresh DType { return tensor_dtype(cache: read cache, x: x) }
+fn mixin_dtype_is_bool(cache: read UOpCache, x: Int) -> Bool { return dtype_is_bool(d: read tensor_dtype(cache: read cache, x: x)) }
+fn mixin_dtype_is_int(cache: read UOpCache, x: Int) -> Bool { return dtype_is_int(d: read tensor_dtype(cache: read cache, x: x)) }

@@ -11,10 +11,26 @@ fn mixin_creation_full_like_same(cache: mut UOpCache, x: Int, value: Float) -> I
     return tensor_full_like_same(cache: mut cache, x: x, value: value)
 }
 
+fn mixin_creation_const_like(cache: mut UOpCache, x: Int, value: Float) -> Int {
+    return tensor_const_like(cache: mut cache, x: x, value: value)
+}
+
+fn mixin_creation_empty_like(cache: mut UOpCache, x: Int, dt: read DType, device: read String, num: Int) -> Int {
+    return tensor_empty_like(cache: mut cache, x: x, dt: read dt, device: read device, num: num)
+}
+
 fn mixin_creation_zeros_like(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
     return tensor_zeros_like(cache: mut cache, x: x, dt: read dt)
 }
 
+fn mixin_creation_zeros_like_same(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_zeros_like_same(cache: mut cache, x: x)
+}
+
 fn mixin_creation_ones_like(cache: mut UOpCache, x: Int, dt: read DType) -> Int {
     return tensor_ones_like(cache: mut cache, x: x, dt: read dt)
+}
+
+fn mixin_creation_ones_like_same(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_ones_like_same(cache: mut cache, x: x)
 }

@@ -11,10 +11,30 @@ fn mixin_rand_bits_to_rand(cache: mut UOpCache, bits: Int, shape: read List<Int>
     return _bits_to_rand(cache: mut cache, bits: bits, shape: read shape, dt: read dt)
 }
 
+fn mixin_rand_manual_seed(seed: Int) -> fresh TensorRngState {
+    return tensor_manual_seed(seed: seed)
+}
+
+fn mixin_rand_rand(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed: Int) -> Int {
+    return tensor_rand(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
+}
+
 fn mixin_rand_rand_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
     return tensor_rand_like(cache: mut cache, x: x, dt: read dt, seed: seed)
 }
 
 fn mixin_rand_randn_like(cache: mut UOpCache, x: Int, dt: read DType, seed: Int) -> Int {
     return tensor_randn_like(cache: mut cache, x: x, dt: read dt, seed: seed)
+}
+
+fn mixin_rand_randn(cache: mut UOpCache, dt: read DType, shape: read List<Int>, seed: Int) -> Int {
+    return tensor_randn(cache: mut cache, dt: read dt, shape: read shape, seed: seed)
+}
+
+fn mixin_rand_uniform(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Float, high: Float, seed: Int) -> Int {
+    return tensor_uniform(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: seed)
+}
+
+fn mixin_rand_randint(cache: mut UOpCache, dt: read DType, shape: read List<Int>, low: Int, high: Int, seed: Int) -> Int {
+    return tensor_randint(cache: mut cache, dt: read dt, shape: read shape, low: low, high: high, seed: seed)
 }

@@ -3,12 +3,47 @@ features: local
 
 fn mixin_elementwise_package_marker() -> fresh String { return String.copy(value: read "mixin.elementwise") }
 
+fn mixin_elementwise_alu(cache: mut UOpCache, op: Ops, x: Int, y: Int) -> Int { return tensor_alu(cache: mut cache, op: op, x: x, y: y) }
+fn mixin_elementwise_ufix(cache: mut UOpCache, x: Int, value: Float, scalar_is_int_or_invalid: Bool) -> Int { return tensor_ufix(cache: mut cache, x: x, value: value, scalar_is_int_or_invalid: scalar_is_int_or_invalid) }
+fn mixin_elementwise_binop(cache: mut UOpCache, op: Ops, x: Int, y: Int, reverse: Bool) -> Int { return tensor_binop(cache: mut cache, op: op, x: x, y: y, reverse: reverse) }
+fn mixin_elementwise_usum(cache: mut UOpCache, x: Int, values: read List<Int>) -> Int { return usum(cache: mut cache, x: x, values: read values) }
+fn mixin_elementwise_uprod(cache: mut UOpCache, x: Int, values: read List<Int>) -> Int { return uprod(cache: mut cache, x: x, values: read values) }
+fn mixin_elementwise_detach(cache: mut UOpCache, x: Int) -> Int { return tensor_detach(cache: mut cache, x: x) }
+fn mixin_elementwise_contiguous(cache: mut UOpCache, x: Int) -> Int { return tensor_contiguous(cache: mut cache, x: x) }
+fn mixin_elementwise_contiguous_backward(cache: mut UOpCache, x: Int) -> Int { return tensor_contiguous_backward(cache: mut cache, x: x) }
+fn mixin_elementwise_logical_not(cache: mut UOpCache, x: Int) -> Int { return tensor_logical_not(cache: mut cache, x: x) }
+fn mixin_elementwise_neg(cache: mut UOpCache, x: Int) -> Int { return tensor_neg(cache: mut cache, x: x) }
 fn mixin_elementwise_add(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_add(cache: mut cache, a: x, b: y) }
 fn mixin_elementwise_sub(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_sub(cache: mut cache, a: x, b: y) }
 fn mixin_elementwise_mul(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_mul(cache: mut cache, a: x, b: y) }
 fn mixin_elementwise_div(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_div(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_mod(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_mod(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_fmod(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_fmod(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_pow(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_pow(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_bitwise_and(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_bitwise_and(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_bitwise_or(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_bitwise_or(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_bitwise_xor(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_bitwise_xor(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_bitwise_not(cache: mut UOpCache, x: Int) -> Int { return tensor_bitwise_not(cache: mut cache, x: x) }
+fn mixin_elementwise_lshift(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_lshift(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_rshift(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_rshift(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_maximum(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_maximum(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_minimum(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_minimum(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_eq(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_eq(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_ne(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_ne(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_lt(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_lt(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_le(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_le(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_gt(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_gt(cache: mut cache, a: x, b: y) }
+fn mixin_elementwise_ge(cache: mut UOpCache, x: Int, y: Int) -> Int { return tensor_ge(cache: mut cache, a: x, b: y) }
 fn mixin_elementwise_where(cache: mut UOpCache, cond: Int, x: Int, y: Int) -> Int { return tensor_where(cache: mut cache, cond: cond, x: x, y: y) }
 fn mixin_elementwise_relu(cache: mut UOpCache, x: Int) -> Int { return tensor_relu(cache: mut cache, x: x) }
+fn mixin_elementwise_relu6(cache: mut UOpCache, x: Int) -> Int { return tensor_relu6(cache: mut cache, x: x) }
 fn mixin_elementwise_sigmoid(cache: mut UOpCache, x: Int) -> Int { return tensor_sigmoid(cache: mut cache, x: x) }
 fn mixin_elementwise_log(cache: mut UOpCache, x: Int) -> Int { return tensor_log(cache: mut cache, x: x) }
 fn mixin_elementwise_exp(cache: mut UOpCache, x: Int) -> Int { return tensor_exp(cache: mut cache, x: x) }
+fn mixin_elementwise_sqrt(cache: mut UOpCache, x: Int) -> Int { return tensor_sqrt(cache: mut cache, x: x) }
+fn mixin_elementwise_square(cache: mut UOpCache, x: Int) -> Int { return tensor_square(cache: mut cache, x: x) }
+fn mixin_elementwise_abs(cache: mut UOpCache, x: Int) -> Int { return tensor_abs(cache: mut cache, x: x) }
+fn mixin_elementwise_sign(cache: mut UOpCache, x: Int) -> Int { return tensor_sign(cache: mut cache, x: x) }
+fn mixin_elementwise_tanh(cache: mut UOpCache, x: Int) -> Int { return tensor_tanh(cache: mut cache, x: x) }
+fn mixin_elementwise_sin(cache: mut UOpCache, x: Int) -> Int { return tensor_sin(cache: mut cache, x: x) }
+fn mixin_elementwise_cos(cache: mut UOpCache, x: Int) -> Int { return tensor_cos(cache: mut cache, x: x) }

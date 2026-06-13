@@ -3,16 +3,34 @@ features: local
 
 fn mixin_reduce_package_marker() -> fresh String { return String.copy(value: read "mixin.reduce") }
 
+fn mixin_reduce_rop(cache: mut UOpCache, x: Int, op: Ops, axes: read List<Int>) -> Int { return tensor_rop(cache: mut cache, x: x, op: op, axes: read axes) }
 fn mixin_reduce_sum(cache: mut UOpCache, x: Int) -> Int { return tensor_sum_all(cache: mut cache, x: x) }
 fn mixin_reduce_sum_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_sum_axis(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_sum_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int { return tensor_sum_axes(cache: mut cache, x: x, axes: read axes) }
+fn mixin_reduce_sum_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_sum_axis_keepdim(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_mean(cache: mut UOpCache, x: Int) -> Int { return tensor_mean_all(cache: mut cache, x: x) }
 fn mixin_reduce_mean_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_mean_axis(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int { return tensor_mean_axes(cache: mut cache, x: x, axes: read axes) }
+fn mixin_reduce_mean_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_mean_axis_keepdim(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_prod(cache: mut UOpCache, x: Int) -> Int { return tensor_prod_all(cache: mut cache, x: x) }
 fn mixin_reduce_prod_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_prod_axis(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_max(cache: mut UOpCache, x: Int) -> Int { return tensor_max_all(cache: mut cache, x: x) }
 fn mixin_reduce_max_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_max_axis(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_max_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int { return tensor_max_axes(cache: mut cache, x: x, axes: read axes) }
+fn mixin_reduce_min(cache: mut UOpCache, x: Int) -> Int { return tensor_min_all(cache: mut cache, x: x) }
+fn mixin_reduce_min_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_min_axis(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_any(cache: mut UOpCache, x: Int) -> Int { return tensor_any_all(cache: mut cache, x: x) }
 fn mixin_reduce_all(cache: mut UOpCache, x: Int) -> Int { return tensor_all_all(cache: mut cache, x: x) }
+fn mixin_reduce_argmax(cache: mut UOpCache, x: Int) -> Int { return tensor_argmax(cache: mut cache, x: x) }
+fn mixin_reduce_argmax_dim(cache: mut UOpCache, x: Int, dim: Int, keepdim: Bool) -> Int { return tensor_argmax_dim(cache: mut cache, x: x, dim: dim, keepdim: keepdim) }
+fn mixin_reduce_argmin(cache: mut UOpCache, x: Int) -> Int { return tensor_argmin(cache: mut cache, x: x) }
+fn mixin_reduce_argmin_dim(cache: mut UOpCache, x: Int, dim: Int, keepdim: Bool) -> Int { return tensor_argmin_dim(cache: mut cache, x: x, dim: dim, keepdim: keepdim) }
+fn mixin_reduce_var(cache: mut UOpCache, x: Int, correction: Float) -> Int { return tensor_var(cache: mut cache, x: x, correction: correction) }
+fn mixin_reduce_var_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> Int { return tensor_var_dim(cache: mut cache, x: x, dim: dim, correction: correction) }
+fn mixin_reduce_std(cache: mut UOpCache, x: Int, correction: Float) -> Int { return tensor_std(cache: mut cache, x: x, correction: correction) }
+fn mixin_reduce_std_dim(cache: mut UOpCache, x: Int, dim: Int, correction: Float) -> Int { return tensor_std_dim(cache: mut cache, x: x, dim: dim, correction: correction) }
+fn mixin_reduce_softmax(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_softmax(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_log_softmax(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_log_softmax(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_einsum(cache: mut UOpCache, formula: read String, operands: read List<Int>) -> Int {
     return einsum(cache: mut cache, formula: read formula, operands: read operands)
 }

@@ -3,8 +3,20 @@ features: local
 
 fn mixin_movement_package_marker() -> fresh String { return String.copy(value: read "mixin.movement") }
 
+fn mixin_movement_ndim(cache: read UOpCache, x: Int) -> Int { return ndim(cache: read cache, x: x) }
+fn mixin_movement_numel(cache: read UOpCache, x: Int) -> Int { return tensor_numel(cache: read cache, x: x) }
+fn mixin_movement_size(cache: read UOpCache, x: Int) -> fresh List<Int> { return tensor_shape(cache: read cache, x: x) }
+fn mixin_movement_size_dim(cache: read UOpCache, x: Int, dim: Int) -> Int {
+    local sh = tensor_shape(cache: read cache, x: x)
+    return List.get<Int>(list: read sh, index: tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: dim, extra: false))
+}
+
 fn mixin_movement_reshape(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
     return tensor_reshape(cache: mut cache, x: x, new_shape: read shape)
+}
+
+fn mixin_movement_view(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
+    return tensor_view(cache: mut cache, x: x, new_shape: read shape)
 }
 
 fn mixin_movement_expand(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
@@ -21,4 +33,44 @@ fn mixin_movement_flip(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int
 
 fn mixin_movement_pad(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>) -> Int {
     return tensor_pad(cache: mut cache, x: x, before: read before, after: read after)
+}
+
+fn mixin_movement_pad_constant(cache: mut UOpCache, x: Int, before: read List<Int>, after: read List<Int>, value: Float) -> Int {
+    return tensor_pad_constant(cache: mut cache, x: x, before: read before, after: read after, value: value)
+}
+
+fn mixin_movement_shrink_to(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
+    return tensor_shrink_to(cache: mut cache, x: x, new_shape: read shape)
+}
+
+fn mixin_movement_pad_to(cache: mut UOpCache, x: Int, shape: read List<Int>) -> Int {
+    return tensor_pad_to(cache: mut cache, x: x, new_shape: read shape)
+}
+
+fn mixin_movement_unsqueeze(cache: mut UOpCache, x: Int, dim: Int) -> Int {
+    return tensor_unsqueeze(cache: mut cache, x: x, dim: dim)
+}
+
+fn mixin_movement_squeeze(cache: mut UOpCache, x: Int) -> Int {
+    return tensor_squeeze_all(cache: mut cache, x: x)
+}
+
+fn mixin_movement_squeeze_dim(cache: mut UOpCache, x: Int, dim: Int) -> Int {
+    return tensor_squeeze_dim(cache: mut cache, x: x, dim: dim)
+}
+
+fn mixin_movement_transpose(cache: mut UOpCache, x: Int, dim0: Int, dim1: Int) -> Int {
+    return tensor_transpose(cache: mut cache, x: x, dim0: dim0, dim1: dim1)
+}
+
+fn mixin_movement_flatten(cache: mut UOpCache, x: Int, start_dim: Int, end_dim: Int) -> Int {
+    return tensor_flatten(cache: mut cache, x: x, start_dim: start_dim, end_dim: end_dim)
+}
+
+fn mixin_movement_cat(cache: mut UOpCache, tensors: read List<Int>, dim: Int) -> Int {
+    return tensor_cat(cache: mut cache, tensors: read tensors, dim: dim)
+}
+
+fn mixin_movement_stack(cache: mut UOpCache, tensors: read List<Int>, dim: Int) -> Int {
+    return tensor_stack(cache: mut cache, tensors: read tensors, dim: dim)
 }

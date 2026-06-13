@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 42,195 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 42,405 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -46,6 +46,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     creation, dtype, elementwise, movement, random, and reduction helpers. These wrappers are
     exercised by the active smoke; they are still RSS graph-helper entry points, not Python
     descriptor/decorator object behavior.
+  - focused mixin source-surface expansion batch: the same mixin files now expose grouped wrappers
+    for upstream-style const/empty/same-dtype creation, dtype predicates/cast, elementwise ALU,
+    comparison, bitwise, unary, contiguous/detach helpers, movement shape/view/pad/squeeze/
+    transpose/flatten/cat/stack helpers, direct RNG constructors, and reduce/stat/softmax/arg
+    helpers over the integrated tensor layer. These are smoke-tested wrappers over existing tensor
+    semantics, not a Python method descriptor/object model.
   - focused runtime backend wrapper batch: `runtime/graph/metal.py`, `runtime/ops_hip.py`,
     `runtime/ops_npy.py`, and `runtime/support/compiler_qcom.py` now expose deterministic
     source-path-local state wrappers for Metal graph launch metadata, HIP/NPY device allocation
@@ -912,6 +918,9 @@ Current integrated demo:
   supported dtype lists, aux parameter metadata, non-native float pattern hooks, bf16 cast node
   construction, WMMA metadata collection, fp8 index selection, OCML call rendering, CDNA arch
   predicates, and the HIP assembly facade.
+- validates expanded function/mixin source wrappers through the active smoke: creation, dtype,
+  elementwise, movement, RNG, and reduction mixin wrappers now call into the integrated tensor
+  layer and are checked for representative dtypes, graph ops, shapes, and evaluated tensor sizes.
 - validates source-shaped LLVM/PTX/WGSL/NIR renderer backend facade names through the active smoke:
   LLVM dtype/constant/cast/WMMA/function/footer helpers, PTX value/memory/WMMA/modifier helpers,
   WGSL packed mask/load/type/nan helpers, and NIR symbol/type/ALU/cast/channel/immediate/param/

@@ -70,13 +70,164 @@ fn state_dict_new() -> fresh StateDict {
     return StateDict(names: take names, tensors: take tensors)
 }
 
+fn state_safe_dtype(name: read String) -> fresh DType {
+    if name == "BOOL" { return dt_bool() }
+    if name == "I8" { return dt_int8() }
+    if name == "U8" { return dt_uint8() }
+    if name == "I16" { return dt_int16() }
+    if name == "U16" { return dt_uint16() }
+    if name == "I32" { return dt_int32() }
+    if name == "U32" { return dt_uint32() }
+    if name == "I64" { return dt_int64() }
+    if name == "U64" { return dt_uint64() }
+    if name == "F16" { return dt_float16() }
+    if name == "BF16" { return dt_bfloat16() }
+    if name == "F64" { return dt_float64() }
+    return dt_float32()
+}
+
+fn state_safe_dtype_name(dt: read DType) -> fresh String {
+    if dt.name == dt_bool().name { return String.copy(value: read "BOOL") }
+    if dt.name == dt_int8().name { return String.copy(value: read "I8") }
+    if dt.name == dt_uint8().name { return String.copy(value: read "U8") }
+    if dt.name == dt_int16().name { return String.copy(value: read "I16") }
+    if dt.name == dt_uint16().name { return String.copy(value: read "U16") }
+    if dt.name == dt_int32().name { return String.copy(value: read "I32") }
+    if dt.name == dt_uint32().name { return String.copy(value: read "U32") }
+    if dt.name == dt_int64().name { return String.copy(value: read "I64") }
+    if dt.name == dt_uint64().name { return String.copy(value: read "U64") }
+    if dt.name == dt_float16().name { return String.copy(value: read "F16") }
+    if dt.name == dt_bfloat16().name { return String.copy(value: read "BF16") }
+    if dt.name == dt_float64().name { return String.copy(value: read "F64") }
+    return String.copy(value: read "F32")
+}
+
+fn state_header_len_from_data(data: read List<Float>) -> Int {
+    let mut out = 0
+    let mut mul = 1
+    let mut i = 0
+    while i < 8 && i < List.len<Float>(list: read data) {
+        let b = trunc_float_to_int(v: List.get<Float>(list: read data, index: i)) & 255
+        out = out + b * mul
+        mul = mul * 256
+        i = i + 1
+    }
+    return out
+}
+
+fn state_bytes_from_tensor_slice(cache: read UOpCache, t: Int, start: Int, len: Int) -> fresh Bytes {
+    local data = tensor_data(cache: read cache, x: t)
+    local ints = tensor_data_uints_slice(data: read data, start: start, len: len)
+    return Bytes.from_uints(values: read ints)
+}
+
+fn state_json_array_ints_into(value: read JsonValue, out: mut List<Int>) -> Unit {
+    match Json.array_ints(value: read value) {
+        Ok(items) => {
+            let mut i = 0
+            while i < List.len<Int>(list: read items) {
+                let v = List.get<Int>(list: read items, index: i)
+                push1(l: mut out, a: v)
+                i = i + 1
+            }
+        }
+        Err(error) => {}
+    }
+    return Unit
+}
+
+fn state_tensor_from_safetensor_bytes(cache: mut UOpCache, bytes: read Bytes, dtype: read DType, shape: read List<Int>) -> Int {
+    let raw = tensor_bytes_to_1d(cache: mut cache, bytes: read bytes)
+    if dtype.name == dt_uint8().name {
+        return tensor_reshape(cache: mut cache, x: raw, new_shape: read shape)
+    }
+    let casted = tensor_bitcast(cache: mut cache, x: raw, dt: read dtype)
+    return tensor_reshape(cache: mut cache, x: casted, new_shape: read shape)
+}
+
 fn safe_load_metadata(cache: read UOpCache, t: Int) -> fresh StateDict {
     local sd = state_dict_new()
+    local data = tensor_data(cache: read cache, x: t)
+    let header_len = state_header_len_from_data(data: read data)
+    if header_len <= 0 || header_len + 8 > List.len<Float>(list: read data) { return take sd }
+    local header_bytes = state_bytes_from_tensor_slice(cache: read cache, t: t, start: 8, len: header_len)
+    local header_text = Bytes.to_string(value: read header_bytes)
+    match Json.parse(text: read header_text) {
+        Ok(doc) => {
+            match Json.object_keys(value: read doc) {
+                Ok(keys) => {
+                    let mut i = 0
+                    while i < List.len<String>(list: read keys) {
+                        local name = List.get<String>(list: read keys, index: i)
+                        if name != "__metadata__" {
+                            List.push<String>(list: mut sd.names, value: read (manage name))
+                        }
+                        i = i + 1
+                    }
+                }
+                Err(error) => {}
+            }
+        }
+        Err(error) => {}
+    }
     return take sd
 }
 
-fn safe_load(cache: read UOpCache, t: Int) -> fresh StateDict {
+fn safe_load(cache: mut UOpCache, t: Int) -> fresh StateDict {
     local sd = state_dict_new()
+    local data = tensor_data(cache: read cache, x: t)
+    let header_len = state_header_len_from_data(data: read data)
+    if header_len <= 0 || header_len + 8 > List.len<Float>(list: read data) { return take sd }
+    local header_bytes = state_bytes_from_tensor_slice(cache: read cache, t: t, start: 8, len: header_len)
+    local header_text = Bytes.to_string(value: read header_bytes)
+    match Json.parse(text: read header_text) {
+        Ok(doc) => {
+            match Json.object_keys(value: read doc) {
+                Ok(keys) => {
+                    let mut i = 0
+                    while i < List.len<String>(list: read keys) {
+                        local name = List.get<String>(list: read keys, index: i)
+                        if name != "__metadata__" {
+                            match Json.field(value: read doc, name: read name) {
+                                Ok(entry) => {
+                                    let mut dtype_name = String.copy(value: read "F32")
+                                    match Json.field_string(value: read entry, name: read "dtype") {
+                                        Ok(v) => { dtype_name = String.copy(value: read v) }
+                                        Err(error) => {}
+                                    }
+                                    local shape = List.new<Int>()
+                                    match Json.field(value: read entry, name: read "shape") {
+                                        Ok(shape_json) => { state_json_array_ints_into(value: read shape_json, out: mut shape) }
+                                        Err(error) => {}
+                                    }
+                                    local offsets = List.new<Int>()
+                                    match Json.field(value: read entry, name: read "data_offsets") {
+                                        Ok(offset_json) => { state_json_array_ints_into(value: read offset_json, out: mut offsets) }
+                                        Err(error) => {}
+                                    }
+                                    if List.len<Int>(list: read offsets) >= 2 {
+                                        let start = List.get<Int>(list: read offsets, index: 0)
+                                        let end = List.get<Int>(list: read offsets, index: 1)
+                                        if end >= start {
+                                            local raw = state_bytes_from_tensor_slice(cache: read cache, t: t, start: 8 + header_len + start, len: end - start)
+                                            local dtype = state_safe_dtype(name: read dtype_name)
+                                            let tensor = state_tensor_from_safetensor_bytes(cache: mut cache, bytes: read raw, dtype: read dtype, shape: read shape)
+                                            List.push<String>(list: mut sd.names, value: read (manage name))
+                                            push1(l: mut sd.tensors, a: tensor)
+                                        }
+                                    }
+                                }
+                                Err(error) => {}
+                            }
+                        }
+                        i = i + 1
+                    }
+                }
+                Err(error) => {}
+            }
+        }
+        Err(error) => {}
+    }
     return take sd
 }
 

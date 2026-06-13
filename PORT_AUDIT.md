@@ -22,7 +22,7 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
 - source size inventory:
   - tinygrad handwritten Python, excluding `runtime/autogen`: 118 files, about 33k LOC.
   - tinygrad `runtime/autogen`: 88 generated files, about 179k LOC.
-  - integrated `tinygrad-rss/src`: 123 RSS files, 42,845 LOC.
+  - integrated `tinygrad-rss/src`: 123 RSS files, 43,012 LOC.
   - vendored `tinygrad-rss/vendor/tinygrad/runtime/autogen`: 88 generated Python files,
     exactly copied from upstream tinygrad commit `fa400f9790ab9a684387b02e958658217b33e7c1`.
   - standalone `port-rss`: 55 RSS files, about 12.1k LOC.
@@ -80,6 +80,12 @@ the real port. `engine/` was a misleading verifier/demo tree and has been remove
     Adam/AdamW moments plus bias correction. The active smoke exercises these state updates; this
     is still not fused optimizer scheduling, training globals, device movement, LARS/LAMB trust
     ratios, or exact tinygrad optimizer execution.
+  - focused NN state-file batch: `nn/state.py` now parses simple in-memory safetensors metadata
+    from tensor-backed bytes using the upstream 8-byte header length, JSON object keys, dtype,
+    shape, and `data_offsets`; `safe_load` slices raw payload bytes into typed/shaped tensors.
+    The active smoke loads a minimal `U8[4]` safetensors payload. Zip/tar/torch pickle loading,
+    file-name wrappers, compression, external storage, and full model object traversal are still
+    not exact upstream behavior.
   - focused renderer/runtime/nn backend batch: `nn/*`, `renderer/llvmir.py`, `renderer/ptx.py`,
     `renderer/wgsl.py`, `renderer/nir.py`, `runtime/ops_python.py`, `runtime/ops_null.py`,
     `runtime/ops_cpu.py`, and `runtime/ops_disk.py`: 201/201 rough symbols covered.
@@ -138,6 +144,8 @@ Toolchain changes made to simplify the next port slices:
   (`Bytes.from_uints`, `Bytes.to_uints`, `Hash.sha3_224_bytes`, `Hash.sha3_256_bytes`, and
   `Hash.shake128_bytes`) across stdlib interfaces, runtime ABI, reg VM, and REIR capability
   classification for tensor hash parity work.
+- RSScript now exposes `Bytes.to_string` across stdlib interfaces, runtime ABI, reg VM, and Rust
+  runtime so tensor-backed byte buffers can feed JSON parsers for safetensors-style metadata.
 - RSScript now exposes `HttpResponse.bytes` across stdlib interfaces, runtime ABI, reg VM, and
   Rust runtime so URL-backed tensor creation can consume response bodies as bytes instead of
   lossy text.

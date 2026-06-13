@@ -1699,13 +1699,110 @@ fn reduce_mul_chain(cache: mut UOpCache, r: Int) -> Option<Int> {
 }
 
 fn drop_and_clauses(cache: mut UOpCache, cond: Int, x: Int, i: Int) -> Option<Int> {
-    local keep = uop_split_by_op(cache: read cache, id: cond, sep: AND)
-    if List.len<Int>(list: read keep) == 0 { return None }
-    return None
+    local clauses = uop_split_by_op(cache: read cache, id: cond, sep: AND)
+    local x_ranges = uop_ranges(cache: read cache, id: x)
+    local keep = List.new<Int>()
+    let mut dropped = false
+    let mut ci = 0
+    while ci < List.len<Int>(list: read clauses) {
+        let clause = List.get<Int>(list: read clauses, index: ci)
+        local cranges = uop_ranges(cache: read cache, id: clause)
+        let mut overlaps = false
+        let mut ri = 0
+        while ri < List.len<Int>(list: read cranges) {
+            if uop_ints_contains(vals: read x_ranges, v: List.get<Int>(list: read cranges, index: ri)) { overlaps = true }
+            ri = ri + 1
+        }
+        if overlaps { List.push<Int>(list: mut keep, value: read clause) }
+        else { dropped = true }
+        ci = ci + 1
+    }
+    if dropped == false { return None }
+    let kcond = symbolic_and_product(cache: mut cache, parts: read keep)
+    let dt = node_full_dtype(cache: read cache, id: x)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: kcond, tval: x, fval: i))
+}
+
+fn symbolic_index_nodes(cache: read UOpCache, id: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    local topo = uop_toposort(cache: read cache, id: id)
+    let mut i = 0
+    while i < List.len<Int>(list: read topo) {
+        let node = List.get<Int>(list: read topo, index: i)
+        if node_op(cache: read cache, id: node) == INDEX { List.push<Int>(list: mut out, value: read node) }
+        i = i + 1
+    }
+    return take out
+}
+
+fn symbolic_ranges_subset(cache: read UOpCache, child: Int, parent: Int) -> Bool {
+    local cranges = uop_ranges(cache: read cache, id: child)
+    local pranges = uop_ranges(cache: read cache, id: parent)
+    let mut i = 0
+    while i < List.len<Int>(list: read cranges) {
+        if uop_ints_contains(vals: read pranges, v: List.get<Int>(list: read cranges, index: i)) == false { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn symbolic_clause_index_allowed(cache: read UOpCache, clause: Int, allowed: read List<Int>) -> Bool {
+    local indexes = symbolic_index_nodes(cache: read cache, id: clause)
+    let mut i = 0
+    while i < List.len<Int>(list: read indexes) {
+        if uop_ints_contains(vals: read allowed, v: List.get<Int>(list: read indexes, index: i)) == false { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn symbolic_can_move_where_clause(cache: read UOpCache, clause: Int, idx: Int, idx_indexes: read List<Int>) -> Bool {
+    if symbolic_ranges_subset(cache: read cache, child: clause, parent: idx) == false { return false }
+    return symbolic_clause_index_allowed(cache: read cache, clause: clause, allowed: read idx_indexes)
 }
 
 fn where_on_load(cache: mut UOpCache, cond: Int, buf: Int, idx: Int, or_cast: Int) -> Option<Int> {
-    return None
+    local where_clauses = uop_split_by_op(cache: read cache, id: cond, sep: AND)
+    let load_valid = uop_get_valid(cache: mut cache, id: idx)
+    local in_load = uop_split_by_op(cache: read cache, id: load_valid, sep: AND)
+    local idx_indexes = symbolic_index_nodes(cache: read cache, id: idx)
+    local moved = List.new<Int>()
+    local keep = List.new<Int>()
+    let mut dropped_existing = false
+    let mut i = 0
+    while i < List.len<Int>(list: read where_clauses) {
+        let clause = List.get<Int>(list: read where_clauses, index: i)
+        if uop_ints_contains(vals: read in_load, v: clause) {
+            dropped_existing = true
+        } else if symbolic_can_move_where_clause(cache: read cache, clause: clause, idx: idx, idx_indexes: read idx_indexes) {
+            List.push<Int>(list: mut moved, value: read clause)
+        } else {
+            List.push<Int>(list: mut keep, value: read clause)
+        }
+        i = i + 1
+    }
+    if List.len<Int>(list: read moved) == 0 && dropped_existing == false { return None }
+    local valid_parts = List.new<Int>()
+    List.push<Int>(list: mut valid_parts, value: read load_valid)
+    i = 0
+    while i < List.len<Int>(list: read moved) {
+        List.push<Int>(list: mut valid_parts, value: read List.get<Int>(list: read moved, index: i))
+        i = i + 1
+    }
+    let new_valid = symbolic_and_product(cache: mut cache, parts: read valid_parts)
+    let raw_idx = uop_get_idx(cache: read cache, id: idx)
+    let valid_idx = uop_valid(cache: mut cache, id: raw_idx, cond: new_valid)
+    local idx_srcs = List.new<Int>()
+    List.push<Int>(list: mut idx_srcs, value: read valid_idx)
+    let new_idx = mk_index(cache: mut cache, base: buf, srcs: read idx_srcs, ptr: false)
+    let mut ret_idx = new_idx
+    if node_op(cache: read cache, id: or_cast) == CAST {
+        ret_idx = mk_cast(cache: mut cache, x: new_idx, dt: read node_full_dtype(cache: read cache, id: or_cast))
+    }
+    let keep_cond = symbolic_and_product(cache: mut cache, parts: read keep)
+    let zero = uop_const_like(cache: mut cache, id: ret_idx, v: 0)
+    let dt = node_full_dtype(cache: read cache, id: ret_idx)
+    return Some(mk_where(cache: mut cache, dt: read dt, cond: keep_cond, tval: ret_idx, fval: zero))
 }
 
 fn gated_given_valid(cache: mut UOpCache, cond: Int, x: Int, i: Int) -> Option<Int> {

@@ -2363,6 +2363,23 @@ fn main() -> Unit {
     let msym_recomb_div = mk_alu2(cache: mut mcache, op: FLOORDIV, dt: read msym_wdt, x: msym_wx, y: msym_wc4)
     let msym_recomb_mul = mk_alu2(cache: mut mcache, op: MUL, dt: read msym_wdt, x: msym_recomb_div, y: msym_wc4)
     let msym_recomb_raw = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_recomb_mod, y: msym_recomb_mul)
+    let msym_drop_r = mk_range_int(cache: mut mcache, end: 6, axis_id: 35, axis_type: read AXIS_LOOP, dt: read msym_wdt)
+    let msym_drop_bound = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 3)
+    let msym_drop_rx = mk_alu2(cache: mut mcache, op: ADD, dt: read msym_wdt, x: msym_drop_r, y: msym_wc2)
+    let msym_drop_keep = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_drop_r, y: msym_drop_bound)
+    let msym_drop_extra = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_wx, y: msym_wc6)
+    let msym_drop_cond = mk_alu2(cache: mut mcache, op: AND, dt: read dt_bool(), x: msym_drop_keep, y: msym_drop_extra)
+    local msym_drop = drop_and_clauses(cache: mut mcache, cond: msym_drop_cond, x: msym_drop_rx, i: msym_wc4)
+    local msym_load_shape = shp1(a: 8)
+    let msym_load_buf = mk_param(cache: mut mcache, slot: 96, dt: read i32, shape: read msym_load_shape, name: read "sym_load")
+    let msym_load_r = mk_range_int(cache: mut mcache, end: 8, axis_id: 36, axis_type: read AXIS_LOOP, dt: read msym_wdt)
+    let msym_load_c4 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 4)
+    let msym_load_c2 = mk_const_int(cache: mut mcache, dt: read msym_wdt, v: 2)
+    let msym_load_valid = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_load_r, y: msym_load_c4)
+    let msym_load_tighter = mk_alu2(cache: mut mcache, op: CMPLT, dt: read dt_bool(), x: msym_load_r, y: msym_load_c2)
+    let msym_load_idx = uop_valid(cache: mut mcache, id: msym_load_r, cond: msym_load_valid)
+    let msym_load_cond = mk_alu2(cache: mut mcache, op: AND, dt: read dt_bool(), x: msym_load_valid, y: msym_load_tighter)
+    local msym_moved = where_on_load(cache: mut mcache, cond: msym_load_cond, buf: msym_load_buf, idx: msym_load_idx, or_cast: msym_load_idx)
     let msym_group_clean = graph_rewrite(cache: mut mcache, id: msym_group_outer_raw)
     let msym_sink_clean = graph_rewrite(cache: mut mcache, id: msym_sink_raw)
     let msym_vadd = graph_rewrite(cache: mut mcache, id: msym_vadd_raw)
@@ -2383,6 +2400,22 @@ fn main() -> Unit {
     showi(label: read "uop.symbolic lt_folding rhs = ", v: node_const_int(cache: read mcache, id: node_src_id(cache: read mcache, id: msym_lt_fold, k: 1)))
     showb(label: read "uop.symbolic simplex canonicalized = ", v: node_op(cache: read mcache, id: node_src_id(cache: read mcache, id: node_src_id(cache: read mcache, id: msym_simplex, k: 0), k: 0)) == ADD)
     showb(label: read "uop.symbolic divmod recombine is base = ", v: msym_recomb == msym_wx)
+    match msym_drop {
+        Some(v) => {
+            let drop_cond = node_src_id(cache: read mcache, id: v, k: 0)
+            showb(label: read "uop.symbolic drop and clauses = ", v: node_op(cache: read mcache, id: v) == WHERE && drop_cond == msym_drop_keep && spec_type_verify(cache: read mcache, id: v))
+        }
+        None => { showb(label: read "uop.symbolic drop and clauses = ", v: false) }
+    }
+    match msym_moved {
+        Some(v) => {
+            let moved_tval = node_src_id(cache: read mcache, id: v, k: 1)
+            let moved_idx = node_src_id(cache: read mcache, id: moved_tval, k: 1)
+            let moved_valid = node_src_id(cache: read mcache, id: moved_idx, k: 0)
+            showb(label: read "uop.symbolic where on load = ", v: node_op(cache: read mcache, id: v) == WHERE && node_op(cache: read mcache, id: moved_tval) == INDEX && node_op(cache: read mcache, id: moved_idx) == WHERE && node_op(cache: read mcache, id: moved_valid) == AND && spec_type_verify(cache: read mcache, id: v))
+        }
+        None => { showb(label: read "uop.symbolic where on load = ", v: false) }
+    }
     let wdt = dt_weakint()
     let dm_n = mk_define_var(cache: mut mcache, name: read "dn", min_val: 0, max_val: 15, dt: read wdt)
     let dm_b = mk_define_var(cache: mut mcache, name: read "db", min_val: 0, max_val: 1, dt: read wdt)

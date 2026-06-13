@@ -733,8 +733,13 @@ Integrated pieces:
   interned UOp-id representation. `uop_given_valid` now has the upstream-shaped bounded fake-variable
   substitution path, multi-substitution support, closer valid-priority ordering, and the INDEX guard
   in `simplify_valid`, which lets masked index cleanup simplify bounded expressions such as
-  `x % 4 -> x` under `x < 4`. Full byte reinterpretation for float bitcasts, exact WMMA/GEP
-  layout pushing, range-clause dropping, and data-dependent load gating remain conservative/partial.
+  `x % 4 -> x` under `x < 4`. `drop_and_clauses` now drops `WHERE` guard clauses whose ranges do
+  not overlap the guarded weak/index expression, and `where_on_load` moves movable guard clauses
+  into indexed load valid masks when the clause ranges and data-dependent `INDEX` uses are bounded
+  by the load index. Full byte reinterpretation for float bitcasts, exact WMMA/GEP layout pushing,
+  exact upstream PatternMatcher scheduling for those helpers, IMAGE/DIV/MOD guard exclusions in
+  gated valid movement, full boolean/arithmetic Z3 parity, and broader symbolic phase composition
+  remain conservative/partial.
   The evaluator now covers the integrated unary math UOps
   `EXP2`, `LOG2`, `SIN`, `SQRT`, `RECIPROCAL`, `NEG`, `TRUNC`, plus binary `POW`, and handles
   scalar-to-tensor `EXPAND` materialization, `FLIP`, `PAD`, graph-backed `SHRINK` slicing, and

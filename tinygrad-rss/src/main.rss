@@ -4575,6 +4575,32 @@ fn main() -> Unit {
         Some(r) => { rfac_noop_ok = node_op(cache: read mcache, id: r) == SHRINK || r == idx_rf_stage_stage }
         None => {}
     }
+    let rfac_syn_r0 = List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0)
+    let rfac_syn_r1 = List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1)
+    local rfac_inner_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_inner_srcs, value: read rfac_syn_r0)
+    let rfac_inner_index = mk_index(cache: mut mcache, base: idx_rf_buf, srcs: read rfac_inner_srcs, ptr: true)
+    local rfac_outer_srcs = List.new<Int>()
+    List.push<Int>(list: mut rfac_outer_srcs, value: read rfac_syn_r1)
+    let rfac_outer_index = mk_index(cache: mut mcache, base: rfac_inner_index, srcs: read rfac_outer_srcs, ptr: false)
+    let mut rfac_nested_index_ok = false
+    match rangeify_syntactic_nested_index(cache: mut mcache, idx: rfac_outer_index) {
+        Some(r) => {
+            rfac_nested_index_ok = node_op(cache: read mcache, id: r) == INDEX && node_num_src(cache: read mcache, id: r) == 3 && node_src_id(cache: read mcache, id: r, k: 0) == idx_rf_buf && node_src_id(cache: read mcache, id: r, k: 1) == rfac_syn_r0 && node_src_id(cache: read mcache, id: r, k: 2) == rfac_syn_r1
+        }
+        None => {}
+    }
+    let rfac_syn_add = mk_alu2(cache: mut mcache, op: ADD, dt: read dt_float32(), x: idx_rf_buf, y: idx_rf_stage_buf1)
+    let rfac_syn_add_index = mk_index(cache: mut mcache, base: rfac_syn_add, srcs: read idx_rf_contig_rec.out_ranges, ptr: false)
+    let mut rfac_elementwise_index_ok = false
+    match rangeify_syntactic_index_elementwise(cache: mut mcache, idx: rfac_syn_add_index) {
+        Some(r) => {
+            let a0 = node_src_id(cache: read mcache, id: r, k: 0)
+            let a1 = node_src_id(cache: read mcache, id: r, k: 1)
+            rfac_elementwise_index_ok = node_op(cache: read mcache, id: r) == ADD && node_op(cache: read mcache, id: a0) == INDEX && node_op(cache: read mcache, id: a1) == INDEX && node_src_id(cache: read mcache, id: a0, k: 0) == idx_rf_buf && node_src_id(cache: read mcache, id: a1, k: 0) == idx_rf_stage_buf1 && spec_type_verify(cache: read mcache, id: r)
+        }
+        None => {}
+    }
     showb(label: read "schedule.indexing rangeify records movement chain = ", v: idx_rf_contig_rec_i >= 0 && idx_rf_perm_rec_i >= 0 && idx_rf_buf_rec_i >= 0)
     showb(label: read "schedule.indexing rangeify realizes root axes = ", v: List.len<IndexingRealizeAxisRecord>(list: read idx_rf.realize_axes) == 1 && List.len<Int>(list: read idx_rf_contig_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify permute swizzles inputs = ", v: List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 1) && List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 1) == List.get<Int>(list: read idx_rf_contig_rec.out_ranges, index: 0) && List.get<Int>(list: read idx_rf_buf_rec.out_ranges, index: 0) == List.get<Int>(list: read idx_rf_perm_rec.in_ranges, index: 0))
@@ -4588,7 +4614,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_noop_ok && rfac_nested_index_ok && rfac_elementwise_index_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

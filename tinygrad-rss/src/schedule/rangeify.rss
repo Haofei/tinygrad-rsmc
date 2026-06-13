@@ -62,6 +62,102 @@ fn _mop_index(cache: mut UOpCache, r: Int, idx: Int) -> Option<Int> {
     return Some(mk_index(cache: mut cache, base: src0, srcs: read mapped, ptr: node_index_is_ptr(cache: read cache, id: idx)))
 }
 
+fn rangeify_index_tail(cache: read UOpCache, idx: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: idx) {
+        List.push<Int>(list: mut out, value: read node_src_id(cache: read cache, id: idx, k: i))
+        i = i + 1
+    }
+    return take out
+}
+
+fn rangeify_syntactic_nested_index(cache: mut UOpCache, idx: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: idx) != INDEX { return None }
+    if node_num_src(cache: read cache, id: idx) < 1 { return None }
+    if node_index_is_ptr(cache: read cache, id: idx) { return None }
+    let inner = node_src_id(cache: read cache, id: idx, k: 0)
+    if node_op(cache: read cache, id: inner) != INDEX { return None }
+    if node_index_is_ptr(cache: read cache, id: inner) == false { return None }
+    let base = node_src_id(cache: read cache, id: inner, k: 0)
+    local idxs = rangeify_index_tail(cache: read cache, idx: inner)
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: idx) {
+        List.push<Int>(list: mut idxs, value: read node_src_id(cache: read cache, id: idx, k: i))
+        i = i + 1
+    }
+    return Some(mk_index(cache: mut cache, base: base, srcs: read idxs, ptr: false))
+}
+
+fn rangeify_syntactic_index_elementwise(cache: mut UOpCache, idx: Int) -> Option<Int> {
+    if node_op(cache: read cache, id: idx) != INDEX { return None }
+    if node_num_src(cache: read cache, id: idx) < 1 { return None }
+    let base = node_src_id(cache: read cache, id: idx, k: 0)
+    let op = node_op(cache: read cache, id: base)
+    if op == CONST { return Some(base) }
+    if group_elementwise(op: read op) == false { return None }
+    local idxs = rangeify_index_tail(cache: read cache, idx: idx)
+    local srcs = List.new<Int>()
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: base) {
+        let child = node_src_id(cache: read cache, id: base, k: i)
+        List.push<Int>(list: mut srcs, value: read mk_index(cache: mut cache, base: child, srcs: read idxs, ptr: false))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: base)
+    return Some(intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: idx), src: take srcs, arg: take arg))
+}
+
+fn rangeify_syntactic_sugar_node(cache: mut UOpCache, id: Int) -> Option<Int> {
+    match rangeify_syntactic_nested_index(cache: mut cache, idx: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    match rangeify_syntactic_index_elementwise(cache: mut cache, idx: id) {
+        Some(r) => { return Some(r) }
+        None => {}
+    }
+    return None
+}
+
+fn rangeify_apply_syntactic_sugar_node(cache: mut UOpCache, id: Int, olds: mut List<Int>, news: mut List<Int>) -> Int {
+    let mut mi = 0
+    while mi < List.len<Int>(list: read olds) {
+        if id == List.get<Int>(list: read olds, index: mi) { return List.get<Int>(list: read news, index: mi) }
+        mi = mi + 1
+    }
+    local srcs = List.new<Int>()
+    let mut changed = false
+    let mut i = 0
+    while i < node_num_src(cache: read cache, id: id) {
+        let child = node_src_id(cache: read cache, id: id, k: i)
+        let rewritten = rangeify_apply_syntactic_sugar_node(cache: mut cache, id: child, olds: mut olds, news: mut news)
+        if rewritten != child { changed = true }
+        List.push<Int>(list: mut srcs, value: read rewritten)
+        i = i + 1
+    }
+    let mut cur = id
+    if changed {
+        let op = node_op(cache: read cache, id: id)
+        let dt = node_full_dtype(cache: read cache, id: id)
+        local arg = node_arg(cache: read cache, id: id)
+        cur = intern(cache: mut cache, op: op, dt: read dt, src: take srcs, arg: take arg)
+    }
+    match rangeify_syntactic_sugar_node(cache: mut cache, id: cur) {
+        Some(r) => { cur = r }
+        None => {}
+    }
+    List.push<Int>(list: mut olds, value: read id)
+    List.push<Int>(list: mut news, value: read cur)
+    return cur
+}
+
+fn rangeify_apply_syntactic_sugar(cache: mut UOpCache, root: Int) -> Int {
+    local olds = List.new<Int>()
+    local news = List.new<Int>()
+    return rangeify_apply_syntactic_sugar_node(cache: mut cache, id: root, olds: mut olds, news: mut news)
+}
+
 fn fix_store_hazard(cache: mut UOpCache, target: Int, src: Int) -> Option<Int> {
     let base = uop_base(cache: read cache, id: target)
     if indexing_backward_slice_with_self_contains(cache: read cache, id: src, value: base) == false { return None }
@@ -315,6 +411,7 @@ fn split_store(cache: mut UOpCache, x: Int) -> Option<Int> {
 }
 
 fn get_kernel_graph(cache: mut UOpCache, sink: Int) -> Int {
-    local analysis = indexing_run_rangeify_analysis(cache: mut cache, root: sink)
-    return indexing_apply_rangeify_rewrite(cache: mut cache, root: sink, analysis: read analysis)
+    let cleaned = rangeify_apply_syntactic_sugar(cache: mut cache, root: sink)
+    local analysis = indexing_run_rangeify_analysis(cache: mut cache, root: cleaned)
+    return indexing_apply_rangeify_rewrite(cache: mut cache, root: cleaned, analysis: read analysis)
 }

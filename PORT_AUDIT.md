@@ -501,7 +501,9 @@ Integrated pieces:
   injection, simple hazard contiguity, noop/dead-axis staging cleanup with shrink/reshape/expand
   preservation, disk/tinyfs late buffer views as `SLICE`, global stage-to-buffer store lowering
   through `AFTER(buffer, END(STORE(INDEX(buffer,...), value)))`, reuse of existing `AFTER` buffers,
-  buffer-to-param placeholder conversion, range renumbering, and `split_store` call wrappers that
+  buffer-to-param placeholder conversion, range renumbering, and the first upstream
+  `pm_syntactic_sugar` cleanup for nested pointer `INDEX` flattening plus elementwise/const
+  `INDEX` pushdown before range analysis. It also has `split_store` call wrappers that
   expose store buffer arguments to the scheduler. Exact upstream kernel graph repair, buffer-cost
   modeling, all local bufferize forms, SHAPED_WMMA lowering, and full assign-dependency repair
   remain later rangeify slices.
@@ -836,7 +838,8 @@ Current integrated demo:
 - validates the first scheduler rangeify facade slice by calling `get_kernel_graph`,
   `get_contiguous`, `_mop_index`, `flatten_bufferize`, `debuf`, `bufferize_to_store`,
   `remove_noop_bufferize`, and `split_store` against the integrated rangeify smoke graph,
-  including global stage-to-store, `AFTER` buffer reuse, and CALL argument exposure.
+  including global stage-to-store, `AFTER` buffer reuse, CALL argument exposure, nested `INDEX`
+  flattening, and elementwise `INDEX` pushdown.
 - validates vector-dtype `broadcast`, full-dtype `GETTUPLE`, full-dtype-preserving
   `replace_arg`/substitution, and full-dtype-aware `CAST`, including vector-to-scalar
   constructor casts that must not be skipped by scalar dtype-name comparison.

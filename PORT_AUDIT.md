@@ -614,11 +614,13 @@ Integrated pieces:
   `run_linear`, `time_call`, `track_stats`, `optimize_local_size`, `get_runtime`, and
   `get_graph_runtime`. These wrappers delegate to real implemented behavior where available
   (call metadata, estimates, parameter resolution, COPY/SLICE byte execution, PROGRAM staging,
-  hosted PROGRAM execution through `run_linear`, and per-context runtime-cache handles); profiling
-  stats, local-size optimization, validation execution, and graph runtime remain explicit
-  metadata/no-op placeholders. Dynamic symbolic launch dimension evaluation, general compiled
-  numeric kernel invocation, validation execution, graph execution, full multi-buffer/device
-  remapping, and dynamic-library runtime plumbing remain unported.
+  hosted PROGRAM execution through `run_linear`, per-context runtime-cache handles, and a
+  deterministic static `optimize_local_size` rewrite for integer PROGRAM launch dimensions with no
+  existing local size); profiling stats, timing-backed local-size benchmarking/cache, validation
+  execution, and graph runtime remain explicit metadata/no-op placeholders. Dynamic symbolic
+  launch dimension evaluation, general compiled numeric kernel invocation, validation execution,
+  graph execution, full multi-buffer/device remapping, and dynamic-library runtime plumbing remain
+  unported.
 - `engine/jit.rss`: source-shaped `tinygrad/engine/jit.py` facade and metadata slice covering
   `prune_linear`, `create_graph_call`, `graph_split_rewrite`, `_copy_input`, `jit_lower`,
   `_check_no_non_tensor_return`, `graph_class`, `_buf_key`, `access_resources`,

@@ -1,9 +1,9 @@
 // Integrated source-shaped slice of tinygrad/engine/realize.py.
 //
-// This is the first runtime-facing metadata surface used before actual device
-// execution: call argument projection, output/input classification, and
-// high-level estimate lookup. Real runtime caches, compilation, buffer
-// execution, and graph execution remain later slices.
+// Runtime-facing metadata and host execution surface used before real device
+// backends: call argument projection, output/input classification, estimate
+// lookup, launch metadata, runtime handles, and scalar C host execution. Graph
+// execution and backend timing remain later slices.
 features: local
 
 struct RealizeCallIO derives(Clone) {
@@ -219,10 +219,86 @@ fn track_stats(cache: read UOpCache, call: Int) -> Bool {
     return node_op(cache: read cache, id: call) == CALL
 }
 
-fn optimize_local_size(cache: read UOpCache, call: Int, prg: Int) -> Option<Int> {
+fn realize_local_factor(size: Int, remaining: Int, candidate: Int) -> Int {
+    if candidate <= remaining && candidate <= size && size % candidate == 0 { return candidate }
+    return 0
+}
+
+fn realize_pick_local_dim(size: Int, remaining: Int) -> Int {
+    if size <= 0 || remaining <= 1 { return 1 }
+    let c256 = realize_local_factor(size: size, remaining: remaining, candidate: 256)
+    if c256 > 0 { return c256 }
+    let c128 = realize_local_factor(size: size, remaining: remaining, candidate: 128)
+    if c128 > 0 { return c128 }
+    let c64 = realize_local_factor(size: size, remaining: remaining, candidate: 64)
+    if c64 > 0 { return c64 }
+    let c32 = realize_local_factor(size: size, remaining: remaining, candidate: 32)
+    if c32 > 0 { return c32 }
+    let c16 = realize_local_factor(size: size, remaining: remaining, candidate: 16)
+    if c16 > 0 { return c16 }
+    let c8 = realize_local_factor(size: size, remaining: remaining, candidate: 8)
+    if c8 > 0 { return c8 }
+    let c4 = realize_local_factor(size: size, remaining: remaining, candidate: 4)
+    if c4 > 0 { return c4 }
+    let c2 = realize_local_factor(size: size, remaining: remaining, candidate: 2)
+    if c2 > 0 { return c2 }
+    return 1
+}
+
+fn realize_static_launch_opt(arg: read ProgramArg) -> fresh ProgramLaunchDims {
+    local out_global = List.new<Int>()
+    local out_local = List.new<Int>()
+    if arg.has_local_size { return program_arg_launch_dims(arg: read arg) }
+    let mut remaining = 1024
+    let mut product = 1
+    let mut i = 0
+    while i < List.len<Int>(list: read arg.global_size) {
+        let g = List.get<Int>(list: read arg.global_size, index: i)
+        if g <= 0 {
+            local empty_local = List.new<Int>()
+            return ProgramLaunchDims(global_size: copy_int_list(l: read arg.global_size), has_local_size: false, local_size: take empty_local)
+        }
+        let l = realize_pick_local_dim(size: g, remaining: remaining)
+        List.push<Int>(list: mut out_local, value: read l)
+        List.push<Int>(list: mut out_global, value: read (g / l))
+        product = product * l
+        if l > 1 { remaining = remaining / l }
+        i = i + 1
+    }
+    if product <= 1 {
+        local empty_local2 = List.new<Int>()
+        return ProgramLaunchDims(global_size: copy_int_list(l: read arg.global_size), has_local_size: false, local_size: take empty_local2)
+    }
+    return ProgramLaunchDims(global_size: take out_global, has_local_size: true, local_size: take out_local)
+}
+
+fn realize_program_arg_with_launch(arg: read ProgramArg, launch: read ProgramLaunchDims) -> fresh ProgramArg {
+    return ProgramArg(name: String.copy(value: read arg.name), global_size: copy_int_list(l: read launch.global_size),
+                      has_local_size: launch.has_local_size, local_size: copy_int_list(l: read launch.local_size),
+                      vars: copy_int_list(l: read arg.vars), globals: copy_int_list(l: read arg.globals),
+                      outs: copy_int_list(l: read arg.outs), ins: copy_int_list(l: read arg.ins),
+                      has_estimates: arg.has_estimates, estimate_ops: arg.estimate_ops,
+                      estimate_lds: arg.estimate_lds, estimate_mem: arg.estimate_mem)
+}
+
+fn optimize_local_size(cache: mut UOpCache, call: Int, prg: Int) -> Option<Int> {
     if node_op(cache: read cache, id: call) != CALL { return None }
     if node_op(cache: read cache, id: prg) != PROGRAM { return None }
-    return None
+    if node_num_src(cache: read cache, id: call) == 0 || node_src_id(cache: read cache, id: call, k: 0) != prg { return None }
+    local old_arg = node_program_arg(cache: read cache, id: prg)
+    if old_arg.has_local_size { return None }
+    local launch = realize_static_launch_opt(arg: read old_arg)
+    if launch.has_local_size == false { return None }
+    local new_arg = realize_program_arg_with_launch(arg: read old_arg, launch: read launch)
+    local prg_src = uop_copy_src(cache: read cache, id: prg)
+    local prg_arg = ArgProgram(value: take new_arg)
+    local prg_dt = node_full_dtype(cache: read cache, id: prg)
+    let new_prg = intern(cache: mut cache, op: PROGRAM, dt: read prg_dt, src: take prg_src, arg: take prg_arg)
+    local call_src = uop_copy_src(cache: read cache, id: call)
+    List.set<Int>(list: mut call_src, index: 0, value: read new_prg)
+    local call_arg = node_arg(cache: read cache, id: call)
+    local call_dt = node_full_dtype(cache: read cache, id: call)
+    return Some(intern(cache: mut cache, op: CALL, dt: read call_dt, src: take call_src, arg: take call_arg))
 }
 
 fn get_runtime(cache: read UOpCache, ctx: mut RealizeExecContext, device: read String, ast: Int) -> Int {

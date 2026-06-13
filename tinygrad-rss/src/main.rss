@@ -3423,8 +3423,39 @@ fn main() -> Unit {
     local ck_resolved_alias = resolve_params(cache: read mcache, call: ck_call, inputs: read ck_resolve_inputs)
     local ck_unwrapped_alias = unwrap_multi(cache: read mcache, call: ck_call, resolved: read ck_resolved_alias)
     let ck_runtime_alias = get_runtime(cache: read mcache, ctx: mut rx_prog_ctx, device: read "CPU", ast: ck_to_prog)
+    local rx_opt_global = List.new<Int>()
+    List.push<Int>(list: mut rx_opt_global, value: read 64)
+    List.push<Int>(list: mut rx_opt_global, value: read 32)
+    local rx_opt_empty = List.new<Int>()
+    local rx_opt_arg = mk_program_arg(name: read "rx_opt", global_size: read rx_opt_global, has_local_size: false,
+                                      local_size: read rx_opt_empty, vars: read rx_opt_empty, globals: read rx_opt_empty,
+                                      outs: read rx_opt_empty, ins: read rx_opt_empty)
+    local rx_opt_src = uop_copy_src(cache: read mcache, id: ck_to_prog)
+    local rx_opt_prog_arg = ArgProgram(value: take rx_opt_arg)
+    local rx_opt_dt = node_full_dtype(cache: read mcache, id: ck_to_prog)
+    let rx_opt_prog = intern(cache: mut mcache, op: PROGRAM, dt: read rx_opt_dt, src: take rx_opt_src, arg: take rx_opt_prog_arg)
+    local rx_opt_call_args = List.new<Int>()
+    let rx_opt_call = mk_call(cache: mut mcache, body: rx_opt_prog, args: read rx_opt_call_args, call: read mcall_arg)
+    let rx_opt_call_rewritten = optimize_local_size(cache: mut mcache, call: rx_opt_call, prg: rx_opt_prog)
+    let mut rx_opt_ok = false
+    match rx_opt_call_rewritten {
+        Some(rx_opt_new_call) => {
+            let rx_opt_new_prog = node_src_id(cache: read mcache, id: rx_opt_new_call, k: 0)
+            local rx_opt_new_arg = node_program_arg(cache: read mcache, id: rx_opt_new_prog)
+            let rx_opt_local_count_ok = List.len<Int>(list: read rx_opt_new_arg.local_size) == 2
+            let rx_opt_global_count_ok = List.len<Int>(list: read rx_opt_new_arg.global_size) == 2
+            let rx_opt_local0_ok = rx_opt_local_count_ok && List.get<Int>(list: read rx_opt_new_arg.local_size, index: 0) == 64
+            let rx_opt_local1_ok = rx_opt_local_count_ok && List.get<Int>(list: read rx_opt_new_arg.local_size, index: 1) == 16
+            let rx_opt_global0_ok = rx_opt_global_count_ok && List.get<Int>(list: read rx_opt_new_arg.global_size, index: 0) == 1
+            let rx_opt_global1_ok = rx_opt_global_count_ok && List.get<Int>(list: read rx_opt_new_arg.global_size, index: 1) == 2
+            rx_opt_ok = rx_opt_new_arg.has_local_size && rx_opt_local0_ok && rx_opt_local1_ok && rx_opt_global0_ok && rx_opt_global1_ok
+        }
+        None => {
+        }
+    }
     showb(label: read "engine.realize source-shaped metadata aliases = ", v: List.len<Int>(list: read ck_call_args_alias) == 2 && List.get<Int>(list: read ck_call_io_alias.outs, index: 0) == 0 && List.get<Int>(list: read ck_call_io_alias.ins, index: 0) == 1 && get_call_name(cache: read mcache, call: ck_call) == "ck_gated" && ck_call_est_alias.ops == ck_call_est.ops && List.len<Int>(list: read ck_unwrapped_alias) == 2)
-    showb(label: read "engine.realize source-shaped runtime aliases = ", v: track_stats(cache: read mcache, call: ck_call) && ck_runtime_alias == rx_prog_exec.runtime_handle && compile_linear(cache: read mcache, linear: rx_prog_linear, beam: read None, validate: false) == rx_prog_linear && optimize_local_size(cache: read mcache, call: ck_call, prg: ck_to_prog) == None && get_graph_runtime(cache: read mcache, ast: ck_enc) == 0)
+    showb(label: read "engine.realize source-shaped runtime aliases = ", v: track_stats(cache: read mcache, call: ck_call) && ck_runtime_alias == rx_prog_exec.runtime_handle && compile_linear(cache: read mcache, linear: rx_prog_linear, beam: read None, validate: false) == rx_prog_linear && optimize_local_size(cache: mut mcache, call: ck_call, prg: ck_to_prog) == None && get_graph_runtime(cache: read mcache, ast: ck_enc) == 0)
+    showb(label: read "engine.realize optimize local size = ", v: rx_opt_ok)
     showb(label: read "engine.realize source-shaped exec aliases = ", v: exec_encdec(cache: read mcache, ctx: mut rx_prog_ctx, call: ck_enc_call, ast: ck_enc) && exec_validate(cache: read mcache, ctx: mut rx_prog_ctx, call: ck_enc_call, ast: ck_enc) == false && exec_graph(cache: read mcache, ctx: mut rx_prog_ctx, call: ck_enc_call, ast: ck_enc) == false)
     local jit_batch = List.new<Int>()
     List.push<Int>(list: mut jit_batch, value: read ck_call)

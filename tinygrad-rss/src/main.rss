@@ -4624,6 +4624,34 @@ fn main() -> Unit {
         }
         None => {}
     }
+    let rfac_special_expected_srcs = 2 + List.len<Int>(list: read idx_rf_contig_rec.out_ranges)
+    let rfac_copy_dst = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    let rfac_copy_ptr = mk_index(cache: mut mcache, base: rfac_copy_dst, srcs: read idx_rf_contig_rec.out_ranges, ptr: true)
+    let rfac_copy_val = mk_copy_to_device(cache: mut mcache, x: idx_rf_buf, device: read "CPU")
+    let rfac_copy_store = mk_store(cache: mut mcache, ptr: rfac_copy_ptr, value: rfac_copy_val, gate: read None)
+    let rfac_copy_end = mk_end(cache: mut mcache, id: rfac_copy_store, srcs: read idx_rf_contig_rec.out_ranges)
+    let mut rfac_copy_split_ok = false
+    match split_store(cache: mut mcache, x: rfac_copy_end) {
+        Some(r) => {
+            let body = node_src_id(cache: read mcache, id: r, k: 0)
+            rfac_copy_split_ok = node_op(cache: read mcache, id: r) == CALL && node_op(cache: read mcache, id: body) == COPY && node_num_src(cache: read mcache, id: body) == rfac_special_expected_srcs
+        }
+        None => {}
+    }
+    let rfac_slice_dst = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
+    let rfac_slice_ptr = mk_index(cache: mut mcache, base: rfac_slice_dst, srcs: read idx_rf_contig_rec.out_ranges, ptr: true)
+    let rfac_slice_val = mk_slice(cache: mut mcache, base: idx_rf_buf, offset: 0, size: 6, dt: read dt_float32())
+    let rfac_slice_store = mk_store(cache: mut mcache, ptr: rfac_slice_ptr, value: rfac_slice_val, gate: read None)
+    let rfac_slice_end = mk_end(cache: mut mcache, id: rfac_slice_store, srcs: read idx_rf_contig_rec.out_ranges)
+    let mut rfac_slice_split_ok = false
+    match split_store(cache: mut mcache, x: rfac_slice_end) {
+        Some(r) => {
+            let body = node_src_id(cache: read mcache, id: r, k: 0)
+            rfac_slice_split_ok = node_op(cache: read mcache, id: r) == CALL && node_op(cache: read mcache, id: body) == SLICE && node_num_src(cache: read mcache, id: body) == rfac_special_expected_srcs
+        }
+        None => {}
+    }
+    let rfac_special_split_ok = rfac_copy_split_ok && rfac_slice_split_ok
     let rfac_war_a = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
     let rfac_war_b = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
     let rfac_war_c = mk_buffer(cache: mut mcache, dt: read dt_float32(), shape: read idx_rf_shape)
@@ -5013,7 +5041,7 @@ fn main() -> Unit {
     showb(label: read "schedule.indexing rangeify stage opts device = ", v: node_op(cache: read mcache, id: idx_rf_stage_dev_stage) == STAGE && node_bufferize_has_device(cache: read mcache, id: idx_rf_stage_dev_stage) && node_bufferize_device_name(cache: read mcache, id: idx_rf_stage_dev_stage) == "CPU")
     showb(label: read "schedule.indexing rangeify merges same multi-consumer ranges = ", v: idx_rf_multi_shared_rec_i >= 0 && idx_rf_multi_shared_realize_i < 0 && List.len<Int>(list: read idx_rf_multi_shared_rec.out_ranges) == 2)
     showb(label: read "schedule.indexing rangeify realizes ending ranges = ", v: idx_rf_end_add_realize_i >= 0)
-    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_assign_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
+    showb(label: read "schedule.rangeify source-shaped facades = ", v: node_op(cache: read mcache, id: rfac_graph) == CONTIGUOUS && rfac_contig_ok && rfac_mop_ok && rfac_hazard_ok && rfac_flatten_ok && rfac_debuf_ok && rfac_split_ok && rfac_special_split_ok && rfac_assign_ok && rfac_stage_store_ok && rfac_reuse_ok && rfac_reuse_repair_ok && rfac_noop_ok && rfac_dead_axes_ok && rfac_const_fold_ok && rfac_noop_cleanup_ok && rfac_reshape_cleanup_ok && rfac_nested_index_ok && rfac_elementwise_index_ok && rfac_remove_bufferize_ok && rfac_remove_cost_ok && rfac_remove_reduce_ok && rfac_shaped_wmma_ok && rfac_resolve_function_ok && rfac_split_reduceop_ok && rfac_limit_bufs_ok)
 
     local pcache = cache_new()
     let px = mk_special(cache: mut pcache, dt: read i32, size: 10)

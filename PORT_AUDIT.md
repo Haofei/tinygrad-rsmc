@@ -526,10 +526,11 @@ Integrated pieces:
   original staged shape. `remove_bufferize` now carries the upstream conservative cost gates for
   expressions touching more than three accessed buffers and for reduce subtrees that read
   bufferized/param data. A first post-split WAR assign repair now appends reader `AFTER` deps to
-  later writer assigns when a split kernel reads a buffer written by another assign; exact upstream
-  circular-dependency diagnostics are still pending. The later PCONTIG local-buffer fallback,
-  exact symbolic max-shape shrink in split kernels, and COPY/SLICE special kernel bodies are
-  still intentionally unported.
+  later writer assigns when a split kernel reads a buffer written by another assign. `split_store`
+  now preserves `COPY`/`SLICE` as special call bodies with ended ranges instead of wrapping them in
+  `SINK`, and debuf now emits the upstream max-shape param plus shrink-back path for symbolic
+  shapes. Exact upstream circular-dependency diagnostics are still pending. The later PCONTIG
+  local-buffer fallback and richer symbolic max-shape inference are still intentionally unported.
   The first `pm_const_buffer_folding`/`pm_add_buffers` cleanup batch is also present: const
   stages, const indexes, const copies, const-backed `MSTACK` indexes, `NOOP(CONST)`,
   self-stores, `END(NOOP)`, invalid writes, `AFTER(..., NOOP)`, reshape-through-`MSELECT`/

@@ -932,7 +932,8 @@ fn rangeify_add_unique_id(ids: mut List<Int>, id: Int) -> Unit {
 fn rangeify_debuf_for_arg(cache: mut UOpCache, ctx: mut RangeifyLocalContext, key: Int, arg: Int, olds: mut List<Int>, news: mut List<Int>, args: mut List<Int>) -> Int {
     let found = rangeify_pos(ids: read olds, id: key)
     if found >= 0 { return List.get<Int>(list: read news, index: found) }
-    local shape = uop_max_shape(cache: read cache, id: key)
+    local max_shape = uop_max_shape(cache: read cache, id: key)
+    local shape = uop_shape(cache: read cache, id: key)
     let mut devices = List.new<String>()
     if node_op(cache: read cache, id: key) == PARAM {
         devices = node_param_devices(cache: read cache, id: key)
@@ -942,13 +943,28 @@ fn rangeify_debuf_for_arg(cache: mut UOpCache, ctx: mut RangeifyLocalContext, ke
         addr = node_param_addrspace(cache: read cache, id: key)
     }
     let p = mk_param_devices_full(cache: mut cache, slot: ctx.next_lunique, dt: read node_full_dtype(cache: read cache, id: key),
-                                  shape: read shape, name: read "", has_vmin_vmax: false, vmin: 0, vmax: 0,
+                                  shape: read max_shape, name: read "", has_vmin_vmax: false, vmin: 0, vmax: 0,
                                   addrspace: read addr, devices: read devices)
+    let mut ret = p
+    if indexing_shape_equals(a: read max_shape, b: read shape) == false {
+        local starts = List.new<Int>()
+        local ends = List.new<Int>()
+        let weak = dt_weakint()
+        let mut si = 0
+        while si < List.len<Int>(list: read shape) {
+            let zero = mk_const_int(cache: mut cache, dt: read weak, v: 0)
+            let end = mk_const_int(cache: mut cache, dt: read weak, v: List.get<Int>(list: read shape, index: si))
+            List.push<Int>(list: mut starts, value: read zero)
+            List.push<Int>(list: mut ends, value: read end)
+            si = si + 1
+        }
+        ret = mk_shrink_expr(cache: mut cache, x: p, starts: read starts, ends: read ends)
+    }
     ctx.next_lunique = ctx.next_lunique + 1
     List.push<Int>(list: mut olds, value: read key)
-    List.push<Int>(list: mut news, value: read p)
+    List.push<Int>(list: mut news, value: read ret)
     List.push<Int>(list: mut args, value: read arg)
-    return p
+    return ret
 }
 
 fn rangeify_kernel_rewrite(cache: mut UOpCache, ctx: mut RangeifyLocalContext, id: Int, olds: mut List<Int>, news: mut List<Int>, args: mut List<Int>, vars: mut List<Int>) -> Int {
@@ -1016,6 +1032,20 @@ fn get_contiguous(cache: read UOpCache, x: Int) -> Option<Int> {
     return None
 }
 
+fn rangeify_special_kernel_body(cache: mut UOpCache, stored: Int, owner: Int) -> Int {
+    let op = node_op(cache: read cache, id: stored)
+    if op != COPY && op != SLICE { return stored }
+    local srcs = uop_copy_src(cache: read cache, id: stored)
+    local ended = uop_ended_ranges(cache: read cache, id: owner)
+    let mut i = 0
+    while i < List.len<Int>(list: read ended) {
+        List.push<Int>(list: mut srcs, value: read List.get<Int>(list: read ended, index: i))
+        i = i + 1
+    }
+    local arg = node_arg(cache: read cache, id: stored)
+    return intern(cache: mut cache, op: op, dt: read node_full_dtype(cache: read cache, id: stored), src: take srcs, arg: take arg)
+}
+
 fn split_store(cache: mut UOpCache, x: Int) -> Option<Int> {
     if node_op(cache: read cache, id: x) != STORE && node_op(cache: read cache, id: x) != END { return None }
     if List.len<Int>(list: read uop_ranges(cache: read cache, id: x)) > 0 { return None }
@@ -1029,9 +1059,15 @@ fn split_store(cache: mut UOpCache, x: Int) -> Option<Int> {
     if node_op(cache: read cache, id: body) == END && node_num_src(cache: read cache, id: body) > 0 { store_body = node_src_id(cache: read cache, id: body, k: 0) }
     let mut kernel_body = body
     if node_op(cache: read cache, id: store_body) == STORE {
-        local sink_srcs = List.new<Int>()
-        List.push<Int>(list: mut sink_srcs, value: read body)
-        kernel_body = mk_sink(cache: mut cache, ids: read sink_srcs)
+        let stored = node_src_id(cache: read cache, id: store_body, k: 1)
+        let stored_op = node_op(cache: read cache, id: stored)
+        if stored_op == COPY || stored_op == SLICE {
+            kernel_body = rangeify_special_kernel_body(cache: mut cache, stored: stored, owner: body)
+        } else {
+            local sink_srcs = List.new<Int>()
+            List.push<Int>(list: mut sink_srcs, value: read body)
+            kernel_body = mk_sink(cache: mut cache, ids: read sink_srcs)
+        }
     }
     let mut vi = 0
     while vi < List.len<Int>(list: read vars) {

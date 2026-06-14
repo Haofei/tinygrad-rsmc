@@ -33,6 +33,29 @@ const PCONTIG: Int = 0
 const TUPLE_ORDER: Int = 0
 const cpu_events: Int = 0
 
+// Compile-safe stand-ins for Python module-level symbols whose source names
+// collide in RSS' current single generated namespace. Portman maps the original
+// upstream names to these explicit targets until RSS has namespace isolation.
+struct helpers_count derives(Clone) {
+    value: Int,
+    step: Int,
+}
+
+fn helpers_count_new(start: Int, step: Int) -> fresh helpers_count {
+    return helpers_count(value: start, step: step)
+}
+
+fn helpers_count_next(counter: mut helpers_count) -> Int {
+    let out = counter.value
+    counter.value = counter.value + counter.step
+    return out
+}
+
+fn helpers_T() -> Int { return 0 }
+fn helpers_U() -> Int { return 0 }
+fn helpers_cache_dir() -> fresh String { return String.copy(value: read ".tinygrad-cache") }
+fn helpers_cpu_events() -> Int { return 0 }
+
 struct ContextVar derives(Clone) {
     key: String,
     int_value: Int,

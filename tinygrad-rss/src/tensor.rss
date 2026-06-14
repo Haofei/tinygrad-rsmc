@@ -75,6 +75,11 @@ struct _ContextVar derives(Clone) {
     state: TensorMetadataState,
 }
 
+// Compile-safe stand-ins for Python type variables P/T. `T` cannot be declared
+// directly today because this file already has the tensor transpose function T.
+fn tensor_P_typevar() -> Int { return 0 }
+fn tensor_T_typevar() -> Int { return 0 }
+
 fn _ContextVar.get(self: read _ContextVar) -> fresh TensorMetadataState {
     return TensorMetadataState(has_value: self.state.has_value, value: String.copy(value: read self.state.value))
 }

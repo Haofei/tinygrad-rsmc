@@ -1,3 +1,5 @@
+// @port upstream: tinygrad/uop/ops.py
+// @port status: implemented
 // 1:1 port of tinygrad/uop/ops.py — the UOp IR node, as an INTERNED shared DAG.
 // tinygrad interns via a global UOpMetaClass cache so identical subgraphs are the same object.
 // rss has no global mutable state, so the cache is an explicit `UOpCache` struct threaded as `mut`

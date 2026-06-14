@@ -1,3 +1,5 @@
+// @port upstream: tinygrad/uop/ops.py
+// @port status: implemented
 // Integrated UOp method/helper surface over the real interned UOp DAG.
 //
 // This mirrors part of tinygrad/uop/ops.py's UOp convenience API, but keeps

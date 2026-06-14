@@ -1,3 +1,5 @@
+// @port upstream: tinygrad/uop/ops.py
+// @port status: implemented
 // Port of tinygrad/uop/symbolic.py — rewrite rules + graph_rewrite over the interned DAG.
 // A rule has the PatternMatcher shape (cache, id) -> Option<Int> (Some = rewritten id, None = no match).
 // graph_rewrite rebuilds bottom-up; intern dedups, so identical results share one node.

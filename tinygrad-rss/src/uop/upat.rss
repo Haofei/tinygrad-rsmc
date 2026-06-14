@@ -191,6 +191,14 @@ fn upat_after2(x: read UPat, dep: read UPat) -> fresh UPat { return upat_op2_any
 fn after(x: read UPat, dep: read UPat) -> fresh UPat { return upat_after2(x: read x, dep: read dep) }
 fn upat_end2(x: read UPat, range: read UPat) -> fresh UPat { return upat_op2_anylen(op: END, a: read x, b: read range) }
 fn end(x: read UPat, range: read UPat) -> fresh UPat { return upat_end2(x: read x, range: read range) }
+
+// UPat method surface (mirrors upstream uop/ops.py::UPat.*); thin receivers over
+// the existing flat builders so the 1:1 method names exist on the UPat type.
+fn UPat.after(self: read UPat, dep: read UPat) -> fresh UPat { return upat_after2(x: read self, dep: read dep) }
+fn UPat.end(self: read UPat, range: read UPat) -> fresh UPat { return upat_end2(x: read self, range: read range) }
+fn UPat.index(self: read UPat, idx: read UPat) -> fresh UPat { return upat_index2(base: read self, idx: read idx) }
+fn UPat.reduce(self: read UPat) -> fresh UPat { return upat_reduce(value: read self) }
+fn UPat.sink(self: read UPat, b: read UPat) -> fresh UPat { return upat_sink2(a: read self, b: read b) }
 fn mod(x: read UPat, y: read UPat) -> fresh UPat { return upat_op2(op: FLOORMOD, a: read x, b: read y) }
 fn __rfloordiv__(x: read UPat, y: read UPat) -> fresh UPat { return upat_op2(op: FLOORDIV, a: read y, b: read x) }
 

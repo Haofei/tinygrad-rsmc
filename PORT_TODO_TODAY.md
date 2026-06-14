@@ -39,35 +39,39 @@ The "full sweep incl. modules / methods" hit two real limitations in this rss bu
   `render_`, `tensor_`, `uop_`, `upat_`). Those files can't be de-prefixed.
   Migration cost is also ~12k callsite-token rewrites + per-file `use` injection.
 
-- **Methods exist, but can't be called in argument position.** rss *does* have
+- **Methods work fully (earlier "arg-position blocked" claim was WRONG).** rss has
   classes-equivalent: `struct` + `fn Type.method(self: …)` + `protocol`/`impl` +
-  associated consts. The flattening (`tensor_sum`, `uop_cast`, `mk_const`,
-  `node_dtype`) is **not** a missing-class problem — it comes from the port's
-  **Int-ID arena model**: a UOp/Tensor is a bare `Int` index into a `mut UOpCache`,
-  so ops must be free functions threading the arena. Helpers over *real* structs
-  (`DType`, `UPat`, `TensorState`, `View`, …) COULD become methods, and portman
-  maps `fn DType.itemsize` → upstream `dtype.py::DType.itemsize` directly. BUT:
-  receiver-method calls are **unsupported in argument position** (RS0015 —
-  `f(x: d.scalar())` fails); they only work as a statement / `let` RHS / `return`.
-  For `DType`, **122 / 212** callsites are in argument position, so a conversion
-  would require hoisting every nested call into a temp `let` — net code bloat, not
-  a clean win.
+  associated consts. An earlier note here claimed receiver-calls fail in argument
+  position (RS0015) — that was a **test-harness bug** (single-line `;` statement
+  separators are invalid rss). With correct multi-line syntax, method calls work in
+  every position (argument, nested, return, `let` RHS, after `mut`). Conventions:
+  receiver must be named `self`; `read` calls are bare `expr.method(args)`; `mut`
+  calls need `mut expr.method(args)`; avoid builtin-colliding type names (`Counter`,
+  `DT`, …).
 
-  Conventions confirmed for when this is unblocked: receiver must be named `self`;
-  `read` calls are bare `expr.method(args)`; `mut` calls need `mut expr.method(args)`.
+  The flattening (`tensor_sum`, `uop_cast`, `mk_const`, `node_dtype`) is **not** a
+  missing-class problem — it's the port's **Int-ID arena model**: a UOp/Tensor is a
+  bare `Int` index into a `mut UOpCache`, so ops must be free functions threading
+  the arena (UOp methods are matched by portman's `receiver_methods.UOpCache`
+  config, not rss method syntax). Helpers over *real* structs (`UPat`, `DType`,
+  `TensorState`, `View`, …) CAN become methods, and portman maps `fn UPat.after`
+  directly onto upstream `uop/ops.py::UPat.after`.
 
-### Recommended rss feature requests (would unblock the structural refactors)
+### Done — UPat method surface (closes portman gaps)
 
-- `use a.b.c as d` aliasing + qualified `module.fn()` calls (unblocks modules).
-- Allow receiver-method calls in argument/nested-expression position (unblocks the
-  method refactor — the highest-value one, since it maps 1:1 to upstream methods
-  and would close `UPat.*` / `DType.*` gaps).
+Added thin `fn UPat.{after,end,index,reduce,sink}(self: read UPat, …)` wrappers over
+the existing flat builders (`upat_after2`, …). **4 of 5 alias-needed gaps closed**
+(`after`, `end`, `index`, `sink`); uop area 73.4% → **73.9%**, public API 55.0% →
+**55.1%**. `UPat.reduce` stays `ambiguous` because the flat `upat_reduce` (no `2`
+suffix) is already inferred as `UPat.reduce` via the `upat` owner-prefix alias, so
+the explicit method makes two candidates — a portman-config nuance, not a code bug.
 
-### Ready-to-go method candidates (when arg-position is supported)
+### Remaining method candidates (same low-risk wrapper pattern)
 
-`UPat` (16), `DType` (9), `TensorState` (7), `View` (4), `MultiBuffer` (4),
-`RealizeExecContext` (4), `ProgramArg` (3), plus singles. `UPat.*` and `DType.*`
-map straight onto upstream methods → direct portman gap closures.
+`DType` is already largely covered (flat `dtype_*` map via owner-prefix); the
+`missing` UPat/UOp gaps (`UPat.const/alu/dtype/ufix`, `UOp.alu/const/replace/…`)
+need real implementations, not wrappers. UOp aliases (`index/ranges/reduce/shard`)
+are arena-Int → resolve via portman `receiver_methods` config, not rss methods.
 
 ---
 
@@ -79,11 +83,12 @@ Generated with portman against freshly pulled upstream tinygrad.
 - Previous baseline: `fa400f9790ab9a684387b02e958658217b33e7c1` (v0.13.0-160)
 - Portman config pin updated to the new baseline in `../portman/portman.toml`.
 
-## Current Portman Snapshot
+## Current Portman Snapshot (after UPat method wrappers)
 
-- Symbol coverage: **51.1%**
-- Public API coverage: **55.0%** of 2287 API symbols
+- Symbol coverage: **51.2%**
+- Public API coverage: **55.1%** of 2287 API symbols
 - Weighted (plan) coverage: **43.4%**
+- uop area: **73.9%** (258/349)
 - File coverage: **96.6%**
 - Verified: **0.0%** (verification axis not wired)
 

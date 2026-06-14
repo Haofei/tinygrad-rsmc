@@ -494,6 +494,9 @@ fn axis_type_letter(t: read AxisType) -> fresh String {
     }
 }
 
+// ---- shared list-copy helpers ----------------------------------------------
+// Keep these centralized until RSS generic helper ergonomics make the repeated
+// typed copy shims unnecessary.
 fn copy_int_list(l: read List<Int>) -> fresh List<Int> {
     return l.clone()
 }

@@ -21,6 +21,13 @@ struct BatchNormLayer derives(Clone) {
     track_running_stats: Bool,
 }
 
+// Source-class wrappers for Python layer classes whose constructor function names
+// currently occupy the generated namespace. Remove once RSS supports separate
+// class/function namespaces.
+struct BatchNormModule derives(Clone) {
+    layer: BatchNormLayer,
+}
+
 struct Conv1dLayer derives(Clone) {
     weight: Int,
     bias: Int,
@@ -46,10 +53,18 @@ struct Conv2dLayer derives(Clone) {
     output_pad_w: Int,
 }
 
+struct Conv2dModule derives(Clone) {
+    layer: Conv2dLayer,
+}
+
 struct LinearLayer derives(Clone) {
     weight: Int,
     bias: Int,
     has_bias: Bool,
+}
+
+struct LinearModule derives(Clone) {
+    layer: LinearLayer,
 }
 
 struct NormLayer derives(Clone) {
@@ -62,16 +77,28 @@ struct NormLayer derives(Clone) {
     groups: Int,
 }
 
+struct NormModule derives(Clone) {
+    layer: NormLayer,
+}
+
 struct RMSNormLayer derives(Clone) {
     weight: Int,
     eps: Float,
     has_weight: Bool,
 }
 
+struct RMSNormModule derives(Clone) {
+    layer: RMSNormLayer,
+}
+
 struct EmbeddingLayer derives(Clone) {
     weight: Int,
     vocab_size: Int,
     embed_size: Int,
+}
+
+struct EmbeddingModule derives(Clone) {
+    layer: EmbeddingLayer,
 }
 
 fn BatchNorm(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormLayer {
@@ -87,6 +114,10 @@ fn BatchNorm(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_runni
     local scalar = List.new<Int>()
     let batches = tensor_zeros(cache: mut cache, dt: read dt_int64(), shape: read scalar)
     return BatchNormLayer(weight: weight, bias: bias, running_mean: running_mean, running_var: running_var, num_batches_tracked: batches, eps: eps, momentum: momentum, affine: affine, track_running_stats: track_running_stats)
+}
+
+fn batch_norm_module(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormModule {
+    return BatchNormModule(layer: BatchNorm(cache: mut cache, sz: sz, eps: eps, affine: affine, track_running_stats: track_running_stats, momentum: momentum))
 }
 
 fn BatchNorm2d(cache: mut UOpCache, sz: Int, eps: Float, affine: Bool, track_running_stats: Bool, momentum: Float) -> fresh BatchNormLayer {
@@ -210,6 +241,10 @@ fn Conv2d(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_h: In
     return Conv2dLayer(weight: weight, bias: bias_node, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, output_pad_h: 0, output_pad_w: 0)
 }
 
+fn conv2d_module(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_h: Int, kernel_w: Int, stride_h: Int, stride_w: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, dilation_h: Int, dilation_w: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv2dModule {
+    return Conv2dModule(layer: Conv2d(cache: mut cache, in_channels: in_channels, out_channels: out_channels, kernel_h: kernel_h, kernel_w: kernel_w, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, bias: bias, seed: seed))
+}
+
 fn Conv2d_call(cache: mut UOpCache, layer: read Conv2dLayer, x: Int) -> Int {
     return tensor_conv2d(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias, groups: layer.groups, sh: layer.stride_h, sw: layer.stride_w, dh: layer.dilation_h, dw: layer.dilation_w, pad_top: layer.pad_top, pad_bottom: layer.pad_bottom, pad_left: layer.pad_left, pad_right: layer.pad_right)
 }
@@ -230,6 +265,10 @@ fn ConvTranspose2d(cache: mut UOpCache, in_channels: Int, out_channels: Int, ker
     return Conv2dLayer(weight: weight, bias: bias_node, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, output_pad_h: output_pad_h, output_pad_w: output_pad_w)
 }
 
+fn conv_transpose2d_module(cache: mut UOpCache, in_channels: Int, out_channels: Int, kernel_h: Int, kernel_w: Int, stride_h: Int, stride_w: Int, pad_top: Int, pad_bottom: Int, pad_left: Int, pad_right: Int, output_pad_h: Int, output_pad_w: Int, dilation_h: Int, dilation_w: Int, groups: Int, bias: Bool, seed: Int) -> fresh Conv2dModule {
+    return Conv2dModule(layer: ConvTranspose2d(cache: mut cache, in_channels: in_channels, out_channels: out_channels, kernel_h: kernel_h, kernel_w: kernel_w, stride_h: stride_h, stride_w: stride_w, pad_top: pad_top, pad_bottom: pad_bottom, pad_left: pad_left, pad_right: pad_right, output_pad_h: output_pad_h, output_pad_w: output_pad_w, dilation_h: dilation_h, dilation_w: dilation_w, groups: groups, bias: bias, seed: seed))
+}
+
 fn ConvTranspose2d_call(cache: mut UOpCache, layer: read Conv2dLayer, x: Int) -> Int {
     return tensor_conv_transpose2d(cache: mut cache, x: x, weight: layer.weight, bias: layer.bias, groups: layer.groups, sh: layer.stride_h, sw: layer.stride_w, dh: layer.dilation_h, dw: layer.dilation_w, pad_top: layer.pad_top, pad_bottom: layer.pad_bottom, pad_left: layer.pad_left, pad_right: layer.pad_right, out_pad_h: layer.output_pad_h, out_pad_w: layer.output_pad_w)
 }
@@ -246,6 +285,10 @@ fn Linear(cache: mut UOpCache, in_features: Int, out_features: Int, bias: Bool, 
         bias_node = tensor_uniform(cache: mut cache, dt: read dt_default_float(), shape: read bshape, low: 0.0 - bound, high: bound, seed: seed + 1)
     }
     return LinearLayer(weight: weight, bias: bias_node, has_bias: bias)
+}
+
+fn linear_module(cache: mut UOpCache, in_features: Int, out_features: Int, bias: Bool, seed: Int) -> fresh LinearModule {
+    return LinearModule(layer: Linear(cache: mut cache, in_features: in_features, out_features: out_features, bias: bias, seed: seed))
 }
 
 fn Linear_call(cache: mut UOpCache, layer: read LinearLayer, x: Int) -> Int {
@@ -308,6 +351,10 @@ fn GroupNorm(cache: mut UOpCache, num_groups: Int, num_channels: Int, eps: Float
     return NormLayer(weight: weight, bias: bias, eps: eps, has_weight: affine, has_bias: affine, size: num_channels, groups: num_groups)
 }
 
+fn group_norm_module(cache: mut UOpCache, num_groups: Int, num_channels: Int, eps: Float, affine: Bool) -> fresh NormModule {
+    return NormModule(layer: GroupNorm(cache: mut cache, num_groups: num_groups, num_channels: num_channels, eps: eps, affine: affine))
+}
+
 fn GroupNorm_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
     local xs = uop_shape(cache: read cache, id: x)
     local rshape = List.new<Int>()
@@ -337,6 +384,10 @@ fn InstanceNorm(cache: mut UOpCache, num_features: Int, eps: Float, affine: Bool
     return GroupNorm(cache: mut cache, num_groups: num_features, num_channels: num_features, eps: eps, affine: affine)
 }
 
+fn instance_norm_module(cache: mut UOpCache, num_features: Int, eps: Float, affine: Bool) -> fresh NormModule {
+    return NormModule(layer: InstanceNorm(cache: mut cache, num_features: num_features, eps: eps, affine: affine))
+}
+
 fn InstanceNorm_call(cache: mut UOpCache, layer: read NormLayer, x: Int) -> Int {
     return GroupNorm_call(cache: mut cache, layer: read layer, x: x)
 }
@@ -348,6 +399,10 @@ fn RMSNorm(cache: mut UOpCache, dim: Int, eps: Float, elementwise_affine: Bool) 
         weight = tensor_ones(cache: mut cache, dt: read dt_default_float(), shape: read shape)
     }
     return RMSNormLayer(weight: weight, eps: eps, has_weight: elementwise_affine)
+}
+
+fn rms_norm_module(cache: mut UOpCache, dim: Int, eps: Float, elementwise_affine: Bool) -> fresh RMSNormModule {
+    return RMSNormModule(layer: RMSNorm(cache: mut cache, dim: dim, eps: eps, elementwise_affine: elementwise_affine))
 }
 
 fn RMSNorm_call(cache: mut UOpCache, layer: read RMSNormLayer, x: Int) -> Int {
@@ -419,6 +474,10 @@ fn Embedding(cache: mut UOpCache, vocab_size: Int, embed_size: Int, seed: Int) -
     push1(l: mut shape, a: embed_size)
     let weight = tensor_glorot_uniform(cache: mut cache, dt: read dt_default_float(), shape: read shape, seed: seed)
     return EmbeddingLayer(weight: weight, vocab_size: vocab_size, embed_size: embed_size)
+}
+
+fn embedding_module(cache: mut UOpCache, vocab_size: Int, embed_size: Int, seed: Int) -> fresh EmbeddingModule {
+    return EmbeddingModule(layer: Embedding(cache: mut cache, vocab_size: vocab_size, embed_size: embed_size, seed: seed))
 }
 
 fn Embedding_call(cache: mut UOpCache, layer: read EmbeddingLayer, idx: Int) -> Int {

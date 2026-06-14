@@ -19,6 +19,12 @@ struct RealizeExecContext {
     next_runtime_handle: Int,
 }
 
+// Source-shaped class shell for tinygrad.engine.realize.ExecContext. The real
+// port state remains RealizeExecContext to avoid constructor/name collisions.
+struct ExecContext {
+    state: RealizeExecContext,
+}
+
 struct RealizeProgramExec derives(Clone) {
     ok: Bool,
     function_name: String,
@@ -72,6 +78,10 @@ fn realize_exec_context_new_mapped(store: take DeviceMemoryStore, buffers: take 
     local runtime_cache = Map.new<String, Int>()
     return RealizeExecContext(store: take store, buffers: take buffers, input_slots: take input_slots,
                               runtime_cache: take runtime_cache, next_runtime_handle: 1)
+}
+
+fn exec_context_shell(state: take RealizeExecContext) -> fresh ExecContext {
+    return ExecContext(state: take state)
 }
 
 fn realize_exec_context_buffer_count(ctx: read RealizeExecContext) -> Int {

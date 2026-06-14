@@ -10,6 +10,18 @@
 // later slices.
 features: local
 
+// Source-shaped class shell for tinygrad.codegen.late.devectorizer.ReduceContext.
+// The current devectorizer implementation is stateless; keep this removable
+// wrapper until RSS can model source classes/static members directly.
+struct ReduceContext derives(Clone) {
+    root: Int,
+    axes: List<Int>,
+}
+
+fn reduce_context_shell(root: Int, axes: read List<Int>) -> fresh ReduceContext {
+    return ReduceContext(root: root, axes: copy_int_list(l: read axes))
+}
+
 fn devectorizer_supported_alu(op: read Ops) -> Bool {
     if group_alu(op: read op) { return true }
     if op == CAST || op == BITCAST { return true }

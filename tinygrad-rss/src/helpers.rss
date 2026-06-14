@@ -33,9 +33,11 @@ const PCONTIG: Int = 0
 const TUPLE_ORDER: Int = 0
 const cpu_events: Int = 0
 
-// Compile-safe stand-ins for Python module-level symbols whose source names
-// collide in RSS' current single generated namespace. Portman maps the original
-// upstream names to these explicit targets until RSS has namespace isolation.
+// ---- compile-safe alias shims ----------------------------------------------
+// Remove when RSS supports namespace isolation and source-visible type aliases.
+// These preserve Python module-level symbols whose source names collide in RSS'
+// current single generated namespace. Portman maps the original upstream names
+// to these explicit targets.
 struct helpers_count derives(Clone) {
     value: Int,
     step: Int,

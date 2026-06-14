@@ -75,8 +75,10 @@ struct _ContextVar derives(Clone) {
     state: TensorMetadataState,
 }
 
-// Compile-safe stand-ins for Python type variables P/T. `T` cannot be declared
-// directly today because this file already has the tensor transpose function T.
+// ---- compile-safe alias shims ----------------------------------------------
+// Remove when RSS supports namespace isolation and source-visible type aliases.
+// Python type variables P/T are represented as explicit functions for now. `T`
+// cannot be declared directly because this file already has transpose function T.
 fn tensor_P_typevar() -> Int { return 0 }
 fn tensor_T_typevar() -> Int { return 0 }
 

@@ -1,4 +1,7 @@
 // Source-shaped clang/autogen facade for tinygrad/runtime/support/autogen.py.
+// This root is intentionally copied/bound-shaped rather than manually expanded:
+// generated clang/autogen surfaces should stay segregated from handwritten port
+// logic and be tracked as copied/generated in Portman when that DB is available.
 features: native, local
 
 struct AutoCursor derives(Clone) {

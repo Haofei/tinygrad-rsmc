@@ -28,6 +28,12 @@ struct GraphRunnerState derives(Clone) {
     deps: JitDepsTracker,
 }
 
+// Source-shaped class shells. Remove the wrappers if RSS gains direct
+// class/static-member modeling that can map these names without extra structs.
+struct GraphRunner derives(Clone) {
+    state: GraphRunnerState,
+}
+
 struct CapturedJitState derives(Clone) {
     ret: Int,
     linear: Int,
@@ -36,12 +42,20 @@ struct CapturedJitState derives(Clone) {
     written_uops: List<Int>,
 }
 
+struct CapturedJit derives(Clone) {
+    state: CapturedJitState,
+}
+
 struct TinyJitState derives(Clone) {
     cnt: Int,
     captured: Bool,
     captured_state: CapturedJitState,
     prune: Bool,
     linears: List<Int>,
+}
+
+struct TinyJit derives(Clone) {
+    state: TinyJitState,
 }
 
 struct JitInputs derives(Clone) {
@@ -71,6 +85,18 @@ fn jit_empty_captured_state() -> fresh CapturedJitState {
 fn tiny_jit_new(prune: Bool) -> fresh TinyJitState {
     local linears = List.new<Int>()
     return TinyJitState(cnt: 0, captured: false, captured_state: jit_empty_captured_state(), prune: prune, linears: take linears)
+}
+
+fn graph_runner_shell(state: read GraphRunnerState) -> fresh GraphRunner {
+    return GraphRunner(state: state.clone())
+}
+
+fn captured_jit_shell(state: read CapturedJitState) -> fresh CapturedJit {
+    return CapturedJit(state: state.clone())
+}
+
+fn tiny_jit_shell(prune: Bool) -> fresh TinyJit {
+    return TinyJit(state: tiny_jit_new(prune: prune))
 }
 
 fn jit_list_contains(items: read List<Int>, value: Int) -> Bool {

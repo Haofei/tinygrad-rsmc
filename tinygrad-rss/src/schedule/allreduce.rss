@@ -193,15 +193,11 @@ fn handle_allreduce(cache: mut UOpCache, buf: Int, red: Int) -> Option<Int> {
 }
 
 fn create_allreduce_function(cache: mut UOpCache, buf: Int, red: Int, output: Int, has_output: Bool) -> Option<Int> {
-    match handle_allreduce(cache: mut cache, buf: buf, red: red) {
-        Some(reduced) => {
-            let mut out = mk_contiguous(cache: mut cache, x: reduced)
-            if has_output { out = output }
-            let stored = uop_store(cache: mut cache, id: out, value: reduced, gate: read None)
-            local deps = List.new<Int>()
-            List.push<Int>(list: mut deps, value: read stored)
-            return Some(uop_after(cache: mut cache, id: out, srcs: read deps))
-        }
-        None => { return None }
-    }
+    let reduced = handle_allreduce(cache: mut cache, buf: buf, red: red)?
+    let mut out = mk_contiguous(cache: mut cache, x: reduced)
+    if has_output { out = output }
+    let stored = uop_store(cache: mut cache, id: out, value: reduced, gate: read None)
+    local deps = List.new<Int>()
+    List.push<Int>(list: mut deps, value: read stored)
+    return Some(uop_after(cache: mut cache, id: out, srcs: read deps))
 }

@@ -18,7 +18,6 @@ from collections import defaultdict
 from tinygrad.uop.ops import Ops, UOp, GroupOp, PatternMatcher, UPat, range_str, axis_letters
 from tinygrad.dtype import dtypes, DType, PtrDType, AddrSpace
 from tinygrad.renderer.cstyle import CStyleLanguage, ClangRenderer, base_rewrite
-from tinygrad.helpers import dedup as dedup_dtypes
 
 # MC-specific per-UOp text. Listed FIRST so they shadow the C patterns in base_rewrite.
 # Buffer convention LOCKED against mcc (mc task #2): global buffers are `PAddr`, accessed
@@ -46,8 +45,10 @@ mc_rewrite = PatternMatcher([
   (UPat(Ops.CONST, dtype=dtypes.float, name="x"), lambda ctx,x: f"{float(x.arg)}"),
 
   # select: MC `if` is a STATEMENT, not an expression, so `let x = if..` won't parse.
-  # Lower to a pure helper call (a call IS an expression). Helper emitted by render_kernel.
-  (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"select_{ctx.render_dtype(x.dtype)}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
+  # Lower to a call (a call IS an expression) to one comptime-generic `select` helper; the
+  # dtype is passed as the comptime type arg and MC monomorphizes per dtype. Helper emitted
+  # by render_kernel.
+  (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"select({ctx.render_dtype(x.dtype)}, {ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
 
   # Modern-C has a first-class bitcast intrinsic. Do not inherit Clang's
   # __builtin_bit_cast or C-style cast wrappers for BITCAST nodes.
@@ -90,12 +91,12 @@ class MCRenderer(ClangRenderer):
       else: t = self.render_dtype(u.dtype)
       params.append(f"{name}: {t}")
     body = "\n".join("  "+ln for ln in kernel)  # extra indent: body lives in an unsafe block
-    # emit a pure select helper per dtype used by WHERE (MC `if` is a statement, not an expr)
+    # emit one comptime-generic select helper if any WHERE is present (MC `if` is a statement,
+    # not an expr). MC monomorphizes `select(<dtype>, ...)` per dtype at the call sites.
     helpers = ""
-    for dt in dedup_dtypes(w.dtype for w in uops if w.op is Ops.WHERE):
-      ty = self.render_dtype(dt)
-      helpers += (f"fn select_{ty}(c: bool, a: {ty}, b: {ty}) -> {ty} {{\n"
-                  f"  if c {{ return a; }} else {{ return b; }}\n}}\n\n")
+    if any(w.op is Ops.WHERE for w in uops):
+      helpers += ("fn select(comptime T: type, c: bool, a: T, b: T) -> T {\n"
+                  "  if c { return a; } else { return b; }\n}\n\n")
     return (f'import "std/addr.mc";\n\n{helpers}'
             f"export fn {function_name}({', '.join(params)}) -> void {{\n"
             f"  unsafe {{\n{body}\n  }}\n}}")

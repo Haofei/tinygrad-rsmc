@@ -4670,7 +4670,7 @@ fn tensor_max_pool2d_nchw_indices_dilated(cache: mut UOpCache, x: Int, kh: Int, 
     local axes = List.new<Int>()
     push1(l: mut axes, a: 4)
     push1(l: mut axes, a: 5)
-    let max_keep = tensor_max_axes_keepdim(cache: mut cache, x: windows, axes: read axes)
+    let max_keep = tensor_max_axes(cache: mut cache, x: windows, axes: read axes, keepdim: true)
     let m = tensor_eq(cache: mut cache, a: windows, b: max_keep)
     let mf = tensor_cast(cache: mut cache, x: m, dt: read dt_float32())
     let desc = tensor_arange_desc(cache: mut cache, dt: read dt_float32(), start: spatial, n: spatial)
@@ -4714,7 +4714,7 @@ fn tensor_max_pool2d_nchw_indices_pad_dilated(cache: mut UOpCache, x: Int, kh: I
     local axes = List.new<Int>()
     push1(l: mut axes, a: 4)
     push1(l: mut axes, a: 5)
-    let max_keep = tensor_max_axes_keepdim(cache: mut cache, x: windows, axes: read axes)
+    let max_keep = tensor_max_axes(cache: mut cache, x: windows, axes: read axes, keepdim: true)
     let m = tensor_eq(cache: mut cache, a: windows, b: max_keep)
     let mf = tensor_cast(cache: mut cache, x: m, dt: read dt_float32())
 
@@ -5301,44 +5301,24 @@ fn tensor_prod_all(cache: mut UOpCache, x: Int) -> Int {
     return mk_reshape(cache: mut cache, x: cur, new_shape: read scalar)
 }
 
-fn tensor_max_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+fn tensor_max_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool = false) -> Int {
     local sh0 = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh0), dim: axis, extra: false)
     local axes = List.new<Int>()
     push1(l: mut axes, a: d)
     let reduced = mk_max_reduce(cache: mut cache, x: x, axes: read axes)
+    if keepdim { return reduced }
     local dropped = shape_drop_axis(shape: read sh0, axis: d)
     return mk_reshape(cache: mut cache, x: reduced, new_shape: read dropped)
 }
 
-fn tensor_max_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+fn tensor_max_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, keepdim: Bool = false) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
     let reduced = mk_max_reduce(cache: mut cache, x: x, axes: read resolved)
+    if keepdim { return reduced }
     local dropped = shape_drop_axes(shape: read sh, axes: read resolved)
     return mk_reshape(cache: mut cache, x: reduced, new_shape: read dropped)
-}
-
-fn tensor_max_axes_keepdim(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    return mk_max_reduce(cache: mut cache, x: x, axes: read resolved)
-}
-
-fn tensor_sum_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    local axes = List.new<Int>()
-    push1(l: mut axes, a: d)
-    return mk_sum(cache: mut cache, x: x, axes: read axes)
-}
-
-fn tensor_max_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    local axes = List.new<Int>()
-    push1(l: mut axes, a: d)
-    return mk_max_reduce(cache: mut cache, x: x, axes: read axes)
 }
 
 fn tensor_max_all(cache: mut UOpCache, x: Int) -> Int {
@@ -5370,7 +5350,7 @@ fn tensor_argmax_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool) -> 
     let ndim = List.len<Int>(list: read sh)
     let d = tensor_resolve_dim(ndim: ndim, dim: axis, extra: false)
     let n = List.get<Int>(list: read sh, index: d)
-    let max_keep = tensor_max_axis_keepdim(cache: mut cache, x: x, axis: d)
+    let max_keep = tensor_max_axis(cache: mut cache, x: x, axis: d, keepdim: true)
     let m = tensor_eq(cache: mut cache, a: x, b: max_keep)
     let mf = tensor_cast(cache: mut cache, x: m, dt: read dt_float32())
     let desc = tensor_arange_desc(cache: mut cache, dt: read dt_float32(), start: n, n: n)
@@ -5384,7 +5364,7 @@ fn tensor_argmax_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool) -> 
     let desc_view = tensor_reshape(cache: mut cache, x: desc, new_shape: read dshape)
     let weighted = tensor_mul(cache: mut cache, a: mf, b: desc_view)
     if keepdim {
-        let idx_desc = tensor_max_axis_keepdim(cache: mut cache, x: weighted, axis: d)
+        let idx_desc = tensor_max_axis(cache: mut cache, x: weighted, axis: d, keepdim: true)
         let ndt = node_dtype(cache: read cache, id: idx_desc)
         let nconst = mk_const_float(cache: mut cache, dt: read ndt, v: Int.to_float(value: read n))
         let idx = tensor_sub(cache: mut cache, a: nconst, b: idx_desc)
@@ -5434,10 +5414,10 @@ fn tensor_argmin_dim(cache: mut UOpCache, x: Int, dim: Int, keepdim: Bool) -> In
 fn tensor_logsumexp_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let m = tensor_max_axis_keepdim(cache: mut cache, x: x, axis: d)
+    let m = tensor_max_axis(cache: mut cache, x: x, axis: d, keepdim: true)
     let shifted = tensor_sub(cache: mut cache, a: x, b: m)
     let e = tensor_exp(cache: mut cache, x: shifted)
-    let s = tensor_sum_axis_keepdim(cache: mut cache, x: e, axis: d)
+    let s = tensor_sum_axis(cache: mut cache, x: e, axis: d, keepdim: true)
     let l = tensor_log(cache: mut cache, x: s)
     let out = tensor_add(cache: mut cache, a: l, b: m)
     return tensor_squeeze_dim(cache: mut cache, x: out, dim: d)
@@ -5450,10 +5430,10 @@ fn tensor_logsumexp(cache: mut UOpCache, x: Int, axis: Int) -> Int {
 fn tensor_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let m0 = tensor_max_axis_keepdim(cache: mut cache, x: x, axis: d)
+    let m0 = tensor_max_axis(cache: mut cache, x: x, axis: d, keepdim: true)
     let m = tensor_sub(cache: mut cache, a: x, b: m0)
     let e = tensor_exp(cache: mut cache, x: m)
-    let ss = tensor_sum_axis_keepdim(cache: mut cache, x: e, axis: d)
+    let ss = tensor_sum_axis(cache: mut cache, x: e, axis: d, keepdim: true)
     return tensor_div(cache: mut cache, a: e, b: ss)
 }
 
@@ -5464,10 +5444,10 @@ fn tensor_softmax(cache: mut UOpCache, x: Int, axis: Int) -> Int {
 fn tensor_log_softmax_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let m0 = tensor_max_axis_keepdim(cache: mut cache, x: x, axis: d)
+    let m0 = tensor_max_axis(cache: mut cache, x: x, axis: d, keepdim: true)
     let m = tensor_sub(cache: mut cache, a: x, b: m0)
     let e = tensor_exp(cache: mut cache, x: m)
-    let ss = tensor_sum_axis_keepdim(cache: mut cache, x: e, axis: d)
+    let ss = tensor_sum_axis(cache: mut cache, x: e, axis: d, keepdim: true)
     let lss = tensor_log(cache: mut cache, x: ss)
     return tensor_sub(cache: mut cache, a: m, b: lss)
 }
@@ -6060,12 +6040,13 @@ fn shape_drop_axis(shape: read List<Int>, axis: Int) -> fresh List<Int> {
     return take out
 }
 
-fn tensor_sum_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+fn tensor_sum_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool = false) -> Int {
     local sh0 = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh0), dim: axis, extra: false)
     local axes = List.new<Int>()
     push1(l: mut axes, a: d)
     let reduced = mk_sum(cache: mut cache, x: x, axes: read axes)
+    if keepdim { return reduced }
     local dropped = shape_drop_axis(shape: read sh0, axis: d)
     return mk_reshape(cache: mut cache, x: reduced, new_shape: read dropped)
 }
@@ -6112,16 +6093,11 @@ fn shape_axes_numel(shape: read List<Int>, axes: read List<Int>) -> Int {
     return n
 }
 
-fn tensor_sum_axes_keepdim(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    return mk_sum(cache: mut cache, x: x, axes: read resolved)
-}
-
-fn tensor_sum_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+fn tensor_sum_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, keepdim: Bool = false) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
     let reduced = mk_sum(cache: mut cache, x: x, axes: read resolved)
+    if keepdim { return reduced }
     local dropped = shape_drop_axes(shape: read sh, axes: read resolved)
     return mk_reshape(cache: mut cache, x: reduced, new_shape: read dropped)
 }
@@ -6155,39 +6131,18 @@ fn tensor_sum_all(cache: mut UOpCache, x: Int) -> Int {
     return mk_reshape(cache: mut cache, x: cur, new_shape: read scalar)
 }
 
-fn tensor_mean_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int {
+fn tensor_mean_axis(cache: mut UOpCache, x: Int, axis: Int, keepdim: Bool = false) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d_axis = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
     let denom_i = List.get<Int>(list: read sh, index: d_axis)
     let denom = Int.to_float(value: read denom_i)
-    let s = tensor_sum_axis(cache: mut cache, x: x, axis: d_axis)
+    let s = tensor_sum_axis(cache: mut cache, x: x, axis: d_axis, keepdim: keepdim)
     let dt = node_dtype(cache: read cache, id: x)
     let d = mk_const_float(cache: mut cache, dt: read dt, v: denom)
     return tensor_div(cache: mut cache, a: s, b: d)
 }
 
-fn tensor_mean_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    let d_axis = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let denom_i = List.get<Int>(list: read sh, index: d_axis)
-    let denom = Int.to_float(value: read denom_i)
-    let s = tensor_sum_axis_keepdim(cache: mut cache, x: x, axis: d_axis)
-    let dt = node_dtype(cache: read cache, id: x)
-    let d = mk_const_float(cache: mut cache, dt: read dt, v: denom)
-    return tensor_div(cache: mut cache, a: s, b: d)
-}
-
-fn tensor_mean_axes_keepdim(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
-    local sh = uop_shape(cache: read cache, id: x)
-    local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    let denom = Int.to_float(value: read shape_axes_numel(shape: read sh, axes: read resolved))
-    let s = mk_sum(cache: mut cache, x: x, axes: read resolved)
-    let dt = node_dtype(cache: read cache, id: x)
-    let d = mk_const_float(cache: mut cache, dt: read dt, v: denom)
-    return tensor_div(cache: mut cache, a: s, b: d)
-}
-
-fn tensor_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
+fn tensor_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, keepdim: Bool = false) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
     let denom = Int.to_float(value: read shape_axes_numel(shape: read sh, axes: read resolved))
@@ -6195,6 +6150,7 @@ fn tensor_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int {
     let dt = node_dtype(cache: read cache, id: x)
     let d = mk_const_float(cache: mut cache, dt: read dt, v: denom)
     let mean = tensor_div(cache: mut cache, a: reduced, b: d)
+    if keepdim { return mean }
     local dropped = shape_drop_axes(shape: read sh, axes: read resolved)
     return mk_reshape(cache: mut cache, x: mean, new_shape: read dropped)
 }
@@ -6219,7 +6175,7 @@ fn tensor_mean_dim(cache: mut UOpCache, x: Int, dim: Int) -> Int {
 fn tensor_var_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d_axis = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let m = tensor_mean_axis_keepdim(cache: mut cache, x: x, axis: d_axis)
+    let m = tensor_mean_axis(cache: mut cache, x: x, axis: d_axis, keepdim: true)
     let centered = tensor_sub(cache: mut cache, a: x, b: m)
     let sq = tensor_square(cache: mut cache, x: centered)
     let reduced = tensor_sum_axis(cache: mut cache, x: sq, axis: d_axis)
@@ -6232,7 +6188,7 @@ fn tensor_var_axis(cache: mut UOpCache, x: Int, axis: Int, correction: Float) ->
 fn tensor_var_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    let m = tensor_mean_axes_keepdim(cache: mut cache, x: x, axes: read resolved)
+    let m = tensor_mean_axes(cache: mut cache, x: x, axes: read resolved, keepdim: true)
     let centered = tensor_sub(cache: mut cache, a: x, b: m)
     let sq = tensor_square(cache: mut cache, x: centered)
     let reduced = tensor_sum_axes(cache: mut cache, x: sq, axes: read resolved)
@@ -6245,7 +6201,7 @@ fn tensor_var_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, correction
 fn tensor_var_axes_keepdim(cache: mut UOpCache, x: Int, axes: read List<Int>, correction: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    let m = tensor_mean_axes_keepdim(cache: mut cache, x: x, axes: read resolved)
+    let m = tensor_mean_axes(cache: mut cache, x: x, axes: read resolved, keepdim: true)
     let centered = tensor_sub(cache: mut cache, a: x, b: m)
     let sq = tensor_square(cache: mut cache, x: centered)
     let reduced = mk_sum(cache: mut cache, x: sq, axes: read resolved)
@@ -6357,7 +6313,7 @@ fn tensor_normalize(cache: mut UOpCache, x: Int, p: Float, dim: Int, eps: Float)
         let zero = tensor_const_like_float(cache: mut cache, x: x, value: 0.0)
         let nz = tensor_ne(cache: mut cache, a: x, b: zero)
         let nzf = tensor_cast(cache: mut cache, x: nz, dt: read node_dtype(cache: read cache, id: x))
-        let cnt = tensor_sum_axis_keepdim(cache: mut cache, x: nzf, axis: d)
+        let cnt = tensor_sum_axis(cache: mut cache, x: nzf, axis: d, keepdim: true)
         let epsc = tensor_const_like_float(cache: mut cache, x: cnt, value: eps)
         let denom0 = tensor_maximum(cache: mut cache, a: cnt, b: epsc)
         return tensor_div(cache: mut cache, a: x, b: denom0)
@@ -6365,7 +6321,7 @@ fn tensor_normalize(cache: mut UOpCache, x: Int, p: Float, dim: Int, eps: Float)
     let ax = tensor_abs(cache: mut cache, x: x)
     let pc = tensor_const_like_float(cache: mut cache, x: x, value: p)
     let powered = tensor_pow(cache: mut cache, a: ax, b: pc)
-    let summed = tensor_sum_axis_keepdim(cache: mut cache, x: powered, axis: d)
+    let summed = tensor_sum_axis(cache: mut cache, x: powered, axis: d, keepdim: true)
     let invp = tensor_const_like_float(cache: mut cache, x: summed, value: 1.0 / p)
     let norm = tensor_pow(cache: mut cache, a: summed, b: invp)
     let epsc = tensor_const_like_float(cache: mut cache, x: norm, value: eps)
@@ -6376,10 +6332,10 @@ fn tensor_normalize(cache: mut UOpCache, x: Int, p: Float, dim: Int, eps: Float)
 fn tensor_layernorm_axis(cache: mut UOpCache, x: Int, axis: Int, eps: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     let d = tensor_resolve_dim(ndim: List.len<Int>(list: read sh), dim: axis, extra: false)
-    let m = tensor_mean_axis_keepdim(cache: mut cache, x: x, axis: d)
+    let m = tensor_mean_axis(cache: mut cache, x: x, axis: d, keepdim: true)
     let y = tensor_sub(cache: mut cache, a: x, b: m)
     let yy = tensor_mul(cache: mut cache, a: y, b: y)
-    let v = tensor_mean_axis_keepdim(cache: mut cache, x: yy, axis: d)
+    let v = tensor_mean_axis(cache: mut cache, x: yy, axis: d, keepdim: true)
     let epsc = tensor_const_like_float(cache: mut cache, x: v, value: eps)
     let denom = tensor_add(cache: mut cache, a: v, b: epsc)
     let inv = tensor_rsqrt(cache: mut cache, x: denom)
@@ -6389,10 +6345,10 @@ fn tensor_layernorm_axis(cache: mut UOpCache, x: Int, axis: Int, eps: Float) -> 
 fn tensor_layernorm_axes(cache: mut UOpCache, x: Int, axes: read List<Int>, eps: Float) -> Int {
     local sh = uop_shape(cache: read cache, id: x)
     local resolved = tensor_resolve_axes(ndim: List.len<Int>(list: read sh), axes: read axes)
-    let m = tensor_mean_axes_keepdim(cache: mut cache, x: x, axes: read resolved)
+    let m = tensor_mean_axes(cache: mut cache, x: x, axes: read resolved, keepdim: true)
     let y = tensor_sub(cache: mut cache, a: x, b: m)
     let yy = tensor_mul(cache: mut cache, a: y, b: y)
-    let v = tensor_mean_axes_keepdim(cache: mut cache, x: yy, axes: read resolved)
+    let v = tensor_mean_axes(cache: mut cache, x: yy, axes: read resolved, keepdim: true)
     let epsc = tensor_const_like_float(cache: mut cache, x: v, value: eps)
     let denom = tensor_add(cache: mut cache, a: v, b: epsc)
     let inv = tensor_rsqrt(cache: mut cache, x: denom)
@@ -6934,7 +6890,7 @@ fn tensor_newton_schulz(cache: mut UOpCache, x: Int, steps: Int, p0: Float, p1: 
     local axes = List.new<Int>()
     push1(l: mut axes, a: ndim - 2)
     push1(l: mut axes, a: ndim - 1)
-    let norm_sq = tensor_sum_axes_keepdim(cache: mut cache, x: sq, axes: read axes)
+    let norm_sq = tensor_sum_axes(cache: mut cache, x: sq, axes: read axes, keepdim: true)
     let norm = tensor_sqrt(cache: mut cache, x: norm_sq)
     let epsc = tensor_const_like_float(cache: mut cache, x: norm, value: eps)
     let denom = tensor_add(cache: mut cache, a: norm, b: epsc)

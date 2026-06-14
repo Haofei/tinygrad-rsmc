@@ -7,11 +7,11 @@ fn mixin_reduce_rop(cache: mut UOpCache, x: Int, op: Ops, axes: read List<Int>) 
 fn mixin_reduce_sum(cache: mut UOpCache, x: Int) -> Int { return tensor_sum_all(cache: mut cache, x: x) }
 fn mixin_reduce_sum_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_sum_axis(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_sum_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int { return tensor_sum_axes(cache: mut cache, x: x, axes: read axes) }
-fn mixin_reduce_sum_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_sum_axis_keepdim(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_sum_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_sum_axis(cache: mut cache, x: x, axis: axis, keepdim: true) }
 fn mixin_reduce_mean(cache: mut UOpCache, x: Int) -> Int { return tensor_mean_all(cache: mut cache, x: x) }
 fn mixin_reduce_mean_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_mean_axis(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_mean_axes(cache: mut UOpCache, x: Int, axes: read List<Int>) -> Int { return tensor_mean_axes(cache: mut cache, x: x, axes: read axes) }
-fn mixin_reduce_mean_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_mean_axis_keepdim(cache: mut cache, x: x, axis: axis) }
+fn mixin_reduce_mean_axis_keepdim(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_mean_axis(cache: mut cache, x: x, axis: axis, keepdim: true) }
 fn mixin_reduce_prod(cache: mut UOpCache, x: Int) -> Int { return tensor_prod_all(cache: mut cache, x: x) }
 fn mixin_reduce_prod_axis(cache: mut UOpCache, x: Int, axis: Int) -> Int { return tensor_prod_axis(cache: mut cache, x: x, axis: axis) }
 fn mixin_reduce_max(cache: mut UOpCache, x: Int) -> Int { return tensor_max_all(cache: mut cache, x: x) }

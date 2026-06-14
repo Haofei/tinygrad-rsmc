@@ -165,10 +165,8 @@ fn get_grouped_dims(cache: mut UOpCache, prefix: read String, dims: read List<In
     if reverse {
         let rdims = gpudims_reverse(xs: read dims)
         let rmax = gpudims_reverse(xs: read max_sizes)
-        match get_grouped_dims(cache: mut cache, prefix: read prefix, dims: read rdims, max_sizes: read rmax, has_max: has_max, reverse: false) {
-            Some(got) => { return Some(gpudims_reverse(xs: read got)) }
-            None => { return None }
-        }
+        let got = get_grouped_dims(cache: mut cache, prefix: read prefix, dims: read rdims, max_sizes: read rmax, has_max: has_max, reverse: false)?
+        return Some(gpudims_reverse(xs: read got))
     }
     let mut limited = gpudims_int_list_copy(xs: read dims)
     if has_max {
@@ -179,10 +177,7 @@ fn get_grouped_dims(cache: mut UOpCache, prefix: read String, dims: read List<In
         }
         if List.len<Int>(list: read base) > List.len<Int>(list: read max_sizes) { return None }
         if List.len<Int>(list: read base) == List.len<Int>(list: read dims) {
-            match _split_dims(dims: read dims, max_sizes: read max_sizes) {
-                Some(s) => { limited = s }
-                None => { return None }
-            }
+            limited = _split_dims(dims: read dims, max_sizes: read max_sizes)?
         } else {
             limited = base
         }
@@ -339,25 +334,21 @@ fn gpudims_guard_store_index(cache: mut UOpCache, store: Int, local_ranges: read
     let ptr = node_src_id(cache: read cache, id: store, k: 0)
     if node_op(cache: read cache, id: ptr) != INDEX { return None }
     if node_addrspace(cache: read cache, id: ptr) != ADDR_GLOBAL { return None }
-    match gpudims_missing_local_gate(cache: mut cache, idx: ptr, local_ranges: read local_ranges) {
-        Some(gate) => {
-            local idx_srcs = List.new<Int>()
-            let mut i = 1
-            while i < node_num_src(cache: read cache, id: ptr) {
-                let raw = node_src_id(cache: read cache, id: ptr, k: i)
-                let guarded = uop_valid(cache: mut cache, id: raw, cond: gate)
-                List.push<Int>(list: mut idx_srcs, value: read guarded)
-                i = i + 1
-            }
-            let new_ptr = mk_index(cache: mut cache, base: node_src_id(cache: read cache, id: ptr, k: 0), srcs: read idx_srcs, ptr: node_index_is_ptr(cache: read cache, id: ptr))
-            let value = node_src_id(cache: read cache, id: store, k: 1)
-            if node_num_src(cache: read cache, id: store) >= 3 {
-                return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read Some(node_src_id(cache: read cache, id: store, k: 2))))
-            }
-            return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read None))
-        }
-        None => { return None }
+    let gate = gpudims_missing_local_gate(cache: mut cache, idx: ptr, local_ranges: read local_ranges)?
+    local idx_srcs = List.new<Int>()
+    let mut i = 1
+    while i < node_num_src(cache: read cache, id: ptr) {
+        let raw = node_src_id(cache: read cache, id: ptr, k: i)
+        let guarded = uop_valid(cache: mut cache, id: raw, cond: gate)
+        List.push<Int>(list: mut idx_srcs, value: read guarded)
+        i = i + 1
     }
+    let new_ptr = mk_index(cache: mut cache, base: node_src_id(cache: read cache, id: ptr, k: 0), srcs: read idx_srcs, ptr: node_index_is_ptr(cache: read cache, id: ptr))
+    let value = node_src_id(cache: read cache, id: store, k: 1)
+    if node_num_src(cache: read cache, id: store) >= 3 {
+        return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read Some(node_src_id(cache: read cache, id: store, k: 2))))
+    }
+    return Some(mk_store(cache: mut cache, ptr: new_ptr, value: value, gate: read None))
 }
 
 fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<Int> {
@@ -405,24 +396,13 @@ fn add_gpudims(cache: mut UOpCache, ctx: read GPUDimsContext, s: Int) -> Option<
     } else {
         if ctx.dont_use_locals {
             if List.len<Int>(list: read local_axes) > 0 { return None }
-            match get_grouped_dims(cache: mut cache, prefix: read "idx", dims: read global_shape,
-                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true) {
-                Some(got) => { idxs = got }
-                None => { return None }
-            }
+            idxs = get_grouped_dims(cache: mut cache, prefix: read "idx", dims: read global_shape,
+                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true)?
         } else {
-            let mut local_idxs = List.new<Int>()
-            match get_grouped_dims(cache: mut cache, prefix: read "lidx", dims: read local_shape,
-                                   max_sizes: read ctx.local_max, has_max: ctx.has_local_max, reverse: false) {
-                Some(got) => { local_idxs = got }
-                None => { return None }
-            }
-            let mut global_idxs = List.new<Int>()
-            match get_grouped_dims(cache: mut cache, prefix: read "gidx", dims: read global_shape,
-                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true) {
-                Some(got) => { global_idxs = got }
-                None => { return None }
-            }
+            let local_idxs = get_grouped_dims(cache: mut cache, prefix: read "lidx", dims: read local_shape,
+                                   max_sizes: read ctx.local_max, has_max: ctx.has_local_max, reverse: false)?
+            let global_idxs = get_grouped_dims(cache: mut cache, prefix: read "gidx", dims: read global_shape,
+                                   max_sizes: read ctx.global_max, has_max: ctx.has_global_max, reverse: true)?
             let mut gi = 0
             while gi < List.len<Int>(list: read global_idxs) {
                 List.push<Int>(list: mut idxs, value: read List.get<Int>(list: read global_idxs, index: gi))

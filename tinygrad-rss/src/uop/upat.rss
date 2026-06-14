@@ -440,56 +440,38 @@ fn profile_matches(name: read String) -> fresh String {
 fn pattern_apply_rule(cache: mut UOpCache, rule: read PatternRule, binds: read Map<String, Int>, original: Int) -> Option<Int> {
     match rule.act {
         PActReturnName => {
-            match Map.get<String, Int>(map: read binds, key: read rule.ret_name) {
-                Some(v) => { return Some(v) }
-                None => { return None }
-            }
+            let v = Map.get<String, Int>(map: read binds, key: read rule.ret_name)?
+            return Some(v)
         }
         PActConstZero => {
             let dt = node_dtype(cache: read cache, id: original)
             return Some(mk_const_int(cache: mut cache, dt: read dt, v: 0))
         }
         PActFoldAdd => {
-            match Map.get<String, Int>(map: read binds, key: read rule.lhs_name) {
-                Some(a) => {
-                    match Map.get<String, Int>(map: read binds, key: read rule.rhs_name) {
-                        Some(b) => {
-                            if node_is_const_int(cache: read cache, id: a) {
-                                if node_is_const_int(cache: read cache, id: b) {
-                                    let dt = node_dtype(cache: read cache, id: original)
-                                    let av = node_const_int(cache: read cache, id: a)
-                                    let bv = node_const_int(cache: read cache, id: b)
-                                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av + bv))
-                                }
-                            }
-                            return None
-                        }
-                        None => { return None }
-                    }
+            let a = Map.get<String, Int>(map: read binds, key: read rule.lhs_name)?
+            let b = Map.get<String, Int>(map: read binds, key: read rule.rhs_name)?
+            if node_is_const_int(cache: read cache, id: a) {
+                if node_is_const_int(cache: read cache, id: b) {
+                    let dt = node_dtype(cache: read cache, id: original)
+                    let av = node_const_int(cache: read cache, id: a)
+                    let bv = node_const_int(cache: read cache, id: b)
+                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av + bv))
                 }
-                None => { return None }
             }
+            return None
         }
         PActFoldMul => {
-            match Map.get<String, Int>(map: read binds, key: read rule.lhs_name) {
-                Some(a) => {
-                    match Map.get<String, Int>(map: read binds, key: read rule.rhs_name) {
-                        Some(b) => {
-                            if node_is_const_int(cache: read cache, id: a) {
-                                if node_is_const_int(cache: read cache, id: b) {
-                                    let dt = node_dtype(cache: read cache, id: original)
-                                    let av = node_const_int(cache: read cache, id: a)
-                                    let bv = node_const_int(cache: read cache, id: b)
-                                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av * bv))
-                                }
-                            }
-                            return None
-                        }
-                        None => { return None }
-                    }
+            let a = Map.get<String, Int>(map: read binds, key: read rule.lhs_name)?
+            let b = Map.get<String, Int>(map: read binds, key: read rule.rhs_name)?
+            if node_is_const_int(cache: read cache, id: a) {
+                if node_is_const_int(cache: read cache, id: b) {
+                    let dt = node_dtype(cache: read cache, id: original)
+                    let av = node_const_int(cache: read cache, id: a)
+                    let bv = node_const_int(cache: read cache, id: b)
+                    return Some(mk_const_int(cache: mut cache, dt: read dt, v: av * bv))
                 }
-                None => { return None }
             }
+            return None
         }
     }
 }

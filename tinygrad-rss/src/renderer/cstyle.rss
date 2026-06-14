@@ -294,10 +294,8 @@ fn cstyle_next_name(counts: mut Map<String, Int>, prefix: read String) -> fresh 
 }
 
 fn cstyle_name_lookup(names: read Map<Int, String>, id: Int) -> fresh Option<String> {
-    match Map.get<Int, String>(map: read names, key: read id) {
-        Some(v) => { return Some(String.copy(value: read v)) }
-        None => { return None }
-    }
+    let v = Map.get<Int, String>(map: read names, key: read id)?
+    return Some(String.copy(value: read v))
 }
 
 fn cstyle_operand(cache: read UOpCache, names: read Map<Int, String>, id: Int) -> fresh String {

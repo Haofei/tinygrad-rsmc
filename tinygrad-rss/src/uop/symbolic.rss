@@ -430,10 +430,8 @@ fn uop_divides(cache: mut UOpCache, id: Int, v: Int) -> Option<Int> {
         let mut i = 0
         while i < node_num_src(cache: read cache, id: id) {
             let child = node_src_id(cache: read cache, id: id, k: i)
-            match uop_divides(cache: mut cache, id: child, v: v) {
-                Some(d) => { List.push<Int>(list: mut parts, value: read d) }
-                None => { return None }
-            }
+            let d = uop_divides(cache: mut cache, id: child, v: v)?
+            List.push<Int>(list: mut parts, value: read d)
             i = i + 1
         }
         let dt = node_dtype(cache: read cache, id: id)
@@ -442,18 +440,10 @@ fn uop_divides(cache: mut UOpCache, id: Int, v: Int) -> Option<Int> {
     if op == ADD {
         let a = node_src_id(cache: read cache, id: id, k: 0)
         let b = node_src_id(cache: read cache, id: id, k: 1)
-        match uop_divides(cache: mut cache, id: a, v: v) {
-            Some(da) => {
-                match uop_divides(cache: mut cache, id: b, v: v) {
-                    Some(db) => {
-                        let dt = node_dtype(cache: read cache, id: id)
-                        return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: da, y: db))
-                    }
-                    None => { return None }
-                }
-            }
-            None => { return None }
-        }
+        let da = uop_divides(cache: mut cache, id: a, v: v)?
+        let db = uop_divides(cache: mut cache, id: b, v: v)?
+        let dt = node_dtype(cache: read cache, id: id)
+        return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: da, y: db))
     }
     if op == MUL {
         let a = node_src_id(cache: read cache, id: id, k: 0)
@@ -540,18 +530,10 @@ fn uop_divide_exact(cache: mut UOpCache, id: Int, divisor: Int) -> Option<Int> {
     if op == ADD {
         let a = node_src_id(cache: read cache, id: id, k: 0)
         let b = node_src_id(cache: read cache, id: id, k: 1)
-        match uop_divide_exact(cache: mut cache, id: a, divisor: divisor) {
-            Some(da) => {
-                match uop_divide_exact(cache: mut cache, id: b, divisor: divisor) {
-                    Some(db) => {
-                        let dt = node_dtype(cache: read cache, id: id)
-                        return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: da, y: db))
-                    }
-                    None => { return None }
-                }
-            }
-            None => { return None }
-        }
+        let da = uop_divide_exact(cache: mut cache, id: a, divisor: divisor)?
+        let db = uop_divide_exact(cache: mut cache, id: b, divisor: divisor)?
+        let dt = node_dtype(cache: read cache, id: id)
+        return Some(mk_alu2(cache: mut cache, op: ADD, dt: read dt, x: da, y: db))
     }
     if op == MUL {
         let a = node_src_id(cache: read cache, id: id, k: 0)

@@ -178,8 +178,9 @@ PYTHONPATH=src python3 -m portman status
 PYTHONPATH=src python3 -m portman gaps --public
 ```
 
-Note: `portman.toml` `[verify].command` still hardcodes `/home/zoe/...` paths and
-will not run on this machine — fix before relying on the verification step.
+Note: `portman.toml` `[verify].command` and the oracle scripts now use
+workspace-relative paths (no `/home/zoe`), so they run in the Docker dev env and
+on any host with the standard sibling layout. See `docs/DOCKER.md`.
 
 ## Next Action
 

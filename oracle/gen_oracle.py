@@ -2,7 +2,7 @@
 Render a set of tinygrad kernels to both C (reference) and MC (Phase-1 MCRenderer),
 writing each to oracle/{c_reference,mc_generated}/. Run from the repo root:
 
-    PYTHONPATH=/home/zoe/tinygrad python3 oracle/gen_oracle.py
+    PYTHONPATH=../tinygrad python3 oracle/gen_oracle.py        # tinygrad must be importable
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(__file__))

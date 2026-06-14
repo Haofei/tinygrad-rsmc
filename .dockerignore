@@ -1,0 +1,4 @@
+# The image is toolchain-only: nothing from this repo is COPYed in (the source
+# is bind-mounted at runtime via docker-compose.yml). Keep the build context
+# minimal — Docker still needs the Dockerfile, which it reads outside the context.
+*

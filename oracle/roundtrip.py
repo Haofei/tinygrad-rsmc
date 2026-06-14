@@ -3,7 +3,11 @@ End-to-end numerical proof for Phase 1: render a tinygrad kernel to MC, build a 
 harness around it (mcc emit-c --profile=hosted -> clang -lm -> native), feed it inputs on
 stdin, and check the output matches tinygrad's own CPU computation.
 
-    PYTHONPATH=/home/zoe/tinygrad python3 oracle/roundtrip.py
+    PYTHONPATH=../tinygrad python3 oracle/roundtrip.py        # tinygrad must be importable
+    MC_ROOT=../modern-c  PYTHONPATH=../tinygrad python3 oracle/roundtrip.py   # explicit mcc root
+
+In the Docker dev environment these are pre-set (PYTHONPATH=/work/tinygrad,
+MC_ROOT=/work/modern-c) — see docs/DOCKER.md.
 
 Proves: tinygrad frontend -> MCRenderer -> modern-c -> native binary computes the same
 numbers as tinygrad's reference CPU backend.
@@ -17,7 +21,11 @@ from tinygrad.helpers import Context
 from tinygrad.device import Compiler
 from mc_renderer import MCRenderer
 
-MC_ROOT = "/home/zoe/modern-c"
+# Locate the modern-c checkout: $MC_ROOT if set, else the sibling repo next to
+# this one (../../modern-c relative to oracle/). Works in the container and on
+# any host with the standard workspace layout.
+MC_ROOT = os.environ.get("MC_ROOT") or os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "modern-c"))
 MCC = os.path.join(MC_ROOT, "zig-out/bin/mcc")
 
 def render_mc(ast, mc):

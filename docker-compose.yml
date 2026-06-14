@@ -1,0 +1,54 @@
+# Cross-platform development for the tinygrad-rsmc port.
+#
+# The port depends on sibling repos checked out NEXT TO this one:
+#   ../rsscript   ../modern-c   ../tinygrad   ../portman
+# They are bind-mounted live alongside this repo so host edits apply instantly
+# (the same layout portman.toml already assumes via ../ relative paths).
+#
+# Architecture-specific build artifacts (Rust target/, Zig caches, cargo
+# registry) are container-local NAMED VOLUMES so host (e.g. macOS arm64) and
+# container (linux) binaries never mix — this is why a host `cargo build` and a
+# container build can coexist without clobbering each other.
+#
+#   docker compose build dev                                   # build the image
+#   docker compose run --rm dev scripts/docker/bootstrap.sh    # build rss + mcc
+#   docker compose run --rm dev rss check tinygrad-rss         # check the port
+#   docker compose run --rm dev                                # interactive shell
+#
+# Or use the host-side Makefile: `make check`, `make portman`, `make oracle`.
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tinygrad-rsmc-dev
+    working_dir: /work/tinygrad-rsmc
+    volumes:
+      # Live source: the port plus every sibling toolchain/repo it needs.
+      - .:/work/tinygrad-rsmc
+      - ../rsscript:/work/rsscript
+      - ../modern-c:/work/modern-c
+      - ../tinygrad:/work/tinygrad
+      - ../portman:/work/portman
+      # Architecture-specific build artifacts: keep container-local so they do
+      # not collide with host-built artifacts in the same bind-mounted trees.
+      - rss-target:/work/rsscript/target
+      - mc-zig-out:/work/modern-c/zig-out
+      - mc-zig-cache:/work/modern-c/.zig-cache
+      - zig-global-cache:/root/.cache/zig
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      RSSCRIPT_RUNTIME_PATH: /work/rsscript/crates/runtime
+      MC_ROOT: /work/modern-c
+      PYTHONPATH: /work/tinygrad
+    # Keep an interactive session alive for `docker compose run`; one-shot
+    # commands override this.
+    stdin_open: true
+    tty: true
+
+volumes:
+  rss-target:
+  mc-zig-out:
+  mc-zig-cache:
+  zig-global-cache:
+  cargo-registry:

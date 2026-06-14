@@ -37,6 +37,14 @@ struct TensorState derives(Clone) {
     grad: Int,
 }
 
+struct Tensor derives(Clone) {
+    state: TensorState,
+}
+
+struct all_tensors derives(Clone) {
+    count: Int,
+}
+
 struct TensorRngState derives(Clone) {
     seed: Int,
     counter_low: Int,

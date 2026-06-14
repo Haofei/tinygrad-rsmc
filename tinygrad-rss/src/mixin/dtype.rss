@@ -1,6 +1,10 @@
 // Source-shaped DTypeMixin wrappers over tensor dtype helpers.
 features: local
 
+struct DTypeMixin derives(Clone) {
+    tensor_id: Int,
+}
+
 fn mixin_dtype_package_marker() -> fresh String { return String.copy(value: read "mixin.dtype") }
 
 fn mixin_dtype_element_size(cache: read UOpCache, x: Int) -> Int {

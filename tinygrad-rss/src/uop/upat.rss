@@ -1,3 +1,4 @@
+// @port upstream: tinygrad/uop/ops.py
 // Integrated UPat/PatternMatcher slice over the real interned UOp DAG.
 //
 // The standalone port-rss UPat demos used recursive toy UOps. This file keeps

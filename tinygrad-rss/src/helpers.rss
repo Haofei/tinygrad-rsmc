@@ -4,6 +4,74 @@
 // exactly, and all of tinygrad's helpers that use `//`/`%` are ported on top of them.
 features: local
 
+struct ContextVar derives(Clone) {
+    key: String,
+    int_value: Int,
+    str_value: String,
+}
+
+struct Context derives(Clone) {
+    keys: List<String>,
+    old_values: List<Int>,
+    new_values: List<Int>,
+}
+
+struct Target derives(Clone) {
+    device: String,
+    renderer: String,
+    arch: String,
+    interface: String,
+    indices: String,
+}
+
+struct _DEV derives(Clone) {
+    targets: List<Target>,
+}
+
+struct GlobalCounters derives(Clone) {
+    global_ops: Int,
+    global_mem: Int,
+    time_sum_s: Float,
+    mem_used: Int,
+}
+
+struct Metadata derives(Clone) {
+    name: String,
+    caller: String,
+}
+
+struct ProfileEvent derives(Clone) {
+    device: String,
+    name: String,
+}
+
+struct ProfilePointEvent derives(Clone) {
+    device: String,
+    name: String,
+    time_us: Int,
+}
+
+struct ProfileRangeEvent derives(Clone) {
+    device: String,
+    name: String,
+    st_us: Int,
+    en_us: Int,
+}
+
+struct Timing derives(Clone) {
+    prefix: String,
+    enabled: Bool,
+}
+
+struct Profiling derives(Clone) {
+    enabled: Bool,
+    file: String,
+}
+
+struct TracingKey derives(Clone, Eq, Hash) {
+    key: String,
+}
+
 // Python floor division: x // y  (rounds toward -inf)
 fn floor_div(a: Int, b: Int) -> Int {
     let q = a / b

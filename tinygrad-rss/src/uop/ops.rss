@@ -34,12 +34,6 @@ struct RangeArg derives(Clone) {
     axis_type: AxisType,
 }
 
-sum AddrSpace derives(Clone, Eq, Hash) {
-    ADDR_GLOBAL
-    ADDR_LOCAL
-    ADDR_REG
-}
-
 struct ParamArg derives(Clone) {
     slot: Int,
     has_vmin_vmax: Bool,

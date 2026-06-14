@@ -53,6 +53,52 @@ struct DeviceMemoryStore {
     mem_used: Int,
 }
 
+struct CompileError derives(Clone) {
+    message: String,
+}
+
+struct Compiler derives(Clone) {
+    cachekey: String,
+}
+
+struct Compiled derives(Clone) {
+    device: String,
+    compiler: Compiler,
+}
+
+struct Allocator derives(Clone) {
+    name: String,
+}
+
+struct LRUAllocator derives(Clone) {
+    name: String,
+    cache_enabled: Bool,
+}
+
+struct ProfileDeviceEvent derives(Clone) {
+    device: String,
+    tdiff_us: Int,
+}
+
+struct ProfileProgramEvent derives(Clone) {
+    device: String,
+    name: String,
+    base: Int,
+    tag: Int,
+}
+
+struct ProfileGraphEntry derives(Clone) {
+    device: String,
+    name: String,
+    st_id: Int,
+    en_id: Int,
+}
+
+struct ProfileGraphEvent derives(Clone) {
+    entries: List<ProfileGraphEntry>,
+    deps: List<List<Int>>,
+}
+
 fn device_memory_store_new() -> fresh DeviceMemoryStore {
     local bufs = Map.new<Int, List<Int>>()
     local cache = List.new<AllocatorCacheEntry>()

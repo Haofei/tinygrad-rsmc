@@ -22,6 +22,28 @@ struct PtrDType derives(Clone) {
     local: Bool,
 }
 
+struct ConstFloat derives(Clone) {
+    value: Float,
+    bits: Int,
+}
+
+struct InvalidType derives(Clone, Eq, Hash) {
+    singleton: Bool,
+}
+
+sum AddrSpace derives(Clone, Eq, Hash) {
+    ADDR_GLOBAL
+    ADDR_LOCAL
+    ADDR_REG
+}
+
+struct ImageDType derives(Clone) {
+    base: DType,
+    size: Int,
+    shape: List<Int>,
+    v: Int,
+}
+
 fn mk_dtype(priority: Int, bitsize: Int, name: read String, fmt: read String) -> fresh DType {
     return DType(priority: priority, bitsize: bitsize, name: String.copy(value: read name),
                  fmt: String.copy(value: read fmt), count: 1, scalar_name: "")

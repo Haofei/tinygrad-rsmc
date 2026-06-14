@@ -9,6 +9,8 @@
 // collision with std::io::Buffer.
 features: local
 
+const ALL_DEVICES: Int = 9
+
 struct BufferSpec derives(Clone, Eq, Hash) {
     uncached: Bool,
     cpu_access: Bool,
@@ -38,6 +40,10 @@ struct TGBuffer derives(Clone) {
 
 struct MultiBuffer derives(Clone) {
     bufs: List<TGBuffer>,
+}
+
+struct Device derives(Clone) {
+    default_device: String,
 }
 
 struct AllocatorCacheEntry derives(Clone) {
@@ -507,6 +513,10 @@ fn multibuffer_dtype(mb: read MultiBuffer) -> fresh DType {
     return dtype_copy(d: read b.dtype)
 }
 
+fn MultiBuffer.dtype(self: read MultiBuffer) -> fresh DType {
+    return multibuffer_dtype(mb: read self)
+}
+
 fn multibuffer_is_allocated(mb: read MultiBuffer) -> Bool {
     if List.len<TGBuffer>(list: read mb.bufs) == 0 { return false }
     let mut i = 0
@@ -518,6 +528,10 @@ fn multibuffer_is_allocated(mb: read MultiBuffer) -> Bool {
     return true
 }
 
+fn MultiBuffer.is_allocated(self: read MultiBuffer) -> Bool {
+    return multibuffer_is_allocated(mb: read self)
+}
+
 fn multibuffer_ref(mb: read MultiBuffer, cnt: Int) -> fresh MultiBuffer {
     local bufs = List.new<TGBuffer>()
     let mut i = 0
@@ -527,6 +541,10 @@ fn multibuffer_ref(mb: read MultiBuffer, cnt: Int) -> fresh MultiBuffer {
         i = i + 1
     }
     return MultiBuffer(bufs: take bufs)
+}
+
+fn MultiBuffer.ref(self: read MultiBuffer, cnt: Int) -> fresh MultiBuffer {
+    return multibuffer_ref(mb: read self, cnt: cnt)
 }
 
 struct CompiledDevice derives(Clone) {
@@ -545,6 +563,10 @@ fn _canonicalize(device: read String) -> fresh String {
     return device_canonicalize(device: read device)
 }
 
+fn _Device.canonicalize(self: read Device, device: read String) -> fresh String {
+    return device_canonicalize(device: read device)
+}
+
 fn canonicalize(device: read String) -> fresh String {
     return device_canonicalize(device: read device)
 }
@@ -558,6 +580,10 @@ fn __get_canonicalized_item(device: read String) -> fresh CompiledDevice {
 
 fn default() -> fresh CompiledDevice {
     return __get_canonicalized_item(device: read device_default())
+}
+
+fn _Device.DEFAULT(self: read Device) -> fresh String {
+    return device_default()
 }
 
 fn get_available_devices() -> fresh List<String> {

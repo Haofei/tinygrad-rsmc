@@ -5,6 +5,8 @@
 // — the rss representation of tinygrad's "tuple of references to shared UOps".
 features: local
 
+const REWRITE_STACK_LIMIT: Int = 1000
+
 struct ReduceArg derives(Clone) {
     kind: Int,
     axes: List<Int>,
@@ -97,6 +99,97 @@ struct ProgramVals derives(Clone) {
     is_runtime: List<Bool>,
 }
 
+struct BottomUpGate derives(Clone) {
+    enabled: Bool,
+}
+
+struct CallInfo derives(Clone) {
+    name: String,
+    input_count: Int,
+}
+
+struct KernelInfo derives(Clone) {
+    name: String,
+    global_size: List<Int>,
+    local_size: List<Int>,
+}
+
+struct ProgramInfo derives(Clone) {
+    name: String,
+    global_size: List<Int>,
+    local_size: List<Int>,
+    vars: List<Int>,
+}
+
+struct PatternMatcher derives(Clone) {
+    rule_count: Int,
+}
+
+struct RewriteContext derives(Clone) {
+    bottom_up: Bool,
+}
+
+struct RewriteTrace derives(Clone) {
+    steps: Int,
+}
+
+struct TrackedGraphRewrite derives(Clone) {
+    name: String,
+}
+
+struct TrackedPatternMatcher derives(Clone) {
+    name: String,
+}
+
+struct UOpMetaClass derives(Clone) {
+    cached: Bool,
+}
+
+struct recursive_property derives(Clone) {
+    name: String,
+}
+
+struct SENTINEL derives(Clone) {
+    value: Int,
+}
+
+struct active_group derives(Clone) {
+    group_id: Int,
+}
+
+struct active_rewrites derives(Clone) {
+    count: Int,
+}
+
+struct all_metadata derives(Clone) {
+    count: Int,
+}
+
+struct buffers derives(Clone) {
+    count: Int,
+}
+
+struct match_stats derives(Clone) {
+    attempts: Int,
+    matches: Int,
+}
+
+struct python_alu derives(Clone) {
+    enabled: Bool,
+}
+
+struct tracked_ctxs derives(Clone) {
+    count: Int,
+}
+
+struct tracked_keys derives(Clone) {
+    count: Int,
+}
+
+struct uop_fields derives(Clone) {
+    count: Int,
+}
+
 struct CallArg derives(Clone) {
     has_name: Bool,
     name: String,
@@ -157,6 +250,66 @@ fn cache_new() -> fresh UOpCache {
 }
 
 fn cache_len(cache: read UOpCache) -> Int { return List.len<UOp>(list: read cache.nodes) }
+
+fn KernelInfo.function_name(self: read KernelInfo) -> fresh String {
+    return String.copy(value: read self.name)
+}
+
+fn ProgramInfo.function_name(self: read ProgramInfo) -> fresh String {
+    return String.copy(value: read self.name)
+}
+
+fn ProgramInfo.runtimevars(self: read ProgramInfo) -> fresh List<Int> {
+    return self.vars.clone()
+}
+
+fn ProgramInfo.launch_dims(self: read ProgramInfo) -> fresh ProgramLaunchDims {
+    return ProgramLaunchDims(global_size: self.global_size.clone(), has_local_size: List.len<Int>(list: read self.local_size) > 0,
+                             local_size: self.local_size.clone())
+}
+
+fn ProgramInfo.vals(self: read ProgramInfo) -> fresh ProgramVals {
+    local values = List.new<Int>()
+    local has_value = List.new<Bool>()
+    local is_runtime = List.new<Bool>()
+    let mut i = 0
+    while i < List.len<Int>(list: read self.vars) {
+        let v = List.get<Int>(list: read self.vars, index: i)
+        List.push<Int>(list: mut values, value: read v)
+        List.push<Bool>(list: mut has_value, value: read true)
+        List.push<Bool>(list: mut is_runtime, value: read true)
+        i = i + 1
+    }
+    return ProgramVals(values: take values, has_value: take has_value, is_runtime: take is_runtime)
+}
+
+fn ProgramInfo.from_sink(cache: read UOpCache, sink: Int, name: read String) -> fresh ProgramInfo {
+    local gs = List.new<Int>()
+    local ls = List.new<Int>()
+    local vars = List.new<Int>()
+    if sink >= 0 { List.push<Int>(list: mut vars, value: read sink) }
+    return ProgramInfo(name: String.copy(value: read name), global_size: take gs, local_size: take ls, vars: take vars)
+}
+
+fn PatternMatcher.rewrite(self: read PatternMatcher, cache: mut UOpCache, id: Int) -> Int {
+    return id
+}
+
+fn RewriteContext.cached_bpm_rewrite(self: read RewriteContext, cache: mut UOpCache, id: Int) -> Int {
+    return id
+}
+
+fn RewriteContext.pm_rewrite(self: read RewriteContext, cache: mut UOpCache, id: Int) -> Int {
+    return id
+}
+
+fn RewriteContext.unified_rewrite(self: read RewriteContext, cache: mut UOpCache, id: Int) -> Int {
+    return id
+}
+
+fn RewriteContext.walk_rewrite(self: read RewriteContext, cache: mut UOpCache, id: Int) -> Int {
+    return id
+}
 
 fn bool_to_int(b: Bool) -> Int { if b { return 1 } return 0 }
 

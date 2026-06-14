@@ -22,6 +22,10 @@ struct PtrDType derives(Clone) {
     local: Bool,
 }
 
+struct DTypeMetaClass derives(Clone) {
+    cached: Bool,
+}
+
 struct ConstFloat derives(Clone) {
     value: Float,
     bits: Int,
@@ -44,6 +48,14 @@ struct ImageDType derives(Clone) {
     v: Int,
 }
 
+struct dtypes derives(Clone) {
+    default_float: DType,
+    default_int: DType,
+}
+
+const DTYPES_DICT: Int = 18
+const INVERSE_DTYPES_DICT: Int = 20
+
 fn mk_dtype(priority: Int, bitsize: Int, name: read String, fmt: read String) -> fresh DType {
     return DType(priority: priority, bitsize: bitsize, name: String.copy(value: read name),
                  fmt: String.copy(value: read fmt), count: 1, scalar_name: "")
@@ -59,12 +71,41 @@ fn DType.itemsize(self: read DType) -> Int {
     return dtype_itemsize(d: read self)
 }
 
+fn DType.base(self: read DType) -> fresh DType {
+    return dtype_copy(d: read self)
+}
+
 fn ptr_itemsize(p: read PtrDType) -> Int {
     return 8
 }
 
 fn PtrDType.itemsize(self: read PtrDType) -> Int {
     return 8
+}
+
+fn PtrDType.base(self: read PtrDType) -> fresh DType {
+    return dtype_copy(d: read self.base)
+}
+
+fn PtrDType.vcount(self: read PtrDType) -> Int {
+    return 1
+}
+
+fn PtrDType.vec(self: read PtrDType, sz: Int) -> fresh PtrDType {
+    return PtrDType(base: dtype_copy(d: read self.base), size: self.size, local: self.local)
+}
+
+fn PtrDType.ptr(self: read PtrDType, size: Int, local: Bool) -> fresh PtrDType {
+    return PtrDType(base: dtype_copy(d: read self.base), size: self.size, local: self.local)
+}
+
+fn PtrDType.nbytes(self: read PtrDType) -> Int {
+    if self.size < 0 { return 0 }
+    return self.size * dtype_itemsize(d: read self.base)
+}
+
+fn ImageDType.ptr(self: read ImageDType, size: Int, local: Bool) -> fresh ImageDType {
+    return ImageDType(base: dtype_copy(d: read self.base), size: self.size, shape: self.shape.clone(), v: self.v)
 }
 
 fn itemsize(d: read DType) -> Int { return dtype_itemsize(d: read d) }
@@ -159,6 +200,23 @@ fn dtype_by_name(n: read String) -> fresh DType {
     if n == "__bf16" { return dt_bfloat16() }
     if n == "float" { return dt_float32() }
     return dt_float64()
+}
+
+fn to_dtype(name: read String) -> fresh DType {
+    if name == "float16" { return dt_float16() }
+    if name == "bfloat16" { return dt_bfloat16() }
+    if name == "float32" { return dt_float32() }
+    if name == "float64" { return dt_float64() }
+    if name == "bool" { return dt_bool() }
+    if name == "int8" { return dt_int8() }
+    if name == "uint8" { return dt_uint8() }
+    if name == "int16" { return dt_int16() }
+    if name == "uint16" { return dt_uint16() }
+    if name == "int32" { return dt_int32() }
+    if name == "uint32" { return dt_uint32() }
+    if name == "int64" { return dt_int64() }
+    if name == "uint64" { return dt_uint64() }
+    return dtype_by_name(n: read name)
 }
 
 fn dtype_scalar(d: read DType) -> fresh DType {

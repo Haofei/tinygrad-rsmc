@@ -4,6 +4,33 @@
 // exactly, and all of tinygrad's helpers that use `//`/`%` are ported on top of them.
 features: local
 
+const START_TIME: Int = 0
+const ARCH_X86: Bool = true
+const BASEDIR: String = "."
+const DEBUG_RANGEIFY: Int = 0
+const CAPTURE_PROCESS_REPLAY: Int = 0
+const CCACHE: String = ""
+const CACHEDB: String = ""
+const SCACHE: String = ""
+const CACHELEVEL: Int = 2
+const PROFILE: Int = 0
+const VIZ: Int = 0
+const SPEC: Int = 1
+const CHECK_OOB: Int = 1
+const CPU_COUNT: Int = 1
+const DISABLE_FAST_IDIV: Int = 1
+const DISALLOW_BROADCAST: Int = 0
+const EMULATED_DTYPES: String = ""
+const FUSE_OPTIM: Int = 0
+const MAX_KERNEL_BUFFERS: Int = 0
+const NULL_ALLOW_COPYOUT: Int = 0
+const USE_ATOMICS: Int = 1
+const ALLOW_TF32: Int = 0
+const VALIDATE_WITH_CPU: Int = 0
+const VERSION: String = "rss"
+const PCONTIG: Int = 0
+const TUPLE_ORDER: Int = 0
+
 struct ContextVar derives(Clone) {
     key: String,
     int_value: Int,
@@ -70,6 +97,16 @@ struct Profiling derives(Clone) {
 
 struct TracingKey derives(Clone, Eq, Hash) {
     key: String,
+}
+
+struct disable_gc derives(Clone) {
+    enabled: Bool,
+}
+
+struct tqdm derives(Clone) {
+    total: Int,
+    current: Int,
+    description: String,
 }
 
 // Python floor division: x // y  (rounds toward -inf)
@@ -487,6 +524,23 @@ fn getenv(name: read String, default_value: Int) -> Int { return default_value }
 fn temp(prefix: read String) -> fresh String { return String.concat(left: read "/tmp/", right: read prefix) }
 fn stderr_log(msg: read String) -> Bool { return String.len(value: read msg) >= 0 }
 fn __exit__() -> Bool { return false }
+fn GlobalCounters.reset(self: read GlobalCounters) -> fresh GlobalCounters {
+    return GlobalCounters(global_ops: 0, global_mem: 0, time_sum_s: 0.0, mem_used: 0)
+}
+fn Target.parse(s: read String) -> fresh Target {
+    return Target(device: String.copy(value: read s), renderer: String.copy(value: read ""),
+                  arch: String.copy(value: read ""), interface: String.copy(value: read ""),
+                  indices: String.copy(value: read ""))
+}
+fn _DEV.value(self: read _DEV) -> fresh List<Target> {
+    return self.targets.clone()
+}
+fn tqdm.update(self: read tqdm, n: Int) -> fresh tqdm {
+    return tqdm(total: self.total, current: self.current + n, description: String.copy(value: read self.description))
+}
+fn tqdm.write(self: read tqdm, s: read String) -> Bool {
+    return String.len(value: read s) >= 0
+}
 fn __bool__(x: Int) -> Bool { return x != 0 }
 fn __eq__(a: Int, b: Int) -> Bool { return a == b }
 fn __ge__(a: Int, b: Int) -> Bool { return a >= b }

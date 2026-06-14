@@ -146,7 +146,7 @@ fn to_field_name(attr_type: Int) -> fresh String {
     return String.copy(value: read "")
 }
 
-fn to_dtype(data_type: Int) -> fresh DType {
+fn onnx_to_dtype(data_type: Int) -> fresh DType {
     if data_type == 2 { return dt_uint8() }
     if data_type == 3 { return dt_int8() }
     if data_type == 4 { return dt_uint16() }
@@ -339,7 +339,7 @@ fn _parse_TypeProtoTensor(fields: read List<OnnxParseField>) -> fresh OnnxValueI
     let mut i = 0
     while i < List.len<OnnxParseField>(list: read fields) {
         local f = List.get<OnnxParseField>(list: read fields, index: i)
-        if f.field == 1 { dtype = to_dtype(data_type: f.int_value) }
+        if f.field == 1 { dtype = onnx_to_dtype(data_type: f.int_value) }
         if f.field == 2 && f.wire_type == 2 {
             local r = onnx_reader_new(data: read f.raw)
             local nested = _parse_message(reader: mut r, end_pos: List.len<Int>(list: read f.raw))
@@ -560,7 +560,7 @@ fn parse(reader: mut OnnxReader) -> fresh OnnxModelProto {
 }
 
 fn _to_python_const(tensor: read OnnxTensorProto) -> fresh String {
-    let dtype_name = to_dtype(data_type: tensor.data_type).name
+    let dtype_name = onnx_to_dtype(data_type: tensor.data_type).name
     return String.concat(left: read tensor.name, right: read String.concat(left: read ":", right: read dtype_name))
 }
 
@@ -713,7 +713,7 @@ fn onnx_attr_ints_or(node: read OnnxNodeProto, name: read String, fallback: read
 }
 
 fn onnx_tensor_to_tensor(cache: mut UOpCache, tensor: read OnnxTensorProto) -> Int {
-    let mut dt = to_dtype(data_type: tensor.data_type)
+    let mut dt = onnx_to_dtype(data_type: tensor.data_type)
     local shape = onnx_copy_ints(values: read tensor.dims)
     local data = List.new<Float>()
     if List.len<Float>(list: read tensor.float_data) > 0 {

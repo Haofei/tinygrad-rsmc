@@ -7331,7 +7331,7 @@ fn main() -> Unit {
     local onnx_const = _get_python_const(runner: mut onnx_runner, name: read "w", op: read "Constant", idx: 0)
     local onnx_select = _select_op(runner: read onnx_runner, op: read "Add", domain: read "", version: 13)
     let onnx_exec_ok = onnx_execution_smoke(cache: mut tcache)
-    showb(label: read "nn.onnx source facades = ", v: onnx_varint == 300 && String.len(value: read onnx_string) > 0 && onnx_model.ir_version == 9 && List.len<OnnxOperatorSetIdProto>(list: read onnx_model.opsets) == 1 && to_field_name(attr_type: 7) == "ints" && to_dtype(data_type: 1).name == tf32.name && from_onnx(domain: read "") == "ONNX" && List.len<Int>(list: read onnx_inputs) == 1 && List.len<String>(list: read onnx_ops) >= 10 && String.len(value: read onnx_const) > 0 && onnx_select == "ONNX.Add@13" && onnx_exec_ok)
+    showb(label: read "nn.onnx source facades = ", v: onnx_varint == 300 && String.len(value: read onnx_string) > 0 && onnx_model.ir_version == 9 && List.len<OnnxOperatorSetIdProto>(list: read onnx_model.opsets) == 1 && to_field_name(attr_type: 7) == "ints" && onnx_to_dtype(data_type: 1).name == tf32.name && from_onnx(domain: read "") == "ONNX" && List.len<Int>(list: read onnx_inputs) == 1 && List.len<String>(list: read onnx_ops) >= 10 && String.len(value: read onnx_const) > 0 && onnx_select == "ONNX.Add@13" && onnx_exec_ok)
     local gguf_grid_words = List.new<Int>()
     pushi(l: mut gguf_grid_words, v: 16909060)
     let gguf_grid = _ggml_iq_grid(cache: mut tcache, device: read "CPU", grid: read gguf_grid_words, rows: 1, cols: 4)

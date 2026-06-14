@@ -75,6 +75,22 @@ fn DType.base(self: read DType) -> fresh DType {
     return dtype_copy(d: read self)
 }
 
+fn DType.vcount(self: read DType) -> Int {
+    return vcount(d: read self)
+}
+
+fn DType.vec(self: read DType, sz: Int) -> fresh DType {
+    return dtype_vec(base: read self, sz: sz)
+}
+
+fn DType.ptr(self: read DType, size: Int, local: Bool) -> fresh PtrDType {
+    return dtype_ptr(base: read self, size: size, local: local)
+}
+
+fn DType.nbytes(self: read DType) -> Int {
+    return nbytes(d: read self)
+}
+
 fn ptr_itemsize(p: read PtrDType) -> Int {
     return 8
 }

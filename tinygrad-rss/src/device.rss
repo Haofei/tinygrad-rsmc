@@ -240,6 +240,24 @@ fn allocator_default_buffer_spec() -> fresh BufferSpec {
     return buffer_spec_default()
 }
 
+fn Allocator.alloc(self: read Allocator, store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    return allocator_alloc(store: mut store, size: size, options: read options)
+}
+
+fn Allocator.free(self: read Allocator, store: mut DeviceMemoryStore, opaque: Int, size: Int, options: read BufferSpec) -> Unit {
+    allocator_free(store: mut store, handle: opaque, size: size, options: read options)
+    return Unit
+}
+
+fn LRUAllocator.alloc(self: read LRUAllocator, store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
+    return allocator_alloc(store: mut store, size: size, options: read options)
+}
+
+fn LRUAllocator.free(self: read LRUAllocator, store: mut DeviceMemoryStore, opaque: Int, size: Int, options: read BufferSpec) -> Unit {
+    allocator_free(store: mut store, handle: opaque, size: size, options: read options)
+    return Unit
+}
+
 fn buffer_spec_equal(a: read BufferSpec, b: read BufferSpec) -> Bool {
     if a.uncached != b.uncached { return false }
     if a.cpu_access != b.cpu_access { return false }

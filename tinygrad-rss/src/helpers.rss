@@ -11,6 +11,7 @@ const DEBUG_RANGEIFY: Int = 0
 const CAPTURE_PROCESS_REPLAY: Int = 0
 const CCACHE: String = ""
 const CACHEDB: String = ""
+const cache_dir: String = ".tinygrad-cache"
 const SCACHE: String = ""
 const CACHELEVEL: Int = 2
 const PROFILE: Int = 0
@@ -30,6 +31,7 @@ const VALIDATE_WITH_CPU: Int = 0
 const VERSION: String = "rss"
 const PCONTIG: Int = 0
 const TUPLE_ORDER: Int = 0
+const cpu_events: Int = 0
 
 struct ContextVar derives(Clone) {
     key: String,

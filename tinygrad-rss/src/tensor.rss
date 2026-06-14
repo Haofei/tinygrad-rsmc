@@ -71,6 +71,21 @@ struct TensorMetadataState derives(Clone) {
     value: String,
 }
 
+struct _ContextVar derives(Clone) {
+    state: TensorMetadataState,
+}
+
+fn _ContextVar.get(self: read _ContextVar) -> fresh TensorMetadataState {
+    return TensorMetadataState(has_value: self.state.has_value, value: String.copy(value: read self.state.value))
+}
+
+fn _ContextVar.set(self: mut _ContextVar, x: read TensorMetadataState) -> fresh TensorMetadataState {
+    local old_has_value = self.state.has_value
+    local old = TensorMetadataState(has_value: take old_has_value, value: String.copy(value: read self.state.value))
+    self.state = TensorMetadataState(has_value: x.has_value, value: String.copy(value: read x.value))
+    return take old
+}
+
 struct TensorIntResult derives(Clone) {
     ok: Bool,
     value: Int,
@@ -942,6 +957,13 @@ fn tensor_call(cache: mut UOpCache, x: Int, args: read List<Int>, fxn: Int) -> I
 fn tensor_state_call(cache: mut UOpCache, t: read TensorState, args: read List<Int>, fxn: Int) -> fresh TensorState {
     let u = tensor_call(cache: mut cache, x: t.uop, args: read args, fxn: fxn)
     return TensorState(uop: u, is_param: t.is_param, has_grad: false, grad: 0 - 1)
+}
+
+fn tensor_custom_kernel(cache: mut UOpCache, x: Int, args: read List<Int>, fxn: Int) -> fresh List<Int> {
+    local out = List.new<Int>()
+    let first = tensor_call(cache: mut cache, x: x, args: read args, fxn: fxn)
+    List.push<Int>(list: mut out, value: read first)
+    return take out
 }
 
 fn sequential(cache: mut UOpCache, x: Int, functions: read List<Int>) -> Int {

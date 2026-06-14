@@ -691,6 +691,15 @@ fn copyout(store: read DeviceMemoryStore, buf: read TGBuffer) -> fresh List<Int>
     return buffer_copyout(store: read store, buf: read buf)
 }
 
+fn buffer_numpy(store: read DeviceMemoryStore, buf: read TGBuffer) -> fresh List<Int> {
+    return buffer_copyout(store: read store, buf: read buf)
+}
+
+fn buffer_trace_num(buf: read TGBuffer) -> Int {
+    if buf.has_handle { return buf.handle }
+    return buf.uop_refcount
+}
+
 fn alloc(store: mut DeviceMemoryStore, size: Int, options: read BufferSpec) -> Int {
     return allocator_alloc(store: mut store, size: size, options: read options)
 }
